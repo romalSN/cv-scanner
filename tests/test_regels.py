@@ -218,6 +218,19 @@ sc, rs = c.classify(cvtekst, 'document', nm, ['henk.winters@voorbeeldmail.nl'], 
 st = c.decide_status(cvtekst, 'document', nm, ['henk.winters@voorbeeldmail.nl'], ['+31612345678'], [], sc)
 check('consultant-cv (Personalia/Opdrachten/maanden) = cv', st == 'cv', (nm, sc, rs, st))
 
+check('dubbele naam + kopje', c.clean_person_name('Jan Smitjan Smitwerkervaringwerkervaring') == 'Jan Smit')
+for tekst, verwacht in [
+    ("Voorbeeld Experts BV\nCV van Lisa Groen\nNaam: Lisa Groen\nlisa.groen@voorbeeldmail.nl\n06-00000112\nWerkervaring\n"
+     "2019 - heden Consultant, Voorbeeld Experts BV\nOpleiding\nHBO Bedrijfskunde\n", 'cv'),
+    ("Lieke Dam\nlieke.dam@voorbeeldmail.nl\n06-00000110\nUtrecht, 3 maart 2024\n\nBeste heer/mevrouw,\n\nMet veel "
+     "enthousiasme reageer ik op uw vacature voor data analist.\n\nMet vriendelijke groet,\nLieke Dam\n", 'other'),
+    ("Projectverslag Smart Parking\nAuteur: Ruben Vos\nruben.vos@student.voorbeeld.nl\nSamenvatting\nDit verslag.\n"
+     "Projecten\nFase 1 2023 - 2024\nConclusie\nGeslaagd.\n", 'other')]:
+    em = c.emails_in(tekst); ph = c.phones_in(tekst); nm = c.guess_name(tekst, 'document', em)
+    sc, rs = c.classify(tekst, 'document', nm, em, ph, [])
+    st = c.decide_status(tekst, 'document', nm, em, ph, [], sc)
+    check(f'herkenning: {tekst.splitlines()[0][:30]} = {verwacht}', st == verwacht, (nm, sc, rs, st))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

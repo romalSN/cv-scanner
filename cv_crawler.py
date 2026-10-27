@@ -170,7 +170,8 @@ NAME_BLOCKLIST = {
     'gmbh', 'holding', 'group', 'groep', 'service', 'services', 'consultancy', 'experts', 'united',
     'netherlands', 'nederland', 'neterlands', 'wonen', 'geschikt', 'belastingdienst', 'logius',
     'employer', 'instelling', 'bedrijf', 'rws', 'type', 'script', 'sint', 'info', 'intro', 'master',
-    'ontwikkelaar', 'present', 'current'
+    'ontwikkelaar', 'present', 'current', 'projectverslag', 'verslag', 'rapport', 'scriptie', 'thesis',
+    'afstudeerverslag', 'stageverslag', 'plan', 'notitie', 'memo', 'offerte', 'factuur', 'brief'
 }
 # Een bedrijfsnaam is nooit een persoon: dan de hele 'naam' afkeuren (niet alleen dat woord weghalen).
 COMPANY_WORDS = {'bv', 'bvba', 'nv', 'vof', 'ltd', 'inc', 'gmbh', 'llc', 'holding', 'group', 'groep',
@@ -308,6 +309,13 @@ def clean_person_name(name):
             return ' '.join(w[:len(w)//2])
         return t
     s = undouble(s)
+    # 'Jan Smitjan Smitwerkervaringwerkervaring': naam dubbel + kopje erachter geplakt.
+    m = re.match(r'(?is)^(.{5,40}?)\1(.*)$', s)
+    if m:
+        rest = undouble(m.group(2).strip())
+        junk = not rest or normalized_name(rest) in NAME_BLOCKLIST or any(
+            rx.fullmatch(rest) for rx in CV_SECTION_PATTERNS.values())
+        s = m.group(1).strip() + ('' if junk else ' ' + rest)
     # Aan elkaar geplakt uit een tabel: 'Emre KaplanCurriculum Vitae', 'Ravi PrakashMohan'.
     s = re.sub(r'(?<=[a-zà-ÿ]{3})(?=[A-ZÀ-Ý][a-zà-ÿ]{2})', ' ', s)
     s = undouble(s)
@@ -651,7 +659,8 @@ CV_SECTION_PATTERNS = {
                           r'algemene gegevens|personal details|personal information|personal data|samenvatting|'
                           r'persoonlijke intro|kandidaatprofiel|profielschets)\s*:?$')
 }
-CV_HEADER = re.compile(r'(?i)^(?:europass\s+)?(?:curriculum vitae|resume|résumé|cv)(?:\s*[-–—:]\s*[a-zÀ-ÿ .-]{3,50})?$')
+CV_HEADER = re.compile(r'(?i)^(?:europass\s+)?(?:curriculum vitae|resume|résumé|cv)'
+                       r'(?:(?:\s*[-–—:]\s*|\s+(?:van|of|von|de)\s+|\s+)[a-zÀ-ÿ .-]{3,50})?$')
 NON_CV_LINES = re.compile(r'(?i)\b(?:wij zoeken|solliciteer nu|vacature|functieomschrijving|de kandidaat dient|stageovereenkomst|onderzoeksrapport|inhoudsopgave|algemene voorwaarden|referaat|studieboek)\b')
 
 
@@ -887,6 +896,11 @@ def decide_status(text, filename, name, emails, phones, links, score, threshold=
             and not non_cv and not enormous):
         return 'cv'
     if name and score >= threshold and ((contact and strong) or (cv_header and strong)) and not (non_cv and not cv_header) and not enormous:
+        return 'cv'
+    # Naam + eigen contactgegevens + de kopjes Werkervaring én Opleiding: dat is een cv
+    # (een brief, verslag of vacature heeft die combinatie niet).
+    if name and contact and 'werkervaring' in heads and 'opleiding' in heads and not non_cv and not enormous \
+            and not is_vacancy(text) and not is_template(text):
         return 'cv'
     # 'Curriculum Vitae' bovenaan het document (niet alleen in de bestandsnaam) + naam + eigen contactgegevens
     # + minstens 2 cv-kopjes: dat is een cv, ook zonder het kopje Werkervaring.
