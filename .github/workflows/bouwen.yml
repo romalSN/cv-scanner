@@ -15,7 +15,7 @@ jobs:
         include:
           - os: windows-latest
             naam: Windows
-          - os: macos-15          # Apple Silicon (M1/M2/M3...), zoals de MacBook M2
+          - os: macos-14          # Apple Silicon (M1/M2/M3...), zoals de MacBook M2
             naam: Mac
           - os: macos-15-intel    # oudere Macs met Intel-processor (t/m 2020)
             naam: Mac-Intel
