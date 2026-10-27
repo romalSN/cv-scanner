@@ -1,0 +1,56 @@
+CV SCANNER V8 — WINDOWS
+=======================
+
+WAT IS VERBETERD?
+- Geen documenttitels zomaar in de lijst Unieke personen.
+- Meer nadruk op een echte naam én aparte CV-secties.
+- Voornaam: Jan en Achternaam: de Vries vormen Jan de Vries.
+- Ook Naam: / Full name: wordt zonder het label opgeslagen.
+- Werkperiodes zoals 2019–2022 en 2021–heden tellen extra mee wanneer
+  ze onder het kopje Werkervaring staan. Jaartallen alléén bewijzen geen CV.
+- Algemene mailboxen als info@ en contact@ gelden niet als bewijs van
+  een persoonlijk contactgegeven.
+- Twijfelgevallen tellen niet mee als uniek persoonsrecord.
+- Excel-tab 'Bestanden en status' bevat ALLE onderzochte documenten,
+  met een status cv / review / other / error / deferred.
+- Telefoonnummers staan als tekst in Excel, zodat +31 en eerste nul blijven.
+  Een groen driehoekje bij een telefoonnummer is geen scanfout.
+
+STARTEN
+1. Sluit een openstaand Excel-bestand en je vorige scannervenster.
+2. Maak vóór de eerste scan een reservekopie van de map CV_Crawler_Export
+   in je Windows-gebruikersmap; dit is je bestaande database.
+3. Pak het HELE ZIP-bestand uit via Verkenner > Alles uitpakken.
+4. Start START_HIER_WINDOWS.bat (vereist Python 3.10+ met Tkinter).
+5. Kies eerst een map met enkele echte CV's en andere documenten.
+6. Controleer de Excel-tab 'Unieke personen' en 'Controle nodig'.
+7. Klik daarna 'Scan mijn hele Lenovo / Windows-pc' voor de brede scan.
+
+BELANGRIJK OVER DE OUDE STATISTIEKEN
+V5/V6 konden rapporten en projecten ten onrechte als CV herkennen.
+Hun aantallen zijn daarom NIET betrouwbaar. V8 telt alleen documenten als
+bevestigd CV nadat ze opnieuw met de strengere V8-classifier zijn verwerkt.
+Ook als je op 'Excel bijwerken' klikt voor een nieuwe scan worden oude
+beoordelingen niet automatisch als unieke personen overgenomen. Deze staan
+bij Controle nodig, zodat ze niet stilzwijgend fout worden doorgeschoven.
+
+De scanner behoudt je originele documenten. De standaardscan is lokaal.
+De optionele online functie doet alleen iets wanneer je zelf daarvoor kiest.
+Sommige PDF's zijn onleesbaar of crashen een PDF-reader. Ze worden als
+leesfout gerapporteerd; OCR vereist extra tools. Deze uitgave is getest met
+voorbeeldbestanden in deze omgeving, nog niet op jouw Lenovo.
+
+WAT BETEKENEN DE TELLERS?
+- Bestanden gezien = ondersteunde bestanden aangetroffen in de huidige scan.
+- Bevestigde CV-locaties = na export de totale opnieuw geclassificeerde cv's.
+- Unieke personen = automatisch samengevoegde vermoedelijke echte personen;
+  controle van persoonsgegevens blijft belangrijk.
+- Controlepunten = twijfelgevallen, problemen met lezen, oude beoordelingen
+  en mogelijke samenvoegconflicten; NIET allemaal leesfouten.
+
+BESTANDEN
+Excel: %USERPROFILE%\CV_Crawler_Export\CV_Crawler_Resultaten.xlsx
+Bronnen/database: %USERPROFILE%\CV_Crawler_Export
+Fouten: fouten_overzicht.csv, fouten_per_categorie.csv
+Overige exports: unieke_personen.csv, cv_bestanden.csv (alle bestanden),
+handmatige_controle.csv

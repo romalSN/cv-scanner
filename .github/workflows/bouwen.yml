@@ -1,0 +1,104 @@
+name: Bouwen (.exe en .app)
+
+on:
+  push:
+    paths-ignore:
+      - 'ai_test/**'
+      - '.github/workflows/ai_test.yml'
+  workflow_dispatch:
+
+jobs:
+  bouwen:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            naam: Windows
+          - os: macos-15          # Apple Silicon (M1/M2/M3...), zoals de MacBook M2
+            naam: Mac
+          - os: macos-15-intel    # oudere Macs met Intel-processor (t/m 2020)
+            naam: Mac-Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Benodigdheden installeren
+        run: python -m pip install pyinstaller cryptography pillow certifi
+
+      - name: Test - tekst, Pages en scanner
+        run: python tests/test_basis.py
+
+      - name: Test - venster Kandidaten (tabel in de scanner)
+        run: python tests/test_kandidaten.py
+
+      - name: Test - alle afgesproken regels (matching, plaatsen, typfouten, cloud, sleutels, Pages)
+        run: python tests/test_regels.py
+
+      - name: Test - Mac leest oude Word-bestanden met verkeerde extensie
+        if: runner.os == 'macOS'
+        run: python tests/test_mac_lezen.py
+
+      - name: Test - ingebouwde Mac-OCR (gescande pdf)
+        if: runner.os == 'macOS'      # Windows-OCR is al getest op de Lenovo
+        run: python tests/test_ocr.py
+
+      - name: App bouwen
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "$RUNNER_OS" = "macOS" ]; then EXTRA="--osx-bundle-identifier nl.solutionnow.cvscanner"; fi
+          pyinstaller --noconfirm --windowed --name "CV Scanner" --paths . \
+            --hidden-import gui --hidden-import cv_crawler --hidden-import reader_worker \
+            --hidden-import rtf_reader --hidden-import pages_reader --hidden-import certifi \
+            --collect-data certifi --collect-submodules pypdf $EXTRA start_app.py
+
+      - name: Gebouwde app testen
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then APP="dist/CV Scanner.app/Contents/MacOS/CV Scanner"; else APP="dist/CV Scanner/CV Scanner.exe"; fi
+          python tests/maak_frozen_set.py "$RUNNER_TEMP/set"
+          "$APP" --backend --root "$RUNNER_TEMP/set" --output "$RUNNER_TEMP/uit" > log.txt 2>&1 || true
+          cat log.txt
+          N=$(grep -c "CV GEVONDEN" log.txt || true)
+          if [ "$RUNNER_OS" = "macOS" ]; then WANT=3; else WANT=2; fi
+          [ "$N" -ge "$WANT" ] || { echo "::error::Gebouwde app vond $N van $WANT cv's (tekst, Pages, gescande pdf)"; exit 1; }
+          "$APP" --ssl-test > ssl.txt 2>&1 || true
+          cat ssl.txt
+          grep -q "SSL OK" ssl.txt || { echo "::error::Internet (https) werkt niet in de gebouwde app: $(cat ssl.txt)"; exit 1; }
+          grep -q "EXPORT:" log.txt
+          grep -q "CV GEVONDEN" log.txt
+          ls "$RUNNER_TEMP/uit"/*.xlsx
+
+      - name: Schermafbeelding van de Mac-app
+        if: runner.os == 'macOS'
+        run: |
+          open "dist/CV Scanner.app"
+          sleep 25
+          screencapture -x mac_scherm.png || true
+          pkill -f "CV Scanner" || true
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: ${{ matrix.naam }}-schermafbeelding
+          path: mac_scherm.png
+
+      - name: Inpakken (Mac)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent "dist/CV Scanner.app" "CV-Scanner-${{ matrix.naam }}.zip"
+
+      - name: Inpakken (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/CV Scanner" -DestinationPath "CV-Scanner-Windows.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CV-Scanner-${{ matrix.naam }}
+          path: CV-Scanner-*.zip
+

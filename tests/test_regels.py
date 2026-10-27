@@ -1,0 +1,223 @@
+"""Controleert alle afgesproken regels van de scanner, zonder internet (zoekdiensten nagebootst).
+Draait op Windows, Mac (M) en Mac (Intel) bij elke build."""
+import csv
+import io
+import os
+import shutil
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+os.environ['TAVILY_API_KEY'] = 'test'
+os.environ['SERPER_API_KEY'] = 'test'
+import cv_crawler as c  # noqa: E402
+import traceback
+def _hook(t, v, tb):
+    print('::error::CRASH ' + ''.join(traceback.format_exception(t, v, tb)).replace(chr(10), ' | ')[-900:])
+    sys.__excepthook__(t, v, tb)
+sys.excepthook = _hook
+
+FOUTEN = []
+
+
+def check(naam, ok, info=''):
+    print(('OK   ' if ok else 'FOUT ') + naam + ('' if ok else f'  -> {info}'))
+    if not ok:
+        print(f'::error::{naam} -> ' + str(info).replace(chr(10), ' ')[:600])
+    if not ok:
+        FOUTEN.append(naam)
+
+
+def online(naam, cv_tekst, werkgever, woonplaats, tavily, google=None, functie='', opleidingen='', stage=''):
+    """Eén persoon online laten opzoeken met nagebootste Tavily/Google. Geeft de rijen terug."""
+    out = Path(tempfile.mkdtemp())
+    c.tavily_search = lambda *a, **k: tavily
+    c.google_search = google or (lambda q: ([], 'Serper'))
+    db = c.db_open(out)
+    row = dict(path=str(out / 'cv.docx'), name=naam, status='cv', snippet=c.normalized_snippet(cv_tekst),
+               employer=werkgever, woonplaats=woonplaats, opleidingen=opleidingen, stage=stage, sha=naam,
+               classifier_version=c.CLASSIFIER_VERSION)
+    db.execute(f"insert into docs({','.join(row)}) values({','.join('?' * len(row))})", list(row.values()))
+    db.commit()
+    person = dict(naam=naam, persoon_id='p1', email='x@voorbeeldmail.nl', telefoon='+31600000000', linkedin='',
+                  huidige_functie=functie, laatst_bekende_werkgever=werkgever, woonplaats=woonplaats)
+    c.online_suggestions([person], out, db=db, delay=0)
+    rows = list(csv.DictReader(open(out / 'online_suggesties.csv', encoding='utf-8-sig'), delimiter=';'))
+    c.merge_online_suggestions([person], out)
+    excel, _cols = c.personen_overzicht([dict(person, kandidaat_id='SNK', cv_id='SNCV', cv_bestand='',
+                                             cv_pad='', cv_archief='')])
+    shutil.rmtree(out, ignore_errors=True)
+    best = next((r for r in rows if r['type'] == 'linkedin' and r['keuze'] in ('beste', 'niets')), {})
+    return best, excel[0]
+
+
+def li(slug, title, content):
+    return {'url': f'https://nl.linkedin.com/in/{slug}', 'title': title, 'content': content}
+
+
+# 1. Enige profiel + 1 echt kenmerk (ook grote werkgever) = zeker, met uitleg
+b, x = online('Bram Hoekstra', 'Teamleider bij Coolblue', 'Coolblue', '',
+              [li('bramhoekstra', 'Bram Hoekstra - Teamleider at Coolblue', 'Teamleider at Coolblue')])
+check('enige profiel + Coolblue = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
+check('uitleg "enige LinkedIn-profiel"', 'enige LinkedIn-profiel' in b.get('overeenkomst', ''), b)
+check('Excel: vinkje bij zeker', '✓ zeker' in x['gezocht_zekerheid'], x)
+
+# 2. Enige profiel + alleen 1 plaats = controleren
+b, _ = online('Kees Leeg', 'Bakker bij Bakkerij Fictief', 'Bakkerij Fictief', 'amsterdam',
+              [li('keesleeg', 'Kees Leeg - Student', 'Student. Amsterdam.')])
+check('enige profiel + 1 plaats = controleren', b.get('zekerheid') == 'controleren', b)
+
+# 3. Enige profiel + 2 plaatsen = zeker (Sander van Rijswijk)
+b, _ = online('Sander van Rijswijk', 'Analist bij ING Erasmus Universiteit Rotterdam Amsterdam', 'ING', 'amsterdam',
+              [li('sandervanrijswijk', 'Sander van Rijswijk - Analist', 'Amsterdam. Studied in Rotterdam.')])
+check('enige profiel + 2 plaatsen = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
+check('geen "rijswijk" als plaats uit de achternaam', 'rijswijk' not in b.get('overeenkomst', '').replace('van rijswijk', ''), b)
+
+# 4. Alleen naamgenoten, niets klopt -> niet invullen, duidelijke uitleg
+b, x = online('Mark de Jong', 'Planner bij Transportbedrijf Noordkaap', 'Transportbedrijf Noordkaap', 'zwolle',
+              [li('markdejong1', 'Mark de Jong - Sales', 'Sales bij Philips. Eindhoven.'),
+               li('markdejong2', 'Mark de Jong - Docent', 'Docent. Groningen.')], functie='Planner')
+check('naamgenoten zonder overeenkomst: geen LinkedIn', x['linkedin'] == '', x)
+check('naamgenoten: duidelijke bron-tekst', 'niets uit het cv klopt' in x['linkedin_bron'], x)
+check('naamgenoten: niet "controleren"', 'controleren' not in x['gezocht_zekerheid'], x)
+
+# 5. Er klopt wel iets (Monteur) bij meerdere profielen -> controleren
+b, _ = online('Kevin de Vries', 'Monteur bij Installatietechniek Dijkzicht', 'Installatietechniek Dijkzicht', 'leeuwarden',
+              [li('kevin1', 'Kevin de Vries - Monteur', 'Monteur. Utrecht.'), li('kevin2', 'Kevin de Vries - Kok', 'Kok.')],
+              functie='Monteur')
+check('iets klopt (functie) = controleren', b.get('zekerheid') == 'controleren', b)
+
+# 6. Planner is geen typfout van 'plannen'
+b, _ = online('Mark de Jong', 'Planner bij Fictief', 'Fictief Transport', 'zwolle',
+              [li('mdj', 'Mark de Jong', 'Ik hou van plannen. Groningen.'), li('mdj2', 'Mark de Jong', 'Leraar')], functie='Planner')
+check('planner ≠ plannen', 'plannen' not in (b.get('overeenkomst') or ''), b)
+
+# 7. QTB: korte bedrijfsnaam via Google, profiel dat Tavily miste
+def g_qtb(q):
+    if '"qtb"' in q.lower():
+        return [li('eva-kramer-qtb', 'Eva Kramer - QTB | LinkedIn', 'Medewerker bij QTB.')], 'Serper'
+    return [], 'Serper'
+b, _ = online('Eva Kramer', 'Medewerker bij QTB Opleidingen en Trainingen', 'QTB Opleidingen en Trainingen', '',
+              [li('eva-kramer-4f1a2c9', 'Eva Kramer - Docent', 'Docent. Zwolle.')], google=g_qtb, functie='Medewerker')
+check('QTB via Google (korte naam) = zeker', b.get('zekerheid') == 'waarschijnlijk' and 'qtb' in b.get('gevonden_waarde', ''), b)
+
+# 8. Organisatie met 'opleiding' in de naam telt ook onder Opleiding op het profiel
+b, _ = online('Eva Kramer', 'Medewerker bij QTB Opleidingen en Trainingen', 'QTB Opleidingen en Trainingen', '',
+              [li('eva-kramer-yx', 'Eva Kramer - YER', 'Opleiding: QTB Opleidingen en Trainingen, Fictief Marketing Instituut'),
+               li('eva-kramer-2', 'Eva Kramer - Docent', 'Docent')], functie='Medewerker')
+check('QTB onder opleiding telt', b.get('zekerheid') == 'waarschijnlijk' and 'eva-kramer-yx' in b.get('gevonden_waarde', ''), b)
+
+# 9. Losse woorden 'stage' en cv-woorden tellen niet
+b, _ = online('Romal Testman', 'Stagiair AI-toepassing bij Bedrijfje Fictief', 'IKEA', 'haarlem',
+              [li('romal-t', 'Romal Testman - Intern / Stagiair AI-toepassing', 'Stagiair. Heemstede.'),
+               li('romal-t2', 'Romal Testman', 'Kok')])
+check('woord "stage"/"toepassing" telt niet', 'stage' not in (b.get('overeenkomst') or '').lower()
+      and 'cv-woord' not in (b.get('overeenkomst') or ''), b)
+
+# 10. Zoekfout = niet 'niet gevonden'
+def kapot(*a, **k):
+    raise c.urllib.error.URLError('CERTIFICATE_VERIFY_FAILED')
+out = Path(tempfile.mkdtemp())
+c.tavily_search = kapot
+c.google_search = lambda q: ([], 'Serper')
+db = c.db_open(out)
+db.execute("insert into docs(path,name,status,snippet,employer,sha,classifier_version) values('a','Jan Fout','cv','x','Y','j',?)",
+           (c.CLASSIFIER_VERSION,))
+db.commit()
+c.online_suggestions([dict(naam='Jan Fout', persoon_id='p', email='a@b.nl', telefoon='+316', linkedin='',
+                           huidige_functie='', laatst_bekende_werkgever='Y', woonplaats='')], out, db=db, delay=0)
+p = out / 'online_suggesties.csv'
+rows = list(csv.DictReader(open(p, encoding='utf-8-sig'), delimiter=';')) if p.exists() else []
+check('zoekfout wordt geen "niet gevonden"', not any(r['zekerheid'] == 'niet gevonden' for r in rows), rows)
+
+# 11. Woonplaats: adresregel, geen schoolnaam, geen achternaam
+check('woonplaats uit adres', c.woonplaats_from('Romal Omid\nHogeschool van Amsterdam\nAdres X 6, 2037 GJ Haarlem') == 'haarlem')
+check('woonplaats niet uit achternaam', c.woonplaats_from('Curriculum Vitae\nSander van Rijswijk\nAmsterdam') == 'amsterdam')
+
+# 12. Typfouten
+for a, bb, want in [('software engineering', 'sofware engineer', True), ('codewerk', 'codwerk', True),
+                    ('datafabriek', 'datafabreik', True), ('planner', 'plannen', False),
+                    ('consultant', 'consulent', False), ('developer', 'designer', False)]:
+    check(f'typfout {a} ~ {bb} = {want}', c.phrase_like(a, bb) == want)
+
+# 13. Eigen API-sleutels nooit scannen
+tmp = Path(tempfile.mkdtemp())
+(tmp / '.cv-scanner-windows').mkdir()
+(tmp / '.cv-scanner-windows' / 'tavily_sleutel.txt').write_text('tvly-geheim')
+(tmp / 'serper_sleutel.txt').write_text('geheim')
+(tmp / 'cv.txt').write_text('cv')
+found = [p.name for p in c.iter_files([tmp], tmp / 'uit', deep=True)]
+check('sleutelbestanden worden niet gescand', found == ['cv.txt'], found)
+
+# 14. Cv in OneDrive: standaard kopiëren, origineel blijft staan
+src = Path(tempfile.mkdtemp())
+(src / 'OneDrive - Test').mkdir()
+shutil.copy(ROOT / 'tests' / 'voorbeeld' / 'CV Lotte Verbeek.txt', src / 'OneDrive - Test')
+uit = Path(tempfile.mkdtemp())
+c.main(['--root', str(src), '--output', str(uit)])
+c.main(['--output', str(uit), '--opschonen'])
+check('cloud-cv blijft in OneDrive staan', (src / 'OneDrive - Test' / 'CV Lotte Verbeek.txt').exists())
+check('kopie staat in Alle_cvs', any((uit / 'Alle_cvs').glob('*Lotte*')))
+
+# 15. Pages-bestand (als map) lezen
+pg = Path(tempfile.mkdtemp()) / 'Test.pages'
+pg.mkdir()
+(pg / 'index.xml').write_text('<sl:document xmlns:sl="x" xmlns:sf="y"><sf:p>Curriculum Vitae Jan Pages</sf:p></sl:document>')
+txt, _n, _p = c.read_document(pg)
+check('Pages-map lezen', 'Jan Pages' in txt, txt[:80])
+
+# 16. Twijfel verminderen: leeg formulier = geen cv, Engels cv = cv
+form = 'Intakeformulier\nNaam: Eva de Groot\nWerkervaring\nHuidige functie: ________\nWerkgever: ________\nOpleiding\nHoogste opleiding: ________\nGewenste uren: ____'
+check('leeg formulier = sjabloon', c.is_template(form))
+eng = ('Resume\nTom Hendriks\nExperience\n2019 - present  Product Owner at Fintech\n2015 - 2019  Business Analyst at Consultancy\n'
+       'Education\n2011 - 2015  Business Administration, University of Amsterdam')
+h, *_ = c.cv_signals(eng, 'Resume_Tom_Hendriks.pdf')
+check('Engelse kopjes herkend', {'werkervaring', 'opleiding'} <= h, h)
+check('onleesbare scan = geen cv', c.decide_status('', 'cv_scan.pdf', '', [], [], [], 0) == 'other')
+
+# --- Versie 20: namen opschonen (uit echte export van de M-Mac, namen verzonnen) ---
+for ruw, goed in [('Naam Henk Winters', 'Henk Winters'), ('Persoonlijke Gegevens', ''), ('Algemene Gegevens', ''),
+                  ('Geert van TuinenGeert van Tuinen', 'Geert van Tuinen'), ('Emre KaplanCurriculum Vitae', 'Emre Kaplan'),
+                  ('Name Jan Smit Sex Male', 'Jan Smit'), ('Drs. Paul van Dorsten CISSP', 'Paul van Dorsten'),
+                  ('Backend Developer', ''), ('Voorbeeld Experts BV', ''), ('The Netherlands', ''), ('Woonplaats Amsterdam', ''),
+                  ('Marc de Gier Contractmanager Belastingdienst', 'Marc de Gier'), ('Curricullum Vitae', ''),
+                  ('Sander van Rijswijk', 'Sander van Rijswijk'), ('Jan de Vries', 'Jan de Vries'), ('Naam Mark', ''),
+                  ('Medewerker Nils Roest', 'Nils Roest'), ('Wouter Van Velzen Nl', 'Wouter Van Velzen')]:
+    check(f'naam "{ruw}" -> "{goed}"', c.clean_person_name(ruw) == goed, c.clean_person_name(ruw))
+tekst = 'Persoonlijke gegevens\nNaam Henk Winters\nGeboortedatum 01-01-1980\nWerkervaring\n2010 - heden Ontwikkelaar bij Codewerk'
+check('naam uit tabel "Naam  Henk Winters"', c.guess_name(tekst, 'cv', []) == 'Henk Winters', c.guess_name(tekst, 'cv', []))
+tekst = 'Voornaam\tHenk\nAchternaam\tWinters\nWerkervaring'
+check('voornaam + achternaam zonder dubbele punt', c.guess_name(tekst, 'cv', []) == 'Henk Winters', c.guess_name(tekst, 'cv', []))
+
+# --- Versie 20: rommel telt nooit als bewijs voor 'zeker' ---
+for lbl, term in [('werkgever', 'india'), ('werkgever', 'director'), ('school', 'university of'), ('school', 'roc de'),
+                  ('werkgever', 'ontwikkelen van een nieuw organisatiemod'), ('functie', 'bangalore'),
+                  ('stagebedrijf', 'werkzaamheden'), ('werkgever', 'technical services')]:
+    check(f'geen bewijs: {lbl} "{term}"', not c.evidence_term_ok(lbl, term))
+for lbl, term in [('werkgever', 'coolblue'), ('school', 'hogeschool van amsterdam'), ('school', 'vrije universiteit'),
+                  ('functie', 'linux engineer')]:
+    check(f'wel bewijs: {lbl} "{term}"', c.evidence_term_ok(lbl, term))
+b, x = online('Lars Pieters', 'Lars Pieters Developer | India 2015 - heden', 'India', 'amsterdam',
+              [li('lars-pieters-1', 'Lars Pieters - Developer India', 'Developer at India Tech. Amsterdam')])
+check('alleen "India" + plaats = niet zeker', b.get('zekerheid') != 'waarschijnlijk', b)
+b, x = online('Lars Pieters', 'Lars Pieters woont in Amsterdam', '', 'amsterdam',
+              [li('lars-pieters-1', 'Lars Pieters', 'Werkt in Amsterdam. Woont in Amsterdam')])
+check('zelfde plaats 2x (woon + werk) = niet zeker', b.get('zekerheid') != 'waarschijnlijk', b)
+
+# --- Versie 20: herkenning ---
+cvtekst = ('Curriculum Vitae\nHenk Winters\nhenk.winters@voorbeeldmail.nl\n06 12345678\nPersonalia\nGeboren 1980\n'
+           'Opdrachten\njan 2018 – dec 2020 Ontwikkelaar, Codewerk\nmrt 2021 - heden Architect, Datafabriek\n'
+           'Opleidingen & cursussen\nHBO Informatica')
+nm = c.guess_name(cvtekst, 'document', ['henk.winters@voorbeeldmail.nl'])
+sc, rs = c.classify(cvtekst, 'document', nm, ['henk.winters@voorbeeldmail.nl'], ['+31612345678'], [])
+st = c.decide_status(cvtekst, 'document', nm, ['henk.winters@voorbeeldmail.nl'], ['+31612345678'], [], sc)
+check('consultant-cv (Personalia/Opdrachten/maanden) = cv', st == 'cv', (nm, sc, rs, st))
+
+print()
+print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
+sys.exit(1 if FOUTEN else 0)

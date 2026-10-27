@@ -1,0 +1,6 @@
+__pycache__/
+_oude_versies_code/
+*.pyc
+build/
+dist/
+*.spec

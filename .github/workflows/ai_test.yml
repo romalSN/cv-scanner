@@ -1,0 +1,42 @@
+name: AI-test (lokale modellen)
+on:
+  push:
+    paths:
+      - 'ai_test/**'
+      - '.github/workflows/ai_test.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - naam: Llama-3.2-3B
+            url: https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+          - naam: Phi-3.5-mini
+            url: https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf
+          - naam: Qwen2.5-1.5B
+            url: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
+          - naam: Qwen2.5-7B
+            url: https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+          - naam: Gemma-2-2B
+            url: https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: llama.cpp ophalen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view -R ggml-org/llama.cpp --json tagName,assets -q '.tagName, (.assets[].name)' | grep -E 'b[0-9]+$|macos' | tr '\n' ' '
+          gh release download -R ggml-org/llama.cpp -p '*bin-macos-arm64*' -D llama
+          cd llama && for f in *; do case "$f" in *.zip) unzip -q "$f";; *.tar.gz) tar xzf "$f";; esac; done
+          SERVER=$(find "$PWD" -name llama-server -type f | head -1)
+          echo "SERVER=$SERVER" >> $GITHUB_ENV
+          echo "::notice::llama.cpp: $(ls) -> $SERVER"
+      - name: Model ophalen
+        run: |
+          curl -sL --fail -o model.gguf "${{ matrix.url }}"
+          echo "::notice::${{ matrix.naam }}: $(du -h model.gguf | cut -f1)"
+      - name: Beoordelen
+        run: python3 ai_test/evalueer.py "$SERVER" model.gguf "${{ matrix.naam }}"
