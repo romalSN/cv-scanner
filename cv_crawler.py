@@ -3011,7 +3011,8 @@ def deduplicate(db, merge_file=None):
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
     # Een e-mail of nummer dat in de cv's van 3+ verschillende personen staat, is van een bureau of bedrijf
-    # (bemiddelaar, detacheerder), niet van de kandidaat: niet als zijn/haar contactgegeven gebruiken.
+    # (bemiddelaar, detacheerder). Wel invullen (via het bureau bereik je de kandidaat), maar een eigen
+    # nummer/mail gaat voor, en de bron-kolom zegt dat het een bureau-/bedrijfsgegeven is.
     shared_count = collections.Counter()
     for person in identities:
         for v in set(filter(None, person['alle_emails'].split(' | '))) | set(filter(None, person['alle_telefoons'].split(' | '))):
@@ -3021,8 +3022,10 @@ def deduplicate(db, merge_file=None):
             values = [v for v in person[allf].split(' | ') if v]
             own = [v for v in values if shared_count[v] < 3 and not (field == 'email' and GENERIC_EMAIL.match(v))]
             if person[field] and person[field] not in own:
-                person[field + '_gedeeld'] = person[field]
-                person[field] = own[0] if own else ''
+                if own:
+                    person[field] = own[0]
+                else:
+                    person[field + '_bureau'] = shared_count[person[field]]
     identities.sort(key=lambda r:(normalized_name(r['naam']), r['persoon_id']))
     if id_file:
         try:
@@ -3339,14 +3342,16 @@ def personen_overzicht(people):
         cv_file = p.get('cv_bestand', '')
         def contact(field):
             """Eén waarde + waar die vandaan komt. Leeg = nergens gevonden."""
+            if p.get(field) and p.get(field + '_bureau'):
+                n = p[field + '_bureau']
+                return p[field], (f'cv – bureau/bedrijf (staat bij {n} kandidaten)' if n >= 3
+                                  else 'cv – algemeen adres (info@ e.d.)')
             if p.get(field):
                 return p[field], 'cv'
             if p.get('online_' + field):
                 return p['online_' + field], 'online (zeker)'
             if p.get('te_controleren_' + field):
                 return p['te_controleren_' + field], 'online (nog controleren)'
-            if p.get(field + '_gedeeld'):
-                return '', 'niet ingevuld: in het cv staat alleen een bureau-/bedrijfsadres (' + p[field + '_gedeeld'] + ')'
             if field == 'linkedin' and p.get('naamgenoten_linkedin'):
                 return '', 'niet ingevuld: wel profielen met deze naam, maar niets uit het cv klopt'
             if p.get('niet_gevonden_' + field):
