@@ -21,7 +21,7 @@ jobs:
             url: https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf
           - naam: Gemma-2-2B
             url: https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: llama.cpp ophalen
@@ -29,7 +29,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view -R ggml-org/llama.cpp --json tagName,assets -q '.tagName, (.assets[].name)' | grep -E 'b[0-9]+$|macos' | tr '\n' ' '
-          gh release download -R ggml-org/llama.cpp -p '*bin-macos-arm64*' -D llama
+          gh release download -R ggml-org/llama.cpp -p '*bin-ubuntu-x64*' -D llama
           cd llama && for f in *; do case "$f" in *.zip) unzip -q "$f";; *.tar.gz) tar xzf "$f";; esac; done
           SERVER=$(find "$PWD" -name llama-server -type f | head -1)
           echo "SERVER=$SERVER" >> $GITHUB_ENV

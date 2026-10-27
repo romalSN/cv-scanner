@@ -64,5 +64,5 @@ for g in gevallen:
 proc.terminate()
 gem = sum(tijden) / len(tijden)
 regel = (f"{naam}: {uitslag['goed']}/{len(gevallen)} goed, {uitslag['GEVAARLIJK']} fout-ja (gevaarlijk), "
-         f"{uitslag['gemist']} gemist/onzeker. Gem. {gem:.1f}s per geval op GitHub-Mac (CPU), laden {laden:.0f}s")
+         f"{uitslag['gemist']} gemist/onzeker. Gem. {gem:.1f}s per geval op GitHub-Linux (CPU, 4 kernen), laden {laden:.0f}s")
 print('::notice::' + regel)
