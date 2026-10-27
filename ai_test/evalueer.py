@@ -1,21 +1,12 @@
 """Laat een lokale AI (llama.cpp) testgevallen beoordelen: is dit LinkedIn-profiel dezelfde persoon als het cv?"""
-import json, subprocess, sys, time, urllib.request
+import json, sys, time
 from pathlib import Path
 
-server, model, naam = sys.argv[1], sys.argv[2], sys.argv[3]
+model, naam = sys.argv[1], sys.argv[2]
 gevallen = json.loads((Path(__file__).parent / 'gevallen.json').read_text(encoding='utf-8'))
-PORT = 8765
-proc = subprocess.Popen([server, '-m', model, '--port', str(PORT), '-c', '4096', '-ngl', '0', '--log-disable'],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+from llama_cpp import Llama
 t0 = time.time()
-while True:
-    try:
-        urllib.request.urlopen(f'http://127.0.0.1:{PORT}/health', timeout=2)
-        break
-    except Exception:
-        if time.time() - t0 > 300 or proc.poll() is not None:
-            print(f'::error::{naam}: server start niet'); sys.exit(1)
-        time.sleep(2)
+llm = Llama(model_path=model, n_ctx=4096, n_threads=4, verbose=False)
 laden = time.time() - t0
 
 SYSTEEM = (
@@ -42,10 +33,9 @@ for g in gevallen:
             "temperature": 0, "max_tokens": 120,
             "response_format": {"type": "json_object", "schema": SCHEMA}}
     t = time.time()
-    req = urllib.request.Request(f'http://127.0.0.1:{PORT}/v1/chat/completions', data=json.dumps(body).encode(),
-                                 headers={'Content-Type': 'application/json'})
     try:
-        out = json.loads(urllib.request.urlopen(req, timeout=300).read())
+        out = llm.create_chat_completion(messages=body['messages'], temperature=0, max_tokens=120,
+                                         response_format={"type": "json_object", "schema": SCHEMA})
         antwoord = json.loads(out['choices'][0]['message']['content'])
         oordeel, reden = antwoord.get('oordeel', '?'), antwoord.get('reden', '')
     except Exception as exc:
@@ -61,7 +51,6 @@ for g in gevallen:
         u = 'gemist'
     uitslag[u] += 1
     print(f"{naam} geval {g['id']:2d} waar={waar:8s} ai={oordeel:8s} {u:10s} {tijden[-1]:5.1f}s  {reden[:110]}")
-proc.terminate()
 gem = sum(tijden) / len(tijden)
 regel = (f"{naam}: {uitslag['goed']}/{len(gevallen)} goed, {uitslag['GEVAARLIJK']} fout-ja (gevaarlijk), "
          f"{uitslag['gemist']} gemist/onzeker. Gem. {gem:.1f}s per geval op GitHub-Linux (CPU, 4 kernen), laden {laden:.0f}s")
