@@ -158,7 +158,7 @@ NAME_BLOCKLIST = {
     # kopjes en labels die bovenaan een cv staan (geen naam)
     'gegevens', 'persoonlijke', 'persoonsgegevens', 'algemene', 'personalia', 'ervaring', 'relevante',
     'recente', 'opdrachten', 'opdracht', 'vitae', 'curiculum', 'cirriculum', 'curricilum', 'curricullum',
-    'curriculim', 'woonplaats', 'adres', 'address', 'naam', 'name', 'voornaam', 'achternaam', 'roepnaam',
+    'curriculim', 'voornamen', 'woonplaats', 'adres', 'address', 'naam', 'name', 'voornaam', 'achternaam', 'roepnaam',
     'full', 'kandidaat', 'candidate', 'medewerker', 'contact', 'information', 'informatie', 'geboortedatum',
     'nationaliteit', 'nationality', 'rijbewijs', 'sex', 'male', 'female', 'gender', 'geslacht', 'telefoon',
     'mobile', 'phone', 'email', 'pagina', 'page', 'recent', 'change', 'about', 'the',
@@ -212,7 +212,7 @@ def reasonable_name(value):
 # Expliciete labels mogen niet in de naam terechtkomen, ook niet als de
 # gebruiker de velden op afzonderlijke regels heeft gezet.
 PERSON_LABEL = re.compile(
-    r'(?i)^(voornaam|first\s*name|given\s*name|achternaam|familienaam|surname|last\s*name|family\s*name|'
+    r'(?i)^(voornamen|voornaam|first\s*name|given\s*name|achternaam|familienaam|surname|last\s*name|family\s*name|'
     r'volledige\s*naam|full\s*name|roepnaam|naam\s*kandidaat|naam|name|candidate\s*name|kandidaat)'
     r'(?:\s*[:：=\-]\s*|\s+(?=[A-ZÀ-Ý]))(.*)$')
 # Na de naam volgt in tabellen vaak meteen het volgende veld: 'Name Jan Smit Sex Male'.
@@ -246,12 +246,17 @@ def name_parts(value):
         remainder = NEXT_FIELD.sub('', remainder).strip()
         if remainder:
             fields[label] = remainder
-    given = next((fields[k] for k in ('voornaam','firstname','givenname','roepnaam') if fields.get(k)), '')
+    # Roepnaam gaat voor ('Johannes Pieter' heet 'Hans').
+    given = next((fields[k] for k in ('roepnaam','voornaam','firstname','givenname','voornamen') if fields.get(k)), '')
     family = next((fields[k] for k in ('achternaam','familienaam','surname','lastname','familyname') if fields.get(k)), '')
     complete = next((fields[k] for k in ('volledigenaam','fullname','naamkandidaat','naam','name','candidatename','kandidaat')
                      if fields.get(k)), '')
     if given and family:
         candidate = f'{given} {family}'
+        if reasonable_name(candidate):
+            return candidate
+    if given and complete and len(complete.split()) == 1 and not family:
+        candidate = f'{given} {complete}'          # 'Naam Belonje' + 'Roepnaam Hans'
         if reasonable_name(candidate):
             return candidate
     if family and complete and len(complete.split()) == 1:

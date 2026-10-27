@@ -242,6 +242,11 @@ check('aan elkaar geplakte e-mail', c.emails_in('1330info@voorbeeld.comwww.voorb
 for kop in ('Mijn Kracht', 'Mijn Missie', 'Diploma Deelcertificaat'):
     check(f'"{kop}" is geen naam', c.clean_person_name(kop) == '')
 
+for tekst, goed in [("Naam Belonje\nVoornamen Johannes Pieter\nRoepnaam Hans", 'Hans Belonje'),
+                    ("Achternaam Beukema\nRoepnaam Peter", 'Peter Beukema'), ("Naam Mark\nAchternaam Nauta", 'Mark Nauta'),
+                    ("Achternaam: de Kleijn\nVoornaam: Sanne", 'Sanne de Kleijn')]:
+    check(f'naamvelden -> {goed}', c.guess_name(tekst, 'document', []) == goed, c.guess_name(tekst, 'document', []))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
