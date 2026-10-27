@@ -13,8 +13,6 @@ jobs:
         include:
           - naam: Phi-3.5-mini
             url: https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf
-          - naam: Gemma-2-2B
-            url: https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

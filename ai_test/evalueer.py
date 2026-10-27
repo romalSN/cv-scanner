@@ -34,10 +34,14 @@ SCHEMA = {"type": "object", "properties": {
     "required": ["past", "botst", "oordeel"]}
 
 
-def eind(ai, bewijs):
+def eind(ai, bewijs, past=()):
     if ai == 'nee':
         return 'afgewezen'
-    if ai == 'ja' and bewijs != 'geen':
+    if ai == 'ja' and bewijs == 'specifiek':
+        return 'zeker'
+    # Groot bedrijf/school (Albert Heijn, ING, gemeente): naam van het bedrijf alleen is te weinig,
+    # de AI moet nog iets anders noemen dat klopt (functie, school, afdeling).
+    if ai == 'ja' and bewijs == 'groot' and len([p for p in past if p.strip()]) >= 2:
         return 'zeker'
     if bewijs == 'specifiek':
         return 'zeker'
@@ -58,7 +62,7 @@ for g in gevallen:
         ai, a = 'onzeker', {'crash': str(exc)[:80]}     # vastgelopen = onzeker (veilig)
         crashes += 1
     tijden.append(time.time() - t)
-    e = eind(ai, g['bewijs'])
+    e = eind(ai, g['bewijs'], a.get('past') or [])
     ai_ant[g['id']] = ai[:3]
     w = g['waar']
     if e == 'zeker' and w != 'ja':
