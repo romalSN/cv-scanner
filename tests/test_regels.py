@@ -231,6 +231,17 @@ for tekst, verwacht in [
     st = c.decide_status(tekst, 'document', nm, em, ph, [], sc)
     check(f'herkenning: {tekst.splitlines()[0][:30]} = {verwacht}', st == verwacht, (nm, sc, rs, st))
 
+import json as _json
+def _d(name, e, p, sha):
+    return dict(name=name, emails=_json.dumps([e]), phones=_json.dumps([p]), links='[]', sha=sha, snippet='', tokens='[]')
+check('zelfde mail+tel, naam + bedrijfsnaam = samenvoegen',
+      c.safe_pair(_d('Bas Hilberts', 'b@x.nl', '+31600000001', 'a'), _d('Bas Hilberts Linkit', 'b@x.nl', '+31600000001', 'b'))[0])
+check('zelfde mail, andere naam = niet samenvoegen',
+      not c.safe_pair(_d('Bas Hilberts', 'b@x.nl', '+31600000001', 'a'), _d('Jan de Vries', 'b@x.nl', '+31600000001', 'b'))[0])
+check('aan elkaar geplakte e-mail', c.emails_in('1330info@voorbeeld.comwww.voorbeeld.com') == ['info@voorbeeld.com'], c.emails_in('1330info@voorbeeld.comwww.voorbeeld.com'))
+for kop in ('Mijn Kracht', 'Mijn Missie', 'Diploma Deelcertificaat'):
+    check(f'"{kop}" is geen naam', c.clean_person_name(kop) == '')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

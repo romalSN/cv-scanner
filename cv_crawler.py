@@ -171,7 +171,12 @@ NAME_BLOCKLIST = {
     'netherlands', 'nederland', 'neterlands', 'wonen', 'geschikt', 'belastingdienst', 'logius',
     'employer', 'instelling', 'bedrijf', 'rws', 'type', 'script', 'sint', 'info', 'intro', 'master',
     'ontwikkelaar', 'present', 'current', 'projectverslag', 'verslag', 'rapport', 'scriptie', 'thesis',
-    'afstudeerverslag', 'stageverslag', 'plan', 'notitie', 'memo', 'offerte', 'factuur', 'brief'
+    'afstudeerverslag', 'stageverslag', 'plan', 'notitie', 'memo', 'offerte', 'factuur', 'brief',
+    # kopjes uit 'persoonlijke' cv's: 'Mijn Kracht', 'Mijn Missie', 'My Strengths'
+    'mijn', 'kracht', 'krachten', 'missie', 'visie', 'motto', 'ambitie', 'ambities', 'doel', 'doelen', 'passie',
+    'drijfveren', 'drijfveer', 'kernwaarden', 'kwaliteiten', 'my', 'mission', 'vision', 'strengths', 'goals',
+    'hobby', 'hobbys', 'interesses', 'referenties', 'references', 'diploma', 'deelcertificaat', 'certificaat',
+    'nospam', 'spam'
 }
 # Een bedrijfsnaam is nooit een persoon: dan de hele 'naam' afkeuren (niet alleen dat woord weghalen).
 COMPANY_WORDS = {'bv', 'bvba', 'nv', 'vof', 'ltd', 'inc', 'gmbh', 'llc', 'holding', 'group', 'groep',
@@ -377,8 +382,19 @@ def _guess_name(text, filename, emails, links=()):
                 return candidate.title()
     return ''
 
+def _fix_email(e):
+    """'1330info@bedrijf.comwww.bedrijf.com' (aan elkaar geplakt in een pdf) -> 'info@bedrijf.com'."""
+    e = e.strip('.,:;').lower()
+    e = re.sub(r'(\.(?:com|nl|org|net|eu|be|de|io|info|biz|uk|nu|me))(?:www\.|https?).*$', r'\1', e)
+    local, _, dom = e.partition('@')
+    stripped = re.sub(r'^\d{3,}', '', local)
+    if stripped != local and GENERIC_EMAIL.match(stripped + '@'):
+        e = stripped + '@' + dom          # postcode/huisnummer ervoor geplakt
+    return e
+
+
 def emails_in(text):
-    return sorted(set(m.group(0).strip('.,:;').lower() for m in EMAIL_RE.finditer(text)))[:12]
+    return sorted(set(_fix_email(m.group(0)) for m in EMAIL_RE.finditer(text)))[:12]
 
 
 def norm_phone(raw):
@@ -2248,10 +2264,15 @@ def safe_pair(a, b):
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
-    if conflict and strong:
+    aw0, bw0 = set(an.split()), set(bn.split())
+    if conflict and strong and not (min(len(aw0), len(bw0)) >= 2 and (aw0 <= bw0 or bw0 <= aw0)):
         return False, True, 'gedeelde contactgegevens maar afwijkende namen'
+    # 'Marcel Hilboezen' en 'Marcel Hilboezen Linkit': de kortste naam zit helemaal in de langste.
+    aw, bw = set(an.split()), set(bn.split())
+    contained = bool(an and bn) and min(len(aw), len(bw)) >= 2 and (aw <= bw or bw <= aw)
     if strong:
-        return (True, False, 'zelfde e-mail, telefoon of LinkedIn én naam') if (an and bn and name_sim >= .89) else (False, True, 'gedeelde contactgegevens; namen niet bevestigd')
+        return (True, False, 'zelfde e-mail, telefoon of LinkedIn én naam') if (an and bn and (name_sim >= .89 or contained)) \
+            else (False, True, 'gedeelde contactgegevens; namen niet bevestigd')
     if not an or not bn:
         return False, False, ''
     if name_sim < .91:
@@ -2989,6 +3010,19 @@ def deduplicate(db, merge_file=None):
            cv_pad=first['path'], cv_archief=first['archive'])
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
+    # Een e-mail of nummer dat in de cv's van 3+ verschillende personen staat, is van een bureau of bedrijf
+    # (bemiddelaar, detacheerder), niet van de kandidaat: niet als zijn/haar contactgegeven gebruiken.
+    shared_count = collections.Counter()
+    for person in identities:
+        for v in set(filter(None, person['alle_emails'].split(' | '))) | set(filter(None, person['alle_telefoons'].split(' | '))):
+            shared_count[v] += 1
+    for person in identities:
+        for field, allf in (('email', 'alle_emails'), ('telefoon', 'alle_telefoons')):
+            values = [v for v in person[allf].split(' | ') if v]
+            own = [v for v in values if shared_count[v] < 3 and not (field == 'email' and GENERIC_EMAIL.match(v))]
+            if person[field] and person[field] not in own:
+                person[field + '_gedeeld'] = person[field]
+                person[field] = own[0] if own else ''
     identities.sort(key=lambda r:(normalized_name(r['naam']), r['persoon_id']))
     if id_file:
         try:
@@ -3311,6 +3345,8 @@ def personen_overzicht(people):
                 return p['online_' + field], 'online (zeker)'
             if p.get('te_controleren_' + field):
                 return p['te_controleren_' + field], 'online (nog controleren)'
+            if p.get(field + '_gedeeld'):
+                return '', 'niet ingevuld: in het cv staat alleen een bureau-/bedrijfsadres (' + p[field + '_gedeeld'] + ')'
             if field == 'linkedin' and p.get('naamgenoten_linkedin'):
                 return '', 'niet ingevuld: wel profielen met deze naam, maar niets uit het cv klopt'
             if p.get('niet_gevonden_' + field):
