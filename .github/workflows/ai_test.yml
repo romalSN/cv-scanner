@@ -28,12 +28,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view -R ggml-org/llama.cpp --json tagName,assets -q '.tagName, (.assets[].name)' | grep -E 'b[0-9]+$|macos' | tr '\n' ' '
-          gh release download -R ggml-org/llama.cpp -p '*bin-ubuntu-x64*' -D llama
-          cd llama && for f in *; do case "$f" in *.zip) unzip -q "$f";; *.tar.gz) tar xzf "$f";; esac; done
+          set +e
+          gh api repos/ggml-org/llama.cpp/releases/latest -q '.tag_name, (.assets[].name)' > assets.txt 2> err.txt
+          echo "::notice::assets: $(grep -iE 'ubuntu|linux|b[0-9]+$' assets.txt | tr '\n' ' ') $(cat err.txt | tr '\n' ' ')"
+          NAME=$(grep -iE 'bin-ubuntu-x64\.(zip|tar\.gz)$' assets.txt | head -1)
+          TAG=$(head -1 assets.txt)
+          mkdir -p llama && cd llama
+          curl -sL --fail -o "$NAME" "https://github.com/ggml-org/llama.cpp/releases/download/$TAG/$NAME" || { echo "::error::download $TAG/$NAME mislukt"; exit 1; }
+          case "$NAME" in *.zip) unzip -q "$NAME";; *.tar.gz) tar xzf "$NAME";; esac
           SERVER=$(find "$PWD" -name llama-server -type f | head -1)
+          [ -n "$SERVER" ] || { echo "::error::geen llama-server in $NAME: $(find . -maxdepth 3 | head -20 | tr '\n' ' ')"; exit 1; }
+          chmod +x "$SERVER"
+          echo "LD_LIBRARY_PATH=$(dirname $SERVER)" >> $GITHUB_ENV
           echo "SERVER=$SERVER" >> $GITHUB_ENV
-          echo "::notice::llama.cpp: $(ls) -> $SERVER"
+          "$SERVER" --version 2>&1 | head -2 | sed 's/^/::notice::versie /'
       - name: Model ophalen
         run: |
           curl -sL --fail -o model.gguf "${{ matrix.url }}"
