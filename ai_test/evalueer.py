@@ -53,6 +53,7 @@ def score(waar, oordeel):
 
 
 uit = {'ai': {'goed': [], 'gemist': [], 'GEVAARLIJK': []}, 'samen': {'goed': [], 'gemist': [], 'GEVAARLIJK': []}}
+veto = {'nee_op_andere': [], 'nee_op_echte': [], 'antwoord': {}}
 tijden, fouten = [], 0
 for g in gevallen:
     vraag = (INSTRUCTIE + f"\n\nCV:\n{g['cv']}\n\nLINKEDIN-PROFIEL:\n{g['profiel']}\n\n"
@@ -71,6 +72,9 @@ for g in gevallen:
         fouten += 1
     tijden.append(time.time() - t)
     uit['ai'][score(g['waar'], oordeel)].append(g['id'])
+    veto['antwoord'][g['id']] = oordeel
+    if oordeel == 'nee':
+        veto['nee_op_echte' if g['waar'] == 'ja' else 'nee_op_andere'].append(g['id'])
     uit['samen'][score(g['waar'], samen)].append(g['id'])
     print(f"{naam} {g['id']:2d} waar={g['waar']:8s} ai={oordeel:8s} samen={samen:8s} {tijden[-1]:5.1f}s "
           f"bewijs={bewijs} {json.dumps(a, ensure_ascii=False)[:200]}")
@@ -80,4 +84,8 @@ for k, label in (('ai', 'AI alleen'), ('samen', 'AI + controle')):
     u = uit[k]
     print(f"::notice::{naam} | {label}: {len(u['goed'])}/{n} goed, fout-ja {len(u['GEVAARLIJK'])} {u['GEVAARLIJK']}, "
           f"gemist {len(u['gemist'])} {u['gemist']}")
+andere = [g['id'] for g in gevallen if g['waar'] == 'nee']
+print(f"::notice::{naam} | als rechter tegen naamgenoten: wijst {len(veto['nee_op_andere'])}/{len(andere)} echte andere personen af, "
+      f"wijst {len(veto['nee_op_echte'])} JUISTE profielen ten onrechte af {veto['nee_op_echte']}")
+print(f"::notice::{naam} | antwoorden " + ' '.join(f"{k}:{v[:3]}" for k, v in veto['antwoord'].items()))
 print(f"::notice::{naam} | {gem:.1f}s per geval (GitHub-Linux CPU), laden {laden:.0f}s, crashes {fouten}")
