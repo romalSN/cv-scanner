@@ -252,6 +252,14 @@ check('andere voornaam niet vervangen', c.name_with_email('Bas Kramer', ['niels_
 check('cijfers + linkedin aan e-mail geplakt', c.emails_in('41844178nathanmiddelham@gmail.comlinkedin.com') == ['nathanmiddelham@gmail.com'])
 check('"Nationality Dutch" is geen naam', c.clean_person_name('Nationality Dutch') == '')
 
+for ruw, goed in [('Baris YAPAR', 'Baris Yapar'), ('MENKVELD Jan-Willem', 'Jan-Willem Menkveld'), ('MACROBUTTON Johan Vermont', 'Johan Vermont'),
+                  ('Hendrik Ido Ambacht', ''), ('Over Mij', ''), ('Wsm Perquin Productowner', 'Wsm Perquin')]:
+    check(f'naam "{ruw}" -> "{goed}"', c.tidy_name(c.clean_person_name(ruw)) == goed, c.tidy_name(c.clean_person_name(ruw)))
+check('achternaam eerst + e-mail', c.name_order_by_email('Elmensdorp Henri', ['ron.elmensdorp@x.nl']) == 'Henri Elmensdorp')
+check('label aan e-mail geplakt', c.emails_in('haage-mailadresinfo@voorbeeld.comtelefoon') == ['info@voorbeeld.com'])
+check('e-mail van iemand anders herkend', c.email_owner_mismatch('Dennis Kortekaas', 'bart.plasmeijer@voorbeeldmail.nl'))
+check('eigen e-mail niet gemarkeerd', not c.email_owner_mismatch('Artem Zaitsev', 'artem.zajtsev@voorbeeldmail.nl'))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

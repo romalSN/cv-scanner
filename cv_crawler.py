@@ -176,12 +176,12 @@ NAME_BLOCKLIST = {
     'mijn', 'kracht', 'krachten', 'missie', 'visie', 'motto', 'ambitie', 'ambities', 'doel', 'doelen', 'passie',
     'drijfveren', 'drijfveer', 'kernwaarden', 'kwaliteiten', 'my', 'mission', 'vision', 'strengths', 'goals',
     'hobby', 'hobbys', 'interesses', 'referenties', 'references', 'diploma', 'deelcertificaat', 'certificaat',
-    'nospam', 'spam'
+    'nospam', 'spam', 'mij', 'macrobutton', 'mergefield', 'formtext', 'productowner', 'owner'
 }
 # Een bedrijfsnaam is nooit een persoon: dan de hele 'naam' afkeuren (niet alleen dat woord weghalen).
 COMPANY_WORDS = {'bv', 'bvba', 'nv', 'vof', 'ltd', 'inc', 'gmbh', 'llc', 'holding', 'group', 'groep',
                  'consultancy', 'services', 'service', 'solutions', 'experts', 'united', 'company', 'stichting'}
-JOB_ENDINGS = ('manager', 'developer', 'engineer', 'beheerder', 'consultant', 'adviseur', 'architect', 'analist',
+JOB_ENDINGS = ('owner', 'manager', 'developer', 'engineer', 'beheerder', 'consultant', 'adviseur', 'architect', 'analist',
                'ontwikkelaar', 'specialist', 'coordinator', 'programmeur', 'tester', 'designer', 'medewerker')
 NAME_FILLERS = {'de','den','der','van','von','ten','ter','te','het','el','al','bin','di', 'da'}
 
@@ -272,8 +272,24 @@ LOWER_PARTICLES = {'van','de','den','der','ten','ter','te','het','von','du','da'
 
 
 def tidy_name(name):
-    """'THOMAS VAN DEN BERG' -> 'Thomas van den Berg'; gemengde schrijfwijze blijft."""
-    if not name or not (name.isupper() or name.islower()):
+    """'THOMAS VAN DEN BERG' -> 'Thomas van den Berg'; 'Baris YAPAR' -> 'Baris Yapar';
+    'MENKVELD Jan-Willem' (achternaam eerst in hoofdletters) -> 'Jan-Willem Menkveld'."""
+    if not name:
+        return name
+    words = name.split()
+    if not (name.isupper() or name.islower()) and any(w.isupper() and len(w) > 2 for w in words):
+        if len(words) >= 2 and words[0].isupper() and len(words[0]) > 2 and not any(w.isupper() for w in words[1:]):
+            words = words[1:] + [words[0]]          # 'MENKVELD Jan-Willem'
+        fixed = []
+        for w in words:
+            if w.isupper() and len(w) > 1:
+                low = w.lower()
+                fixed.append(low if low in LOWER_PARTICLES and fixed else
+                             '-'.join(x[:1].upper() + x[1:] for x in low.split('-')))
+            else:
+                fixed.append(w)
+        return ' '.join(fixed)
+    if not (name.isupper() or name.islower()):
         return name
     words = name.lower().split()
     out = []
@@ -298,7 +314,7 @@ def name_from_linkedin(link):
 TITLE_BEFORE = re.compile(r'(?i)^(?:ir|ing|drs|dr|mr|prof|dhr|mevr|mw|mevrouw|de heer|mrs|ms|miss)\.?\s+')
 TITLE_AFTER = {'msc', 'bsc', 'ba', 'ma', 'mba', 'phd', 'pmp', 'cissp', 'binftech', 'mtd', 'llm', 'bba', 'ra',
                'rc', 'nl', 'ing', 'ir', 'drs', 'cpa', 'cisa', 'cism', 'itil', 'prince2'}
-LABEL_BEFORE = re.compile(r'(?i)^(?:naam|name|full\s*name|volledige\s*naam|voornaam|roepnaam|naam\s*kandidaat|'
+LABEL_BEFORE = re.compile(r'(?i)^(?:macrobutton|mergefield|formtext|naam|name|full\s*name|volledige\s*naam|voornaam|roepnaam|naam\s*kandidaat|'
                           r'kandidaat|candidate|medewerker|consultant)\s*[:：=\-]?\s+')
 
 
@@ -348,6 +364,8 @@ def clean_person_name(name):
     if len(words) >= 3 and normalized_name(words[-1]) in NL_PLACES and normalized_name(words[-2]) not in NAME_FILLERS:
         words = words[:-1]
     s = ' '.join(words).strip(' .,-')
+    if normalized_name(s) in NL_PLACES or normalized_name(s).replace(' ', '') in {p.replace(' ', '') for p in NL_PLACES}:
+        return ''                                   # 'Hendrik Ido Ambacht' is een plaats
     return s if reasonable_name(s) else ''
 
 
@@ -365,6 +383,10 @@ def name_with_email(name, emails):
     if not initials:
         return name
     surname = normalized_name(words[-1])
+    return _initials_from_email(words, letters, surname, emails, name)
+
+
+def _initials_from_email(words, letters, surname, emails, name):
     for e in emails or []:
         if GENERIC_EMAIL.match(e):
             continue
@@ -374,6 +396,39 @@ def name_with_email(name, emails):
             if given:
                 return ' '.join([given[0].capitalize()] + words[1:])
     return name
+
+
+def name_order_by_email(name, emails):
+    """'Elmensdorp Henri Ernst Ronald' + ron.elmensdorp@… -> 'Henri Ernst Ronald Elmensdorp'."""
+    words = (name or '').split()
+    if len(words) < 2:
+        return name
+    for e in emails or []:
+        if GENERIC_EMAIL.match(e):
+            continue
+        parts = [x for x in re.split(r'[._\-]+', e.split('@')[0].lower()) if x.isalpha()]
+        first, last = normalized_name(words[0]), normalized_name(words[-1])
+        if len(parts) >= 2 and parts[-1] == first and last not in parts and first not in NAME_FILLERS:
+            return ' '.join(words[1:] + [words[0]])
+    return name
+
+
+def email_matches_name(name, email):
+    """Het e-mailadres bevat (een deel van) de naam: jan.devries@, jdevries@, vries84@."""
+    local = re.sub(r'[^a-z]', '', (email or '').split('@')[0].lower())
+    return any(len(w) >= 3 and w in local for w in normalized_name(name).split() if w not in NAME_FILLERS)
+
+
+def email_owner_mismatch(name, email):
+    """True als het e-mailadres duidelijk de naam van iemand anders bevat (bart.plasmeijer@ bij Dennis Kortekaas)."""
+    if not name or not email or GENERIC_EMAIL.match(email):
+        return False
+    parts = [x for x in re.split(r'[._\-]+', email.split('@')[0].lower()) if x.isalpha()]
+    if len(parts) < 2 or any(len(x) < 3 for x in parts[:2]):
+        return False
+    nwords = [w for w in normalized_name(name).split() if len(w) >= 3]
+    hit = any(difflib.SequenceMatcher(None, p, w).ratio() >= .8 or p in w or w in p for p in parts for w in nwords)
+    return not hit
 
 
 def guess_name(text, filename, emails, links=()):
@@ -415,6 +470,11 @@ def _guess_name(text, filename, emails, links=()):
 def _fix_email(e):
     """'1330info@bedrijf.comwww.bedrijf.com' (aan elkaar geplakt in een pdf) -> 'info@bedrijf.com'."""
     e = e.strip('.,:;').lower()
+    # 'haage-mailadresinfo@…' / 'e-mailjan@…': label (en wat ervoor zat) eraf.
+    e = re.sub(r'^.*?(?:e-?mail(?:adres)?|email(?:address)?|mailadres|mail:)(?=[a-z0-9])', '', e.split('@')[0]) + '@' + e.split('@', 1)[1] \
+        if re.search(r'(?:e-?mail(?:adres)?|email(?:address)?|mailadres)[a-z0-9]', e.split('@')[0]) else e
+    # '…@x.nlgeboortedatum', '…@x.comtelefoon': woord achter het domein (zonder punt erna) eraf.
+    e = re.sub(r'(\.(?:com|nl|org|net|eu|be|de|io|info|biz|uk|nu|me|fr|it|es))[a-z]{3,}$', r'\1', e)
     e = re.sub(r'(\.(?:com|nl|org|net|eu|be|de|io|info|biz|uk|nu|me))(?:www\.|https?|linkedin|tel|mob|phone|\d).*$', r'\1', e)
     local, _, dom = e.partition('@')
     stripped = re.sub(r'^\d{3,}', '', local)
@@ -3011,7 +3071,8 @@ def deduplicate(db, merge_file=None):
         names.sort(key=lambda n: (bool(clean_person_name(n)), counts[normalized_name(n)], len(n.split()), len(n)),
                    reverse=True)
         name = names[0] if names else ''
-        name = name_with_email(name, sorted({v for d in group for v in json.loads(d['emails'])}))
+        name = name_order_by_email(name_with_email(tidy_name(name), sorted({v for d in group for v in json.loads(d['emails'])})),
+                                   sorted({v for d in group for v in json.loads(d['emails'])}))
         # Stabiele ID op de vroegst aanwezige bestandsfingerprint (per volledige exportsnapshot).
         known = collections.Counter(id_map[d['sha']] for d in group if d['sha'] in id_map)
         known_ids = [i for i, _n in sorted(known.items(), key=lambda kv: (-kv[1], kv[0])) if i not in used_ids]
@@ -3039,6 +3100,11 @@ def deduplicate(db, merge_file=None):
            cv_jaar=first['year'], aantal_cv_versies=distinct_shas,
            aantal_bestandslocaties=len(group), eerste_bron='CV', cv_id=cv_id_of(first['sha']), cv_sha=first['sha'],
            cv_pad=first['path'], cv_archief=first['archive'])
+        # E-mail: liefst het adres dat bij de naam past (niet dat van een referentie of leidinggevende).
+        if candidate['email'] and email_owner_mismatch(name, candidate['email']):
+            fitting = [e for e in all_emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
+            if fitting:
+                candidate['email'] = fitting[0]
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
     # Een e-mail of nummer dat in de cv's van 3+ verschillende personen staat, is van een bureau of bedrijf
@@ -3377,6 +3443,8 @@ def personen_overzicht(people):
                 n = p[field + '_bureau']
                 return p[field], (f'cv – bureau/bedrijf (staat bij {n} kandidaten)' if n >= 3
                                   else 'cv – algemeen adres (info@ e.d.)')
+            if p.get(field) and field == 'email' and email_owner_mismatch(p.get('naam', ''), p[field]):
+                return p[field], 'cv – let op: e-mail lijkt van iemand anders'
             if p.get(field):
                 return p[field], 'cv'
             if p.get('online_' + field):
@@ -3993,7 +4061,7 @@ def _cv_words(db, person):
     return words - set(_name_words(person['naam'])) - GENERIC_EVIDENCE
 
 
-NL_PLACES = {'amsterdam','rotterdam','den haag','utrecht','eindhoven','groningen','tilburg','almere','breda',
+NL_PLACES = {'hendrik ido ambacht','capelle aan den ijssel','alphen aan den rijn','bergen op zoom','krimpen aan den ijssel','nieuwerkerk aan den ijssel','berkel en rodenrijs','wijk bij duurstede','ouder amstel','amsterdam','rotterdam','den haag','utrecht','eindhoven','groningen','tilburg','almere','breda',
     'nijmegen','apeldoorn','haarlem','arnhem','enschede','amersfoort','zaanstad','zaandam','hoofddorp','heemstede',
     'haarlemmermeer','zoetermeer','zwolle','leiden','maastricht','dordrecht','ede','delft','alkmaar','emmen','venlo',
     'deventer','helmond','hilversum','heerlen','oss','leeuwarden','purmerend','schiedam','vlaardingen','almelo',
