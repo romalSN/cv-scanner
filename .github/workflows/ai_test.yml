@@ -37,4 +37,4 @@ jobs:
           curl -sL --fail -o model.gguf "${{ matrix.url }}"
           echo "::notice::${{ matrix.naam }}: $(du -h model.gguf | cut -f1)"
       - name: Beoordelen
-        run: python ai_test/evalueer.py model.gguf "${{ matrix.naam }}"
+        run: python ai_test/evalueer.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -40

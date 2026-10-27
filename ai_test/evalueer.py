@@ -1,57 +1,83 @@
-"""Laat een lokale AI (llama.cpp) testgevallen beoordelen: is dit LinkedIn-profiel dezelfde persoon als het cv?"""
-import json, sys, time
+"""Laat een lokale AI (llama.cpp) testgevallen beoordelen: is dit LinkedIn-profiel dezelfde persoon als het cv?
+Twee uitslagen: 'AI alleen' en 'AI + controle' (de scanner controleert of het genoemde bewijs echt in beide teksten staat)."""
+import json, re, sys, time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import cv_crawler as c  # noqa: E402
 
 model, naam = sys.argv[1], sys.argv[2]
 gevallen = json.loads((Path(__file__).parent / 'gevallen.json').read_text(encoding='utf-8'))
-from llama_cpp import Llama
+from llama_cpp import Llama  # noqa: E402
 t0 = time.time()
 llm = Llama(model_path=model, n_ctx=4096, n_threads=4, verbose=False)
 laden = time.time() - t0
 
-SYSTEEM = (
+INSTRUCTIE = (
     "Je bent een zorgvuldige recruiter. Je krijgt een cv en een kort stukje tekst van een LinkedIn-profiel met "
     "dezelfde naam. Beslis of het profiel van DEZELFDE persoon is.\n"
-    "Regels:\n"
-    "- Dezelfde naam alleen is GEEN bewijs.\n"
-    "- 'ja' alleen als een concreet, specifiek gegeven overeenkomt: dezelfde werkgever, dezelfde school of hetzelfde "
-    "specifieke beroep in dezelfde plaats.\n"
-    "- 'nee' als het profiel duidelijk iemand anders is: ander beroep, andere werkgevers, ander land, andere opleiding.\n"
-    "- 'onzeker' als het profiel te weinig informatie geeft om het te weten (alleen plaats, alleen een algemene "
-    "functie, of bijna geen tekst).\n"
-    "Twijfel je, kies dan 'onzeker'. Een fout 'ja' is veel erger dan 'onzeker'.")
+    "Werkwijze:\n"
+    "1. 'overeenkomsten': noem alleen concrete, specifieke dingen die LETTERLIJK in allebei staan: naam van een "
+    "werkgever/bedrijf of naam van een school/universiteit. Geen plaatsnamen, geen algemene functies, niet de naam.\n"
+    "2. 'verschillen': dingen die elkaar tegenspreken (ander beroep, andere werkgevers, ander land, andere opleiding).\n"
+    "3. 'oordeel': 'ja' alleen als er minstens één overeenkomst is en geen duidelijk verschil; 'nee' als er duidelijke "
+    "verschillen zijn; anders 'onzeker'. Een fout 'ja' is veel erger dan 'onzeker'.")
 SCHEMA = {"type": "object", "properties": {
-    "oordeel": {"type": "string", "enum": ["ja", "nee", "onzeker"]},
-    "reden": {"type": "string"}}, "required": ["oordeel", "reden"]}
+    "overeenkomsten": {"type": "array", "items": {"type": "string"}},
+    "verschillen": {"type": "array", "items": {"type": "string"}},
+    "oordeel": {"type": "string", "enum": ["ja", "nee", "onzeker"]}},
+    "required": ["overeenkomsten", "verschillen", "oordeel"]}
 
-uitslag = {'goed': 0, 'gemist': 0, 'GEVAARLIJK': 0}
-tijden = []
+
+def echt_bewijs(items, cv, profiel):
+    """Alleen overeenkomsten die echt in cv EN profiel staan, en meer zijn dan een plaats of algemene functie."""
+    ok = []
+    ncv, npr = c.normalized_name(cv), c.normalized_name(profiel)
+    for it in items:
+        t = c.normalized_name(re.sub(r'(?i)^(werkgever|bedrijf|school|universiteit|opleiding|employer|company)\s*[:\-]?\s*', '', it))
+        if not t or t not in ncv or t not in npr:
+            continue
+        if not (c.evidence_term_ok('werkgever', t) or c.evidence_term_ok('school', t)):
+            continue
+        ok.append(t)
+    return ok
+
+
+def score(waar, oordeel):
+    if oordeel == 'ja' and waar != 'ja':
+        return 'GEVAARLIJK'
+    if (waar == 'ja' and oordeel == 'ja') or (waar == 'nee' and oordeel == 'nee') or \
+            (waar == 'onzeker' and oordeel in ('onzeker', 'nee')):
+        return 'goed'
+    return 'gemist'
+
+
+uit = {'ai': {'goed': [], 'gemist': [], 'GEVAARLIJK': []}, 'samen': {'goed': [], 'gemist': [], 'GEVAARLIJK': []}}
+tijden, fouten = [], 0
 for g in gevallen:
-    body = {"messages": [{"role": "system", "content": SYSTEEM},
-                         {"role": "user", "content": f"CV:\n{g['cv']}\n\nLINKEDIN-PROFIEL:\n{g['profiel']}\n\n"
-                                                      "Geef je oordeel als JSON met 'oordeel' en een korte 'reden'."}],
-            "temperature": 0, "max_tokens": 120,
-            "response_format": {"type": "json_object", "schema": SCHEMA}}
+    vraag = (INSTRUCTIE + f"\n\nCV:\n{g['cv']}\n\nLINKEDIN-PROFIEL:\n{g['profiel']}\n\n"
+             "Antwoord alleen met JSON: overeenkomsten, verschillen, oordeel.")
     t = time.time()
     try:
-        out = llm.create_chat_completion(messages=body['messages'], temperature=0, max_tokens=120,
+        out = llm.create_chat_completion(messages=[{"role": "user", "content": vraag}], temperature=0, max_tokens=200,
                                          response_format={"type": "json_object", "schema": SCHEMA})
-        antwoord = json.loads(out['choices'][0]['message']['content'])
-        oordeel, reden = antwoord.get('oordeel', '?'), antwoord.get('reden', '')
+        a = json.loads(out['choices'][0]['message']['content'])
+        oordeel = a.get('oordeel', '?')
+        bewijs = echt_bewijs(a.get('overeenkomsten') or [], g['cv'], g['profiel'])
+        samen = oordeel if oordeel != 'ja' else ('ja' if bewijs and not a.get('verschillen') else 'onzeker')
     except Exception as exc:
-        oordeel, reden = 'fout', str(exc)[:80]
+        oordeel = samen = 'fout'
+        a, bewijs = {'fout': str(exc)[:100]}, []
+        fouten += 1
     tijden.append(time.time() - t)
-    waar = g['waar']
-    if oordeel == 'ja' and waar != 'ja':
-        u = 'GEVAARLIJK'
-    elif (waar == 'ja' and oordeel == 'ja') or (waar == 'nee' and oordeel == 'nee') or \
-         (waar == 'onzeker' and oordeel in ('onzeker', 'nee')):
-        u = 'goed'
-    else:
-        u = 'gemist'
-    uitslag[u] += 1
-    print(f"{naam} geval {g['id']:2d} waar={waar:8s} ai={oordeel:8s} {u:10s} {tijden[-1]:5.1f}s  {reden[:110]}")
+    uit['ai'][score(g['waar'], oordeel)].append(g['id'])
+    uit['samen'][score(g['waar'], samen)].append(g['id'])
+    print(f"{naam} {g['id']:2d} waar={g['waar']:8s} ai={oordeel:8s} samen={samen:8s} {tijden[-1]:5.1f}s "
+          f"bewijs={bewijs} {json.dumps(a, ensure_ascii=False)[:200]}")
 gem = sum(tijden) / len(tijden)
-regel = (f"{naam}: {uitslag['goed']}/{len(gevallen)} goed, {uitslag['GEVAARLIJK']} fout-ja (gevaarlijk), "
-         f"{uitslag['gemist']} gemist/onzeker. Gem. {gem:.1f}s per geval op GitHub-Linux (CPU, 4 kernen), laden {laden:.0f}s")
-print('::notice::' + regel)
+n = len(gevallen)
+for k, label in (('ai', 'AI alleen'), ('samen', 'AI + controle')):
+    u = uit[k]
+    print(f"::notice::{naam} | {label}: {len(u['goed'])}/{n} goed, fout-ja {len(u['GEVAARLIJK'])} {u['GEVAARLIJK']}, "
+          f"gemist {len(u['gemist'])} {u['gemist']}")
+print(f"::notice::{naam} | {gem:.1f}s per geval (GitHub-Linux CPU), laden {laden:.0f}s, crashes {fouten}")
