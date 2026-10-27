@@ -247,6 +247,11 @@ for tekst, goed in [("Naam Belonje\nVoornamen Johannes Pieter\nRoepnaam Hans", '
                     ("Achternaam: de Kleijn\nVoornaam: Sanne", 'Sanne de Kleijn')]:
     check(f'naamvelden -> {goed}', c.guess_name(tekst, 'document', []) == goed, c.guess_name(tekst, 'document', []))
 
+check('voorletters + e-mail -> voornaam', c.name_with_email('Ncp Kramer', ['niels_kramer@hotmail.com']) == 'Niels Kramer')
+check('andere voornaam niet vervangen', c.name_with_email('Bas Kramer', ['niels_kramer@hotmail.com']) == 'Bas Kramer')
+check('cijfers + linkedin aan e-mail geplakt', c.emails_in('41844178nathanmiddelham@gmail.comlinkedin.com') == ['nathanmiddelham@gmail.com'])
+check('"Nationality Dutch" is geen naam', c.clean_person_name('Nationality Dutch') == '')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

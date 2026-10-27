@@ -351,8 +351,33 @@ def clean_person_name(name):
     return s if reasonable_name(s) else ''
 
 
+def name_with_email(name, emails):
+    """Voorletters vervangen door de voornaam uit het eigen e-mailadres:
+    'Ncp Kramer' / 'N.C.P. Kramer' + niels_kramer@… -> 'Niels Kramer'. Alleen als de achternaam
+    ook in het adres staat en de voornaam met dezelfde letter begint."""
+    words = (name or '').split()
+    if len(words) < 2:
+        return name
+    first = words[0]
+    letters = re.sub(r'[^A-Za-z]', '', first)
+    initials = bool(re.fullmatch(r'(?:[A-Z]\.){1,4}', first)) or (
+        2 <= len(letters) <= 4 and not re.search(r'[aeiouy]', letters.lower()))
+    if not initials:
+        return name
+    surname = normalized_name(words[-1])
+    for e in emails or []:
+        if GENERIC_EMAIL.match(e):
+            continue
+        parts = [x for x in re.split(r'[._\-]+', e.split('@')[0].lower()) if x.isalpha()]
+        if surname in parts:
+            given = [x for x in parts if x != surname and len(x) >= 3 and x[0] == letters[0].lower()]
+            if given:
+                return ' '.join([given[0].capitalize()] + words[1:])
+    return name
+
+
 def guess_name(text, filename, emails, links=()):
-    return tidy_name(clean_person_name(_guess_name(text, filename, emails, links)))
+    return name_with_email(tidy_name(clean_person_name(_guess_name(text, filename, emails, links))), emails)
 
 
 def _guess_name(text, filename, emails, links=()):
@@ -390,11 +415,11 @@ def _guess_name(text, filename, emails, links=()):
 def _fix_email(e):
     """'1330info@bedrijf.comwww.bedrijf.com' (aan elkaar geplakt in een pdf) -> 'info@bedrijf.com'."""
     e = e.strip('.,:;').lower()
-    e = re.sub(r'(\.(?:com|nl|org|net|eu|be|de|io|info|biz|uk|nu|me))(?:www\.|https?).*$', r'\1', e)
+    e = re.sub(r'(\.(?:com|nl|org|net|eu|be|de|io|info|biz|uk|nu|me))(?:www\.|https?|linkedin|tel|mob|phone|\d).*$', r'\1', e)
     local, _, dom = e.partition('@')
     stripped = re.sub(r'^\d{3,}', '', local)
-    if stripped != local and GENERIC_EMAIL.match(stripped + '@'):
-        e = stripped + '@' + dom          # postcode/huisnummer ervoor geplakt
+    if stripped != local and (GENERIC_EMAIL.match(stripped + '@') or (re.match(r'^\d{5,}', local) and len(stripped) >= 3)):
+        e = stripped + '@' + dom          # postcode/huisnummer/telefoon ervoor geplakt
     return e
 
 
@@ -2986,6 +3011,7 @@ def deduplicate(db, merge_file=None):
         names.sort(key=lambda n: (bool(clean_person_name(n)), counts[normalized_name(n)], len(n.split()), len(n)),
                    reverse=True)
         name = names[0] if names else ''
+        name = name_with_email(name, sorted({v for d in group for v in json.loads(d['emails'])}))
         # Stabiele ID op de vroegst aanwezige bestandsfingerprint (per volledige exportsnapshot).
         known = collections.Counter(id_map[d['sha']] for d in group if d['sha'] in id_map)
         known_ids = [i for i, _n in sorted(known.items(), key=lambda kv: (-kv[1], kv[0])) if i not in used_ids]
