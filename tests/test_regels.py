@@ -790,6 +790,20 @@ for _k, (_waar, _soort, _ta, _tb) in enumerate(_paren(400, seed=11)):
 check('dubbel-set 400 paren: 0 verschillende personen samengevoegd', not _fout, _fout)
 check(f'dubbel-set 400 paren: minstens 90% echte dubbelen samen ({_samen}/{_zelfde})', _samen >= .9 * _zelfde, (_samen, _zelfde))
 
+# --- Meerdere voornamen: naam opnieuw controleren + cv vergelijken ---
+_bw1 = 'Curriculum Vitae\nBotwin Wytze Sijtsma\nbotwin.sijtsma@gmail.com\n06 38189335\nWerkervaring\n2019 - heden Developer bij Codewerk. Bouwt systemen.\n2015 - 2019 Tester bij Datafabriek. Testen.'
+_bw2 = 'Curriculum Vitae\nBotwin Sijtsma\nbotwin.sijtsma@gmail.com\n06 38189335\nWerkervaring\n2015 - 2019 Tester bij Datafabriek. Testen.'
+_x1, _x2 = _doc_t(_bw1, 9001), _doc_t(_bw2, 9002)
+_x1['name'] = 'Botwin Wytze'
+_r = c.safe_pair(_x1, _x2)
+check('meerdere voornamen: Botwin Wytze + Botwin Sijtsma, volledige naam in cv + zelfde loopbaan = samen', _r[0] and 'Botwin Wytze Sijtsma' in _r[2], _r)
+_x3 = _doc_t(_bw1.replace('Botwin Wytze Sijtsma', 'Botwin Wytze'), 9003)
+_r = c.safe_pair(_x3, _x2)
+check('meerdere voornamen: volledige naam staat nergens = twijfelgeval (niet samen)', not _r[0] and _r[1], _r)
+_x4 = _doc_t(_bw1.replace('Codewerk', 'Bitbouw').replace('Datafabriek', 'Havenbouw'), 9004); _x4['name'] = 'Botwin Wytze'
+_r = c.safe_pair(_x4, _x2)
+check('meerdere voornamen: naam past maar loopbaan niet = niet samen', not _r[0], _r)
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

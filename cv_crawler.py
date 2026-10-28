@@ -523,8 +523,38 @@ def naam_botst_met_bestand(name, path_or_stem, snippet):
     return fn if a and b and not (a & b) else ''
 
 
+def naam_aanvullen(name, emails, snippet):
+    """Achternaam opnieuw controleren: 'Botwin Wytze' met botwin.sijtsma@… en in het cv 'Botwin Wytze Sijtsma'
+    -> 'Botwin Wytze Sijtsma'. Alleen als de achternaam uit het EIGEN mailadres in het cv direct na de naam staat
+    (de scanner had dan een tweede voornaam als achternaam gelezen). Anders blijft de naam zoals hij was."""
+    words = normalized_name(name).split()
+    if len(words) < 2 or not snippet:
+        return name
+    tekst = ' ' + snippet + ' '
+    for e in emails or []:
+        if GENERIC_EMAIL.match(e) or e.split('@')[-1].lower() not in PRIVE_MAILDOMEINEN:
+            continue
+        delen = [x for x in re.split(r'[._\-0-9]+', e.split('@')[0].lower()) if len(x) >= 3]
+        if len(delen) < 2 or delen[0] != words[0] or delen[-1] in words:
+            continue
+        achter = delen[-1]
+        # Staat 'voornaam … achternaam' (max. 2 woorden ertussen, zoals tussenvoegsels) letterlijk in het cv?
+        toks = tekst.split()
+        n = len(words)
+        for i in range(len(toks) - n):
+            if toks[i:i + n] != words:
+                continue
+            # Direct erna: tussenvoegsels + achternaam ('de vries' = devries in het mailadres).
+            for k in range(1, 5):
+                stuk = toks[i + n:i + n + k]
+                if len(stuk) == k and ''.join(stuk) == achter and all(x in NAME_FILLERS for x in stuk[:-1]):
+                    return tidy_name(name + ' ' + ' '.join(x if x in NAME_FILLERS else x.title() for x in stuk))
+    return name
+
+
 def guess_name(text, filename, emails, links=()):
     name = name_with_email(tidy_name(clean_person_name(_guess_name(text, filename, emails, links))), emails)
+    name = naam_aanvullen(name, emails, normalized_snippet(text))
     beter = naam_botst_met_bestand(name, filename, normalized_snippet(text))
     if beter and not any(email_matches_name(name, e) for e in emails if not GENERIC_EMAIL.match(e)):
         return beter          # bureau-cv: bovenaan staat de recruiter, de kandidaat staat in de bestandsnaam
@@ -2936,6 +2966,28 @@ def _voornaam_botst(an, bn):
     return True
 
 
+def naam_verzoenen(naam_a, naam_b, teksten):
+    """'Botwin Wytze' en 'Botwin Sijtsma': staat ergens in de cv's 'Botwin Wytze Sijtsma'? Dan is het één persoon met
+    meerdere voornamen en geeft dit de volledige naam terug. Anders ''. Alleen bij dezelfde eerste voornaam."""
+    a = [w for w in normalized_name(naam_a).split()]
+    b = [w for w in normalized_name(naam_b).split()]
+    if not a or not b or a[0] != b[0]:
+        return ''
+    nodig = {w for w in a + b if w not in NAME_FILLERS}
+    for t in teksten:
+        t = ' ' + (t or '')[:5000] + ' '
+        for m in re.finditer(r' ' + re.escape(a[0]) + r'((?: [a-z]+){1,5}) ', t):
+            reeks = [a[0]] + m.group(1).split()
+            # kortste stuk vanaf de voornaam dat alle naamwoorden bevat
+            for n in range(2, len(reeks) + 1):
+                deel = reeks[:n]
+                if len(set(deel)) < len(deel):
+                    break                     # 'botwin wytze botwin sijtsma' = twee namen achter elkaar, niet één
+                if nodig <= set(deel) and all(w in nodig or w in NAME_FILLERS for w in deel):
+                    return tidy_name(' '.join(w if w in NAME_FILLERS else w.capitalize() for w in deel))
+    return ''
+
+
 def harde_blokkade(a, b):
     """Redenen waarom twee cv's NOOIT dezelfde persoon kunnen zijn (ook niet als de AI 'zelfde' zegt)."""
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
@@ -2977,7 +3029,13 @@ def safe_pair(a, b):
     blok = harde_blokkade(a, b)
     if blok:
         if blok == 'andere achternaam' and ((ae & be) or (ap & bp) or (al & bl)):
-            # Bv. 'Botwin Wytze' / 'Botwin Sijtsma' met hetzelfde mailadres: niet automatisch, wel laten zien.
+            # Bv. 'Botwin Wytze' / 'Botwin Sijtsma' met hetzelfde mailadres. Naam opnieuw controleren: staat
+            # 'Botwin Wytze Sijtsma' in een van de cv's (meerdere voornamen)? En klopt het cv ook (zelfde werkgever met
+            # dezelfde jaren of zelfde opleiding, geen botsende loopbaan)? Pas dan samen; anders twijfelgeval.
+            volledig = naam_verzoenen(a['name'], b['name'], [a['snippet'], b['snippet']])
+            if volledig and (ae & be) and (ap & bp) and not loopbaan_botst(a, b) and (
+                    zelfde_werk(a, b) or any(x == 'zelfde opleiding' for x in _bewijs_stukken(a, b))):
+                return True, False, f'zelfde persoon met meerdere voornamen ({volledig}); zelfde mail, telefoon en loopbaan'
             return False, True, 'zelfde contactgegevens, maar andere achternaam'
         return False, False, ''
     # Eén cv zonder bruikbare naam ('Persoonlijke Gegevens'), het andere met naam: samen als e-mail ÉN telefoon
@@ -4058,6 +4116,14 @@ def deduplicate(db, merge_file=None):
     # Bureau-cv's: bovenaan staat de recruiter ('Elmer van den Heuvel'), de kandidaat staat in de bestandsnaam
     # ('denBulck Tom HQ… .txt') én in het cv. Dan geldt de naam uit de bestandsnaam (ook voor al gelezen cv's).
     for r in db.execute("SELECT path, name, snippet, emails FROM docs WHERE status IN ('cv','review') AND name!=''").fetchall():
+        try:
+            _em = json.loads(r['emails'] or '[]')
+        except ValueError:
+            _em = []
+        aangevuld = naam_aanvullen(r['name'], _em, r['snippet'])
+        if aangevuld != r['name']:
+            db.execute("UPDATE docs SET name=? WHERE path=?", (aangevuld, r['path']))
+            continue
         beter = naam_botst_met_bestand(r['name'], r['path'], r['snippet'])
         if beter:
             try:
@@ -4187,6 +4253,11 @@ def deduplicate(db, merge_file=None):
         all_links = sorted(set(v for d in group for v in json.loads(d['links'])))
         # Naam die in de meeste versies staat (opgeschoond); bij gelijkspel de vollere naam.
         names = [tidy_name(clean_person_name(d['name']) or d['name']) for d in group if d['name']]
+        uniek = sorted({n for n in names}, key=len)
+        if len(uniek) >= 2:
+            volledig = naam_verzoenen(uniek[0], uniek[-1], [d['snippet'] for d in group])
+            if volledig and normalized_name(volledig) not in {normalized_name(n) for n in names}:
+                names.append(volledig); names.append(volledig)     # volledige naam (meerdere voornamen) wint
         counts = collections.Counter(normalized_name(n) for n in names)
         names.sort(key=lambda n: (bool(clean_person_name(n)), counts[normalized_name(n)], len(n.split()), len(n)),
                    reverse=True)
