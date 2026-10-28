@@ -493,7 +493,11 @@ def norm_phone(raw):
     if d.startswith('00'):
         d = d[2:]
     if raw.strip().startswith('+') or re.sub(r'\D','',raw).startswith('00'):
-        if not 9 <= len(d) <= 15:
+        if d.startswith('310') and len(d) == 12:
+            d = '31' + d[3:]            # '+31 06 12345678' -> '+31 6 12345678'
+        if d.startswith('31') and len(d) != 11:
+            return ''                   # Nederlands nummer heeft altijd 9 cijfers na +31
+        if not 10 <= len(d) <= 15:
             return ''
         return '+' + d
     if not (10 <= len(d) <= 13):
@@ -3062,8 +3066,8 @@ def deduplicate(db, merge_file=None):
         return max(d['mtime_ns'] or 0, rec)
     for group in sorted(groups.values(), key=lambda g: min(d['sha'] for d in g)):
         recent = sorted(group, key=lambda d:(newest(d), d['year'] or ''), reverse=True)
-        all_emails = sorted(set(v for d in group for v in json.loads(d['emails'])))
-        all_phones = sorted(set(v for d in group for v in json.loads(d['phones'])))
+        all_emails = sorted(set(_fix_email(v) for d in group for v in json.loads(d['emails'])))
+        all_phones = sorted(set(filter(None, (norm_phone(v) for d in group for v in json.loads(d['phones'])))))
         all_links = sorted(set(v for d in group for v in json.loads(d['links'])))
         # Naam die in de meeste versies staat (opgeschoond); bij gelijkspel de vollere naam.
         names = [tidy_name(clean_person_name(d['name']) or d['name']) for d in group if d['name']]
@@ -3089,6 +3093,10 @@ def deduplicate(db, merge_file=None):
         def latest(field):
             for item in recent:
                 values = json.loads(item[field])
+                if field == 'phones':
+                    values = [x for x in (norm_phone(v) for v in values) if x]   # oude opgeslagen nummers ook controleren
+                elif field == 'emails':
+                    values = [_fix_email(v) for v in values]
                 if values:
                     return values[0]
             return ''

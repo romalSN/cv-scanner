@@ -283,6 +283,9 @@ b, x = online('Ruben Hofstede', 'Software ontwikkelaar bij Topicus Deventer', 'T
 check('AI onzeker + specifieke werkgever + plaats = zeker (regels)', b.get('zekerheid') == 'waarschijnlijk', b)
 ai_rechter.available, ai_rechter.judge = _orig
 
+for ruw, goed in [('+31 06 55857419', '+31655857419'), ('+31 6 1853 358', ''), ('+27 1172624', ''), ('+44 7700 900123', '+447700900123')]:
+    check(f'telefoon {ruw} -> {goed or "afgekeurd"}', c.norm_phone(ruw) == goed, c.norm_phone(ruw))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
