@@ -701,6 +701,30 @@ def cv_taal(text):
     return best if tel[best] >= 8 and tel[best] > rest else ''
 
 
+BUITENLAND_IGNORE = {'nederland', 'netherlands', 'holland', 'the netherlands', 'remote', 'worldwide', 'emea',
+                     'benelux', 'europe', 'europa', 'us'}
+
+
+def woonland(snippet, phones):
+    """Waar woont de kandidaat? 'nl', ('buitenland', 'India') of '' (onduidelijk).
+    Kijkt alleen naar de kop/contactgegevens (begin van het cv) en de telefoonnummers. Nederlands kenmerk wint
+    altijd: wie in Nederland woont maar vroeger in India werkte, blijft gewoon kandidaat."""
+    head = ' ' + normalized_name((snippet or '')[:450]) + ' '
+    nl_phone = any(str(p).startswith('+31') for p in phones or [])
+    nl_post = re.search(r'(?<![a-z0-9])[1-9]\d{3} ?[a-z]{2}(?![a-z0-9])', head) is not None
+    nl_place = any(f' {pl} ' in head for pl in NL_PLACES)
+    if nl_phone or (nl_post and nl_place) or nl_place and (' nederland ' in head or ' netherlands ' in head):
+        return 'nl', ''
+    foreign_phone = [p for p in phones or [] if str(p).startswith('+') and not str(p).startswith('+31')]
+    foreign_place = next((pl for pl in sorted(FOREIGN_PLACES, key=len, reverse=True)
+                          if pl not in BUITENLAND_IGNORE and f' {pl} ' in head), '')
+    if nl_place or nl_post:
+        return 'nl', ''
+    if foreign_phone or foreign_place:
+        return 'buitenland', (foreign_place.title() if foreign_place else 'telefoon ' + foreign_phone[0][:4])
+    return '', ''
+
+
 def woonplaats_from(text):
     """Woonplaats = plaats in de kop of op een contactregel (naast adres, postcode, mail of telefoon).
     Een plaats bij een baan of stage ('Projectmanager, Den Haag') is de WERKplek, niet de woonplaats."""
@@ -3228,6 +3252,14 @@ def deduplicate(db, merge_file=None):
             fitting = [e for e in all_emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
             if fitting:
                 candidate['email'] = fitting[0]
+        # Niet voor Loxo: Spaanstalig cv of woont niet in Nederland (opdrachtgevers willen kandidaten die hier wonen).
+        why = []
+        if cv_taal(first['snippet'] or '') == 'es':
+            why.append('Spaanstalig cv')
+        land, waar = woonland(first['snippet'] or '', all_phones)
+        if land == 'buitenland':
+            why.append(f'woont buiten Nederland ({waar})')
+        candidate['niet_voor_loxo'] = '; '.join(why)
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
     # Een e-mail of nummer dat in de cv's van 3+ verschillende personen staat, is van een bureau of bedrijf
@@ -3765,8 +3797,16 @@ def build_exports(db, out):
     checks = build_checks(reviews, people, doubt, legacy_count, unread_count, len(scanned))
     ccols = ['soort','advies','naam_1','naam_2','zelfde','verschillend','persoon_id_1','persoon_id_2',
              'bestand_1','bestand_2','aantal_bestanden','toelichting']
-    view, vcols = personen_overzicht(people)
+    view_all, vcols = personen_overzicht(people)
+    weg = {p['persoon_id']: p['niet_voor_loxo'] for p in people if p.get('niet_voor_loxo')}
+    view = [r for r in view_all if r.get('persoon_id') not in weg]
+    apart = [dict(r, reden_niet_voor_loxo=weg[r['persoon_id']]) for r in view_all if r.get('persoon_id') in weg]
+    acols = ['reden_niet_voor_loxo'] + vcols
     save_csv(out/'unieke_personen.csv',view,vcols)
+    save_csv(out/'niet_voor_loxo.csv',apart,acols)
+    if apart:
+        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv of woont buiten Nederland); '
+              'zie tabblad ‘Niet voor Loxo’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
     error_cols = ['categorie','bestand','extensie','status','omschrijving']
@@ -3811,7 +3851,7 @@ def build_exports(db, out):
                 new_cols.insert(new_cols.index('cv_id') + 1, 'open_cv')
             return new_cols, new_rows
         xlsx_export(temporary, [
-            ('Unieke personen',vcols,view),('Bestanden en status',*as_kid(fcols,files))])
+            ('Unieke personen',vcols,view),('Niet voor Loxo',acols,apart),('Bestanden en status',*as_kid(fcols,files))])
         # Controle nodig, leesfouten en online-details staan alleen nog in de CSV-bestanden in de exportmap.
         with zipfile.ZipFile(temporary) as z:
             if z.testzip() is not None or 'xl/workbook.xml' not in z.namelist():
@@ -4460,7 +4500,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     google_used = 0
     google_via = {}
     tavily_out = False          # Tavily-tegoed op: verder via Google (Serper/SerpApi)
-    todo = [p for p in people if p['naam'] and not p.get('naam_is_bedrijf') and not all(p[k] for k in ('email','telefoon','linkedin'))]
+    todo = [p for p in people if p['naam'] and not p.get('naam_is_bedrijf') and not p.get('niet_voor_loxo') and not all(p[k] for k in ('email','telefoon','linkedin'))]
     name_count = collections.Counter(normalized_name(p['naam']) for p in people if p['naam'])
     print(f'ONLINE: {len(todo)} van {len(people)} personen missen LinkedIn, e-mail of telefoon.', flush=True)
     for person in todo:

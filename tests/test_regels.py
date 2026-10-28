@@ -385,6 +385,10 @@ check('taal: Spaans cv = es', c.cv_taal(_es) == 'es', c.cv_taal(_es))
 check('taal: Nederlands cv met Spaanse universiteit = nl', c.cv_taal(_nl) == 'nl', c.cv_taal(_nl))
 check('taal: werkt ook op opgeslagen tekst (zonder accenten)', c.cv_taal(c.normalized_snippet(_es)) == 'es')
 
+check('woont in India (+91) = buitenland', c.woonland(c.normalized_snippet("Rahul\nBangalore, India\n+91 98450 12345"), ['+919845012345'])[0] == 'buitenland')
+check('Indiase naam, woont in Amsterdam = nl', c.woonland(c.normalized_snippet("Arjun Mehta\nAmsterdam\n06-00000601\n2014 - 2019 Infosys, Pune, India"), ['+31600000601'])[0] == 'nl')
+check('geen adres of nummer = onduidelijk (blijft erin)', c.woonland(c.normalized_snippet("Kees Mol\nkees@x.nl\nWerkervaring"), [])[0] == '')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
