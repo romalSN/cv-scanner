@@ -4084,6 +4084,23 @@ def _cv_snippets(db, person):
     return out
 
 
+def _ai_cv_text(db, person):
+    """Korte, leesbare samenvatting van het cv voor de AI-controle (blijft op de computer)."""
+    lines = [person.get('naam', '')]
+    for label, key in (('Functie', 'huidige_functie'), ('Werkgever', 'laatst_bekende_werkgever'), ('Woonplaats', 'woonplaats')):
+        if person.get(key):
+            lines.append(f'{label}: {person[key]}')
+    for label, col in (('Werkgevers', 'werkgevers'), ('Opleidingen', 'opleidingen'), ('Stages', 'stage'),
+                       ('Werkplaatsen', 'werkplaatsen')):
+        val = _cv_field(db, person, col) if db is not None else ''
+        if val:
+            lines.append(f'{label}: {val}')
+    snip = (_cv_snippets(db, person) or [''])[0]
+    if snip:
+        lines.append('Tekst uit het cv: ' + snip[:1500])
+    return '\n'.join(l for l in lines if l)
+
+
 def _edits(a, b, limit):
     """Damerau-Levenshtein-afstand (omgedraaide letters = 1 fout), stopt boven limit."""
     if abs(len(a) - len(b)) > limit:
@@ -4602,6 +4619,8 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         found += [('telefoon', t) for t in phones_in(title + '\n' + content)]
                 for typ, value in found:
                     info = candidates.setdefault((typ, value), dict(match=set(), hits=set(), url=url, title=title[:150], query=query))
+                    if typ == 'linkedin' and len(info.get('tekst', '')) < 2500:
+                        info['tekst'] = (info.get('tekst', '') + '\n' + title + '\n' + content[:1500]).strip()
                     info['match'] |= set(match)
                     info['hits'] |= hits
                     if kind == 'linkedin' and typ in ('email', 'telefoon') and found[0][0] == 'linkedin':
@@ -4659,6 +4678,8 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                                                       title=(r.get('title') or '')[:150], query='Google: naam + bedrijf'))
                         slugs[linkedin_slug(links[0])] = info
                         li_opts.append((links[0], info))
+                    if len(info.get('tekst', '')) < 2500:
+                        info['tekst'] = (info.get('tekst', '') + '\n' + (r.get('title') or '') + '\n' + (r.get('content') or '')[:800]).strip()
                     txt = normalized_name((r.get('title') or '') + ' ' + (r.get('content') or ''))
                     if re.search(r'(?<![a-z])' + re.escape(phrase) + r'(?![a-z])', txt) or fuzzy_find(phrase, txt):
                         info['hits'].add((lbl, shown + ' (via Google)', 'sterk'))
@@ -4699,6 +4720,35 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         if re.search(r'(?<![a-z])' + re.escape(phrase) + r'(?![a-z])', hay) or \
                                 (lbl != 'woonplaats' and fuzzy_find(phrase, hay)):
                             info['hits'].add((lbl, shown + ' (via Google)', wgt))
+        # AI-controle (lokaal): bij elk gevonden LinkedIn-profiel waarop iets uit het cv klopt, vragen of het
+        # dezelfde persoon is. 'nee' = naamgenoot -> profiel valt af. 'ja'/'onzeker' tellen mee in de beslissing.
+        ai_rejected = []
+        if not have['linkedin'] and not confirmed_li:
+            try:
+                import ai_rechter
+                ai_on = ai_rechter.available()
+            except Exception:
+                ai_on = False
+            if ai_on:
+                cv_text = _ai_cv_text(db, person)
+                li_opts = sorted([(v, i) for (t, v), i in candidates.items() if t == 'linkedin' and i.get('hits')],
+                                 key=lambda o: -len(o[1]['hits']))[:4]
+                for value, info in li_opts:
+                    ak = f"ai|{ai_rechter.MODEL_ID}|{normalized_name(full)}|{linkedin_slug(value)}|" + \
+                         hashlib.sha1((cv_text + info.get('tekst', '')).encode('utf-8', 'replace')).hexdigest()[:12]
+                    res = cache.get(ak)
+                    if res is None:
+                        res = ai_rechter.judge(cv_text, info.get('tekst') or info.get('title', ''))
+                        if res is not None and not res.get('fout'):
+                            cache[ak] = res
+                    if not res:
+                        continue
+                    info['ai'] = res
+                    if res['oordeel'] == 'nee':
+                        ai_rejected.append((value, res))
+                        candidates.pop(('linkedin', value), None)
+                if ai_rejected:
+                    print(f'AI-CONTROLE: {full} – {len(ai_rejected)} naamgeno(o)t(en) afgewezen', flush=True)
         # Per type de beste kandidaat kiezen en eerlijk labelen.
         summary = []
         zeker_link = None
@@ -4817,6 +4867,17 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     sure = info['fixed']
                 elif typ != 'linkedin' and zeker_link and info.get('from_linkedin') == zeker_link:
                     sure = 'waarschijnlijk (Info-tekst LinkedIn)'   # staat op het profiel dat zeker klopt
+                elif typ == 'linkedin' and info.get('ai'):
+                    # Met AI-controle: 'ja' + echt bewijs = zeker. Bij een groot bedrijf/school moeten er 2 dingen
+                    # kloppen. 'onzeker': alleen zeker met een specifiek (sterk) bewijs volgens de regels.
+                    st, me, sm = weight(info)
+                    ai_o = info['ai']['oordeel']
+                    beats = len(options) == 1 or score_of(info) > score_of(options[1][1]) or \
+                        options[1][1].get('ai', {}).get('oordeel') != 'ja'
+                    ok = rank == 0 and beats and (
+                        (ai_o == 'ja' and (st >= 1 or me + sm >= 2)) or
+                        (ai_o == 'onzeker' and st >= 1 and ((sum(weight(info)) >= 2) or len(options) == 1)))
+                    sure = 'waarschijnlijk' if ok else 'controleren'
                 elif (typ == 'linkedin' and rank == 0
                       and ((weight(info)[0] >= 1 and sum(weight(info)) >= 2) or weight(info)[1] >= 3
                            or (weight(info)[1] >= 2 and weight(info)[2] >= 1)
@@ -4863,6 +4924,12 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                            if wgt != 'klein' and not any(x[0] == lbl and x[1].startswith(val) for x in h)]
                 if typ == 'linkedin' and not info.get('fixed'):
                     reden = ' | '.join(ticks) or 'geen kenmerken uit het cv gevonden'
+                    ai = info.get('ai')
+                    if ai and ai['oordeel'] == 'ja':
+                        reden += ' | ✓ AI-controle: zelfde persoon' + (f" ({'; '.join(ai['past'][:2])})" if ai['past'] else '')
+                    elif ai:
+                        reden += ' – AI-controle twijfelt' + (f": {'; '.join(ai['botst'][:2])}" if ai['botst'] else
+                                                              ' (te weinig informatie op het profiel)')
                 if namesake:
                     reden += ' – LET OP: er staan meerdere personen met deze naam in je cv-lijst'
                 elif len(options) > 1 and rank == 0:
@@ -4887,7 +4954,10 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
             # Wel gezocht, geen profiel met precies deze naam: vastleggen zodat de Excel dat zegt.
             collected.append(dict(persoon_id=person['persoon_id'], naam=full, type='linkedin', gevonden_waarde='',
                 zekerheid='niet gevonden',
-                overeenkomst=(f'{namesakes_only} profiel(en) met dezelfde naam gevonden, maar niets uit het cv klopt '
+                overeenkomst=(f'{len(ai_rejected)} profiel(en) met dezelfde naam gevonden, maar volgens de AI-controle '
+                              'een andere persoon: ' + '; '.join(b for _v, r in ai_rejected for b in r.get('botst', [])[:1])[:200])
+                             if ai_rejected else
+                             (f'{namesakes_only} profiel(en) met dezelfde naam gevonden, maar niets uit het cv klopt '
                               '(geen werkgever, school, functie of plaats)') if namesakes_only else
                              'geen LinkedIn-profiel met precies deze naam gevonden',
                 bron_url='', brontitel='', gevonden_op=dt.date.today().isoformat(), status='', zoekopdracht='',
@@ -4969,6 +5039,12 @@ def main(argv=None):
     except OSError:
         pass
     scan_error = None
+    if args.online and os.environ.get('TAVILY_API_KEY', '').strip():
+        try:
+            import ai_rechter
+            ai_rechter.start_download(log=lambda m: print(m, flush=True))
+        except Exception as exc:
+            print(f'AI-MODEL: niet beschikbaar ({type(exc).__name__}); verder zonder AI.', flush=True)
     try:
         if args.opschonen_plan or args.opschonen or args.terugzetten:
             if args.terugzetten:
@@ -5001,6 +5077,16 @@ def main(argv=None):
                 print('WAARSCHUWING: bijwerken mislukt:', type(exc).__name__, str(exc)[:300], flush=True)
         people = build_exports(db,out)
         if args.online:
+            try:
+                import ai_rechter
+                if ai_rechter._download_thread and ai_rechter._download_thread.is_alive():
+                    print('AI-MODEL: nog bezig met ophalen; maximaal 15 minuten wachten voor het online zoeken…', flush=True)
+                    if not ai_rechter.wait_download(15 * 60):
+                        print('AI-MODEL: nog niet klaar; online zoeken gaat nu zonder AI-controle.', flush=True)
+                print('AI-CONTROLE: ' + ('aan (lokaal, gratis, er gaat geen cv-tekst naar internet)' if ai_rechter.available()
+                                         else 'uit (model of onderdelen ontbreken); alleen de regels beslissen'), flush=True)
+            except Exception:
+                pass
             if online_suggestions(people,out,db=db,max_people=args.online_limit):
                 build_exports(db,out)   # Excel opnieuw, nu met de online-kolommen
     finally:

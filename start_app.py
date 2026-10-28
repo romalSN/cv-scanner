@@ -42,6 +42,10 @@ def run():
         except Exception as exc:
             print('SSL FOUT:', exc)
         sys.exit(0)
+    if '--ai-test' in sys.argv:           # alleen voor de bouwtest: werkt de lokale AI in de app?
+        _fix_streams()
+        import ai_rechter
+        sys.exit(ai_rechter.self_test(sys.argv[sys.argv.index('--ai-test') + 1]))
     if '--reader-worker' in sys.argv:
         sys.argv.remove('--reader-worker')
         _fix_streams()

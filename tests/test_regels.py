@@ -260,6 +260,29 @@ check('label aan e-mail geplakt', c.emails_in('haage-mailadresinfo@voorbeeld.com
 check('e-mail van iemand anders herkend', c.email_owner_mismatch('Dennis Kortekaas', 'bart.plasmeijer@voorbeeldmail.nl'))
 check('eigen e-mail niet gemarkeerd', not c.email_owner_mismatch('Artem Zaitsev', 'artem.zajtsev@voorbeeldmail.nl'))
 
+# --- AI-controle (nagebootst, zonder model): AI beslist nooit alleen ---
+import ai_rechter
+_orig = (ai_rechter.available, ai_rechter.judge)
+def _fake(oordeel):
+    ai_rechter.available = lambda: True
+    ai_rechter.judge = lambda cv, prof: {'oordeel': oordeel(prof), 'past': ['Coolblue'], 'botst': ['CEO vs teamleider'], 'sec': 0}
+_fake(lambda prof: 'nee' if 'CEO' in prof else 'ja')
+b, x = online('Bram Hoekstra', 'Teamleider klantenservice bij Coolblue', 'Coolblue', '',
+              [li('bramhoekstra', 'Bram Hoekstra - CEO at Coolblue', 'CEO at Coolblue since 1999')], functie='Teamleider klantenservice')
+check('AI: zelfde bedrijf maar CEO = afgewezen (niet zeker)', b.get('zekerheid') == 'niet gevonden' and 'AI-controle' in b.get('overeenkomst', ''), b)
+_fake(lambda prof: 'ja')
+b, x = online('Bram Hoekstra', 'Teamleider klantenservice bij Coolblue', 'Coolblue', '',
+              [li('bramhoekstra', 'Bram Hoekstra - Medewerker', 'Coolblue')], functie='Teamleider klantenservice')
+check('AI ja + alleen groot bedrijf (1 ding) = controleren', b.get('zekerheid') == 'controleren', b)
+b, x = online('Ruben Hofstede', 'Software ontwikkelaar bij Topicus Deventer', 'Topicus', 'deventer',
+              [li('rubenhofstede', 'Ruben Hofstede - Software Developer at Topicus', 'Software Developer at Topicus. Deventer')])
+check('AI ja + specifieke werkgever = zeker', b.get('zekerheid') == 'waarschijnlijk' and 'AI-controle' in x['gezocht_waarom'], (b, x['gezocht_waarom']))
+_fake(lambda prof: 'onzeker')
+b, x = online('Ruben Hofstede', 'Software ontwikkelaar bij Topicus Deventer', 'Topicus', 'deventer',
+              [li('rubenhofstede', 'Ruben Hofstede - Software Developer at Topicus', 'Software Developer at Topicus. Deventer')])
+check('AI onzeker + specifieke werkgever + plaats = zeker (regels)', b.get('zekerheid') == 'waarschijnlijk', b)
+ai_rechter.available, ai_rechter.judge = _orig
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
