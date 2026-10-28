@@ -1,0 +1,21 @@
+name: Bright Data live-test
+on:
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: 'aantal per batch'
+        default: '15'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 15 profielen ophalen (alleen tellingen in de log)
+        env:
+          BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
+          BD_TEST_URLS: ${{ secrets.BD_TEST_URLS }}
+          BD_BATCH: ${{ github.event.inputs.batch }}
+        run: python tests/bd_live.py
