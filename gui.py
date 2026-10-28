@@ -90,6 +90,19 @@ def load_key():
 
 SERPER_FILE = RUNTIME / 'serper_sleutel.txt'
 SERPAPI_FILE = RUNTIME / 'serpapi_sleutel.txt'
+BRIGHTDATA_FILE = RUNTIME / 'brightdata_sleutel.txt'
+
+
+def load_brightdata():
+    try:
+        return BRIGHTDATA_FILE.read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
+def heeft_zoeksleutel():
+    """Online zoeken kan met Bright Data, Serper, SerpApi of Tavily (minstens één)."""
+    return any(f() for f in (load_brightdata, load_serper, load_serpapi, load_key))
 
 
 def load_serpapi():
@@ -125,7 +138,7 @@ def save_key(key):
 
 
 SLEUTELBESTAND = 'cv-scanner-sleutels.txt'
-SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE}
+SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE, 'brightdata': BRIGHTDATA_FILE}
 
 
 def _sleutelbestand_plekken():
@@ -329,7 +342,7 @@ class ScannerApp:
         menubar = tk.Menu(self.root)
         settings = tk.Menu(menubar, tearoff=0)
         settings.add_command(label='Tavily-sleutel instellen…', command=self.set_key)
-        settings.add_command(label='Google-sleutels (Serper/SerpApi)…', command=self.set_serper)
+        settings.add_command(label='Zoeksleutels (Bright Data/Serper/SerpApi)…', command=self.set_serper)
         settings.add_separator()
         settings.add_command(label='Nu online aanvullen', command=self.online)
         settings.add_command(label='Online gevonden controleren…', command=self.open_online_check)
@@ -462,7 +475,7 @@ class ScannerApp:
         foot = tk.Frame(outer, bg=BACKGROUND)
         foot.pack(fill='x', pady=(8, 0))
         for text, cmd in (('Toegang en privacy', self.permissions), ('Tavily-sleutel instellen', self.set_key),
-                          ('Google-sleutels (Serper/SerpApi)', self.set_serper),
+                          ('Zoeksleutels (Bright Data/Serper/SerpApi)', self.set_serper),
                           ('Nu online aanvullen', self.online)):
             link = tk.Label(foot, text=text, font=(FONT, 9, 'underline'), fg=MUTED, bg=BACKGROUND, cursor='hand2')
             link.pack(side='left', padx=(0, 16))
@@ -692,7 +705,7 @@ class ScannerApp:
                    'ocr': self.ocr.get(), 'online': self.online_fill.get(),
                    'contact': self.online_contact.get()}
         if scan and self.online_fill.get() and not online_key:
-            online_key = load_key()
+            online_key = load_key() or ('-' if heeft_zoeksleutel() else '')
         worker = threading.Thread(target=self.worker, args=(mode, online_key, options), daemon=True)
         worker.start()
 
@@ -734,8 +747,11 @@ class ScannerApp:
                 env['SERPER_API_KEY'] = load_serper()
             if load_serpapi():
                 env['SERPAPI_API_KEY'] = load_serpapi()
-            if online_key:
+            if load_brightdata():
+                env['BRIGHTDATA_API_KEY'] = load_brightdata()
+            if online_key and online_key != '-':
                 env['TAVILY_API_KEY'] = online_key
+            if online_key:
                 env['CV_ONLINE_CONTACT'] = '1' if options.get('contact') else '0'
             self.emit('status', 'Documenten scannen…' if scan else 'Zoeken naar openbare contactgegevens…' if mode == 'online' else 'Excel opnieuw opbouwen…')
             self.emit('log', 'Scan gestart: ' + ('alle toegankelijke interne schijven' if scan and not options['root']
@@ -1197,6 +1213,9 @@ class ScannerApp:
         if self.running:
             return
         for title, path, info in (
+                ('Bright Data (eerste keuze)', BRIGHTDATA_FILE,
+                 'Plak je Bright Data API-sleutel. Wordt als EERSTE gebruikt om openbare LinkedIn-profielen op te halen '
+                 '(werkgevers, functies, opleidingen, jaren).'),
                 ('Google-sleutel 1: Serper', SERPER_FILE,
                  'Plak je API-sleutel van serper.dev (2.500 gratis, eenmalig). Wordt EERST gebruikt.'),
                 ('Google-sleutel 2: SerpApi', SERPAPI_FILE,
@@ -1228,7 +1247,7 @@ class ScannerApp:
             self.online_fill.set(True)
 
     def toggle_online(self):
-        if self.online_fill.get() and not load_key() and not self.ask_key():
+        if self.online_fill.get() and not heeft_zoeksleutel() and not self.ask_key():
             self.online_fill.set(False)
 
     def online(self):
@@ -1237,7 +1256,7 @@ class ScannerApp:
         if not (self.output / 'cv_index.sqlite').exists():
             messagebox.showinfo('Eerst scannen', 'Start eerst een lokale scan.', parent=self.root)
             return
-        key = load_key() or self.ask_key()
+        key = load_key() or ('-' if heeft_zoeksleutel() else '') or self.ask_key()
         if key:
             self.launch(mode='online', online_key=key)
 
@@ -1657,7 +1676,7 @@ def main():
         gezet = []
     ScannerApp(root)
     if gezet:
-        namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi'}
+        namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi', 'brightdata': 'Bright Data'}
         root.after(800, lambda: messagebox.showinfo(
             'Sleutels geïnstalleerd', 'Zoeksleutels geïnstalleerd: ' + ', '.join(namen[g] for g in gezet) +
             '.\nJe hoeft ze niet meer in te vullen.', parent=root))

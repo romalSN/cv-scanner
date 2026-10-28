@@ -5023,8 +5023,13 @@ def build_exports(db, out):
             if 'sha256' in cols:
                 new_cols.insert(new_cols.index('cv_id') + 1, 'open_cv')
             return new_cols, new_rows
+        li_rijen = linkedin_gegevens_rijen(people, out)
+        li_cols = ['kandidaat_id', 'naam', 'linkedin', 'linkedin_bron', 'huidige_functie', 'huidige_werkgever',
+                   'werkervaring', 'opleidingen', 'certificeringen', 'vaardigheden', 'over', 'locatie',
+                   'email_openbaar', 'telefoon_openbaar']
         xlsx_export(temporary, [
-            ('Unieke personen',vcols,view),('Bestanden en status',*as_kid(fcols,files))])
+            ('Unieke personen',vcols,view),('Bestanden en status',*as_kid(fcols,files))]
+            + ([('LinkedIn-gegevens', li_cols, li_rijen)] if li_rijen else []))
         # Controle nodig, leesfouten en online-details staan alleen nog in de CSV-bestanden in de exportmap.
         with zipfile.ZipFile(temporary) as z:
             if z.testzip() is not None or 'xl/workbook.xml' not in z.namelist():
@@ -5650,14 +5655,101 @@ def _cv_sites(db, person):
     return sites
 
 
+def bright_data_voorbereiden(people, todo, cache, cache_path, brightdata, max_people):
+    """Stap 1 (Bright Data eerst): alle LinkedIn-URL's verzamelen en in batches ophalen.
+    - URL's uit het cv (alle kandidaten, ook wie al alles heeft: voor het tabblad LinkedIn-gegevens).
+    - Wie geen URL heeft: één Google-zoekopdracht (Serper, anders SerpApi) naar 'site:linkedin.com/in "naam"
+      bedrijf', opgeslagen onder dezelfde sleutel als de gewone online stap (die zoekt dan niet opnieuw).
+      Alleen profielen met precies die naam gaan naar Bright Data (max 3 per persoon)."""
+    urls = []
+    for p in people:
+        for l in linkedins_in(p.get('linkedin') or ''):
+            urls.append(l)
+    gezocht = 0
+    for p in todo[:max_people]:
+        if p.get('linkedin'):
+            continue
+        full = p['naam'].replace('"', '')
+        ck = 'linkedin|' + normalized_name(full)
+        if ck not in cache:
+            emp = _clean_org(p.get('laatst_bekende_werkgever') or '')
+            rol = (p.get('huidige_functie') or '')[:45].replace('"', '')
+            if len(emp) >= 3 and emp not in NL_PLACES and not VAGUE_EMPLOYERS.match(emp) and not BIG_EMPLOYERS.match(emp):
+                term = '"' + re.sub(r'\(.*?\)', ' ', (p.get('laatst_bekende_werkgever') or '').split(',')[0]).replace('"', '').strip()[:45] + '"'
+            else:
+                term = rol if rol and role_is_specific(rol) else ''
+            if not term:
+                ck += '|alleen_naam'          # zelfde sleutel als de gewone online stap
+            if ck in cache:
+                res = cache[ck]
+            else:
+                res, via = google_search(f'site:linkedin.com/in "{full}" {term}'.strip())
+            if res is None:
+                print('BRIGHT DATA: geen Google-tegoed meer om LinkedIn-adressen te vinden; rest volgende keer.', flush=True)
+                break
+            if ck not in cache:
+                gezocht += 1
+                cache[ck] = [{k: r.get(k, '') for k in ('url', 'title', 'content')} for r in res]
+                cache['q|' + ck] = f'"{full}" {term}'.strip()
+        words = _name_words(full)
+        eigen = []
+        for r in cache.get(ck) or []:
+            for l in linkedins_in(r.get('url', '')):
+                if own_linkedin(l, r.get('title', ''), words, full) and l not in eigen:
+                    eigen.append(l)
+        urls += eigen[:3]
+    if gezocht:
+        print(f'BRIGHT DATA: {gezocht} LinkedIn-adressen gezocht via Google (Serper/SerpApi).', flush=True)
+    try:
+        brightdata.ophalen(urls, cache, log=lambda m: print(m, flush=True))
+    finally:
+        try:
+            cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            pass
+
+
+def linkedin_gegevens_rijen(people, out):
+    """Tabblad 'LinkedIn-gegevens': alleen voor profielen die zeker van de kandidaat zijn (uit het cv of online
+    'zeker'). Gegevens uit het openbare profiel via Bright Data."""
+    try:
+        import brightdata
+        cache = json.loads((out / 'online_cache.json').read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    rijen = []
+    for p in people:
+        bron = 'cv' if p.get('linkedin') else ''
+        link = p.get('linkedin') or ''
+        if not link and p.get('online_linkedin'):          # alleen zekere online profielen staan hier
+            link, bron = p.get('online_linkedin') or '', 'online (zeker)'
+        s = brightdata.slug(link)
+        g = brightdata.gegevens(cache.get('bd|' + s)) if s else {}
+        if not g:
+            continue
+        rijen.append(dict(kandidaat_id=p.get('kandidaat_id', ''), naam=p.get('naam', ''), linkedin=link, linkedin_bron=bron,
+                          huidige_functie=g['functie'], huidige_werkgever=g['werkgever'],
+                          werkervaring=' | '.join(g['werkervaring'])[:3000] or '(niet openbaar)',
+                          opleidingen=' | '.join(g['opleidingen'])[:2000], certificeringen=' | '.join(g['certificeringen'])[:1500],
+                          vaardigheden=', '.join(g['vaardigheden'])[:1000], over=g['over'], locatie=g['locatie'],
+                          email_openbaar=g['email'], telefoon_openbaar=g['telefoon']))
+    return rijen
+
+
 def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     """Zoek ontbrekende LinkedIn / e-mail / telefoon online op via Tavily.
     Alleen voor personen bij wie iets ontbreekt. Een profiel heet pas
     'waarschijnlijk' als het ook inhoudelijk overeenkomt met het cv
     (werkgever, school, functie, plaats). Alles blijft een SUGGESTIE."""
     key = os.environ.get('TAVILY_API_KEY', '').strip()
-    if not key:
-        print('ONLINE: geen Tavily-sleutel ingesteld; online aanvullen overgeslagen.', flush=True)
+    try:
+        import brightdata
+    except Exception:
+        brightdata = None
+    bd_aan = bool(brightdata and brightdata.sleutel())
+    google_aan = bool(os.environ.get('SERPER_API_KEY', '').strip() or os.environ.get('SERPAPI_API_KEY', '').strip())
+    if not key and not bd_aan and not google_aan:
+        print('ONLINE: geen zoeksleutel ingesteld (Bright Data, Serper, SerpApi of Tavily); online aanvullen overgeslagen.', flush=True)
         return False
     cache_path = out / 'online_cache.json'
     try:
@@ -5675,6 +5767,11 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     tavily_out = False          # Tavily-tegoed op: verder via Google (Serper/SerpApi)
     todo = [p for p in people if p['naam'] and not p.get('naam_is_bedrijf') and not p.get('niet_voor_loxo') and not all(p[k] for k in ('email','telefoon','linkedin'))]
     name_count = collections.Counter(normalized_name(p['naam']) for p in people if p['naam'])
+    if bd_aan or not key:
+        # Volgorde: Bright Data (profielgegevens) -> Serper -> SerpApi. Tavily wordt dan niet gebruikt.
+        tavily_out = True
+    if bd_aan:
+        bright_data_voorbereiden(people, todo, cache, cache_path, brightdata, max_people)
     print(f'ONLINE: {len(todo)} van {len(people)} personen missen LinkedIn, e-mail of telefoon.', flush=True)
     for person in todo:
         if checked >= max_people:
@@ -5899,6 +5996,11 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 url = result.get('url', '')
                 title = html.unescape(re.sub(r'<[^>]+>', ' ', result.get('title', '') or ''))
                 content = result.get('content', '') or ''
+                if bd_aan and kind == 'linkedin':
+                    # Volledig openbaar profiel van Bright Data (werkgevers, functies, jaren, opleidingen, about).
+                    bdp = cache.get('bd|' + brightdata.slug(url))
+                    if bdp and not bdp.get('fout'):
+                        content = content + '\n' + brightdata.tekst(bdp)
                 if result.get('raw'):
                     content = content + '\n' + own_profile_text(result['raw'])
                 context = normalized_name(title + ' ' + content + ' ' + url.replace('-', ' '))
@@ -6168,6 +6270,18 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     have_tel = False
                 xqueries = [('tel', f'site:linkedin.com/in "{full}" ("+31 6" OR "06" OR "+316")'),
                             ('mail', f'site:linkedin.com/in "{full}" ("mail" OR "@" OR "e-mail")')]
+                if bd_aan:
+                    # Met Bright Data: alleen contact dat rechtstreeks op het (zekere) profiel staat; geen extra
+                    # Google-zoekopdrachten.
+                    xqueries = []
+                    g = brightdata.gegevens(cache.get('bd|' + brightdata.slug(zeker_link)) or {})
+                    for typ_, val in (('email', g.get('email', '')), ('telefoon', g.get('telefoon', ''))):
+                        if val and not have[typ_] and not (typ_ == 'email' and GENERIC_EMAIL.match(val)):
+                            if typ_ == 'telefoon':
+                                val = norm_phone(val) or ''
+                            if val:
+                                candidates.setdefault((typ_, val), dict(match=set(), hits=set(), url=zeker_link,
+                                                      title='LinkedIn-profiel (Bright Data)', query='bright data'))['from_linkedin'] = zeker_link
                 for tag, xq in xqueries:
                     if tag == 'tel' and (have['telefoon'] or have_tel):
                         continue
