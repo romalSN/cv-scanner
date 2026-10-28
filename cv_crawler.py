@@ -378,6 +378,12 @@ def clean_person_name(name):
     words = s.split()
     while len(words) > 2 and words[-1].strip('.').lower() in TITLE_AFTER:
         words.pop()
+    # Verschreven 'curriculum' ('Curicculum', 'Curiculum', 'Cirriculum'): geen naam.
+    cur = [i for i, w in enumerate(words) if difflib.SequenceMatcher(None, asciifold(w).lower(), 'curriculum').ratio() >= .8]
+    if cur:
+        if cur[0] < 2:
+            return ''
+        words = words[:cur[0]]               # 'Emre Kaplan Curriculum Vitae' -> 'Emre Kaplan'
     if any(asciifold(w).lower().strip('.,') in COMPANY_WORDS for w in words):
         return ''
     # Rommel achter de naam afknippen: 'Marc de Gier Contractmanager Belastingdienst' -> 'Marc de Gier'.
@@ -496,7 +502,8 @@ def naam_uit_bestandsnaam(path_or_stem, snippet):
     while naam_w and normalized_name(naam_w[-1]) in NAME_FILLERS:
         naam_w.pop()
     kandidaat = ' '.join(naam_w)
-    if not reasonable_name(' '.join(w[:1].upper() + w[1:] for w in kern)) or any(asciifold(w).lower() in COMPANY_WORDS for w in kern):
+    if (not reasonable_name(' '.join(w[:1].upper() + w[1:] for w in kern)) or any(asciifold(w).lower() in COMPANY_WORDS for w in kern)
+            or not clean_person_name(' '.join(w[:1].upper() + w[1:] for w in kern))):
         return ''
     tekst = ' ' + (snippet or '')[:4000] + ' '
     if not all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2):
@@ -2957,10 +2964,16 @@ BUREAU_CONTACT = set()
 GESPLITST = []   # (oud persoon-id, bestanden) van kandidaten die bij deze scan zijn gesplitst
 
 
+def _zelfde_naam_andere_volgorde(an, bn):
+    """'Hans-Georg Bork' en 'Bork Hansgeorg': zelfde letters, alleen andere volgorde/spaties."""
+    x, y = an.replace(' ', ''), bn.replace(' ', '')
+    return bool(x) and len(x) == len(y) and x != y and y in x + x
+
+
 def _voornaam_botst(an, bn):
     """Twee volledige, verschillende voornamen (Jan / Piet, Jan / Jana) = verschillende personen.
     Geen botsing bij een voorletter (J / Jan), een korte vorm (Chris / Christopher, Ron / Ronald) of één naam leeg."""
-    if not an or not bn:
+    if not an or not bn or _zelfde_naam_andere_volgorde(an, bn):
         return False
     a0, b0 = an.split()[0], bn.split()[0]
     if a0 == b0 or len(a0) <= 2 or len(b0) <= 2 or a0 in NAME_FILLERS or b0 in NAME_FILLERS:
@@ -3001,7 +3014,7 @@ def harde_blokkade(a, b):
     if loopbaan_botst(a, b):
         return 'andere loopbaan (andere werkgevers in dezelfde jaren)'
     aw, bw = [w for w in an.split() if w not in NAME_FILLERS], [w for w in bn.split() if w not in NAME_FILLERS]
-    if len(aw) >= 2 and len(bw) >= 2:
+    if len(aw) >= 2 and len(bw) >= 2 and not _zelfde_naam_andere_volgorde(an, bn):
         la, lb = aw[-1], bw[-1]
         if (la != lb and la not in lb and lb not in la and difflib.SequenceMatcher(None, la, lb).ratio() < .75
                 and not (set(aw) <= set(bw) or set(bw) <= set(aw))):
@@ -3019,6 +3032,8 @@ def harde_blokkade(a, b):
 def safe_pair(a, b):
     """Geeft (auto, review, motivatie); automatisch uitsluitend met sterk bewijs."""
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
+    if _zelfde_naam_andere_volgorde(an, bn):
+        bn = an                                        # 'Bork Hansgeorg' = 'Hans-Georg Bork'
     same_name = bool(an and bn and an == bn)
     name_sim = difflib.SequenceMatcher(None, an, bn).ratio() if an and bn else 0
     conflict = bool(an and bn and name_sim < .70)
@@ -3033,6 +3048,12 @@ def safe_pair(a, b):
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
     if blok:
+        if blok == 'andere voornaam' and ae & be and all(
+                not email_matches_name(a['name'], e) and not email_matches_name(b['name'], e) for e in ae & be):
+            return False, False, ''         # mailadres van geen van beiden (recruiter): gewoon apart, geen twijfel
+        if blok == 'andere voornaam' and ((ae & be) or (ap & bp) or (al & bl)):
+            # 'Marjoke' / 'Joke van Alphen' met hetzelfde mailadres: roepnaam? Niet automatisch, wel laten zien.
+            return False, True, 'zelfde contactgegevens, maar andere voornaam (roepnaam?)'
         if blok == 'andere achternaam' and ((ae & be) or (ap & bp) or (al & bl)):
             # Bv. 'Botwin Wytze' / 'Botwin Sijtsma' met hetzelfde mailadres. Naam opnieuw controleren: staat
             # 'Botwin Wytze Sijtsma' in een van de cv's (meerdere voornamen)? En klopt het cv ook (zelfde werkgever met
@@ -3043,6 +3064,9 @@ def safe_pair(a, b):
                 return True, False, f'zelfde persoon met meerdere voornamen ({volledig}); zelfde mail, telefoon en loopbaan'
             return False, True, 'zelfde contactgegevens, maar andere achternaam'
         return False, False, ''
+    # Beide cv's zonder bruikbare naam, maar hetzelfde persoonlijke mailadres ÉN telefoonnummer: één persoon.
+    if not an and not bn and (ae & be) and (ap & bp):
+        return True, False, 'geen naam, wel zelfde persoonlijk e-mailadres en telefoon'
     # Eén cv zonder bruikbare naam ('Persoonlijke Gegevens'), het andere met naam: samen als e-mail ÉN telefoon
     # gelijk zijn en het mailadres bij die naam past (frank.jansen@ bij Frank Jansen). Niet bij info@/bureau-adressen.
     if bool(an) != bool(bn) and (ap & bp):
@@ -3121,7 +3145,7 @@ def safe_pair(a, b):
     jacc = overlap / max(1, len(at | bt))
     if same_name and (text_sim >= .87 or (overlap >= 18 and jacc >= .32)):
         # Gelijke tekst kan ook komen door hetzelfde sjabloon (bureau). Alleen samen met nog een hard bewijs.
-        if (ae & be) or (ap & bp) or (al & bl) or zelfde_werk(a, b):
+        if (ae & be) or (ap & bp) or (al & bl) or zelfde_werk(a, b) or text_sim >= .93:
             return True, False, 'zelfde naam en zeer sterk gelijkende CV-inhoud'
         return False, True, 'zelfde naam en gelijkende tekst, maar geen gedeeld contact of werkgever+jaren'
     if same_name:
