@@ -256,7 +256,10 @@ check('"Nationality Dutch" is geen naam', c.clean_person_name('Nationality Dutch
 for ruw, goed in [('Baris YAPAR', 'Baris Yapar'), ('MENKVELD Jan-Willem', 'Jan-Willem Menkveld'), ('MACROBUTTON Johan Vermont', 'Johan Vermont'),
                   ('Hendrik Ido Ambacht', ''), ('Over Mij', ''), ('Wsm Perquin Productowner', 'Wsm Perquin')]:
     check(f'naam "{ruw}" -> "{goed}"', c.tidy_name(c.clean_person_name(ruw)) == goed, c.tidy_name(c.clean_person_name(ruw)))
-check('achternaam eerst + e-mail', c.name_order_by_email('Elmensdorp Henri', ['ron.elmensdorp@x.nl']) == 'Henri Elmensdorp')
+check('achternaam eerst + e-mail', c.name_order_by_email('Elmensdorp Henri Ernst Ronald', ['ron.elmensdorp@x.nl']) == 'Henri Ernst Ronald Elmensdorp')
+check('niet omdraaien als voornaam niet in e-mail past (Dennis Andre / gerk.dennis@)', c.name_order_by_email('Dennis Andre', ['gerk.dennis@gmail.com']) == 'Dennis Andre')
+check('e-mail: label "emailaddress1" eraf', c._fix_email('emailaddress1tom.coenraad@synergy-ict.nl') == 'tom.coenraad@synergy-ict.nl')
+check('e-mail: "emaily@" blijft (geen label)', c._fix_email('emaily@x.nl') == 'emaily@x.nl')
 check('label aan e-mail geplakt', c.emails_in('haage-mailadresinfo@voorbeeld.comtelefoon') == ['info@voorbeeld.com'])
 check('e-mail van iemand anders herkend', c.email_owner_mismatch('Dennis Kortekaas', 'bart.plasmeijer@voorbeeldmail.nl'))
 check('eigen e-mail niet gemarkeerd', not c.email_owner_mismatch('Artem Zaitsev', 'artem.zajtsev@voorbeeldmail.nl'))
@@ -598,6 +601,17 @@ for _txt, _min, _max in ((f"03/{_Y-6} - 06/{_Y-1} Developer bij X, Utrecht", 5.2
     check(f'datum: {_txt[:28]} = {_min}-{_max} jaar', _min <= _j <= _max, _j)
 _j = _v(f"Jan\nOnline cursus {_Y-6} - {_Y-1} Universiteit Utrecht, vanuit India Pune. {_W}")
 check('school: online vanuit buitenland telt niet als NL-verblijf', _j[1] == 0, _j)
+
+def _d(name, emails, phones=()):
+    import json as _j
+    return {'name': name, 'emails': _j.dumps(emails), 'phones': _j.dumps(list(phones)), 'links': '[]', 'sha': name,
+            'snippet': '', 'tokens': '[]'}
+check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = samen', c.safe_pair(_d('Botwin Wytze', ['botwin.sijtsma@gmail.com']), _d('Botwin Sijtsma', ['botwin.sijtsma@gmail.com']))[0])
+check('dubbel: Piet Jansen + Marie Jansen, zelfde gezinsmail = NIET samen', not c.safe_pair(_d('Piet Jansen', ['jansen@ziggo.nl']), _d('Marie Jansen', ['jansen@ziggo.nl']))[0])
+check('dubbel: recruitermail bij 2 kandidaten = NIET samen', not c.safe_pair(_d('Bobby van den Berg', ['erik.mertz@salves.nl']), _d('Kevin Lok', ['erik.mertz@salves.nl']))[0])
+for _ruw, _goed in (('Engels Nederlands Duits', ''), ('Mergeformattom Coenraad', 'Tom Coenraad'), ('Ray Hyde Fe Bd', 'Ray Hyde'), ('Kees van der Be', 'Kees van der Be')):
+    _x = c.clean_person_name(_ruw); _x = c.tidy_name(_x) if _x else _x
+    check(f'naam "{_ruw}" -> "{_goed}"', _x == _goed, _x)
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))

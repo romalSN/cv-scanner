@@ -62,6 +62,12 @@ ARCHIVES = {'.zip'}
 ZIP_SEP = ' › '          # 'C:\\map\\sollicitaties.zip › Jan/CV Jan.pdf'
 ZIP_MAX_MEMBERS = 2000   # meer bestanden in één zip: rest overslaan
 ZIP_MAX_TOTAL_MB = 500   # totaal uitgepakte grootte per zip
+GROOT_MB = 500           # pdf/docx tot deze grootte worden toch gelezen (pdf: alleen de eerste pagina's)
+
+
+def limiet_mb(ext, args):
+    """Grote pdf's (vaak door foto's) en .docx-bestanden (tekst staat los van de plaatjes) wel lezen."""
+    return GROOT_MB if str(ext).lower() in ('.pdf', '.docx') else args.max_mb
 ZIP_MAX_RATIO = 200      # extreem gecomprimeerd = mogelijke zip-bom
 
 
@@ -320,6 +326,11 @@ def name_from_linkedin(link):
 
 
 TITLE_BEFORE = re.compile(r'(?i)^(?:ir|ing|drs|dr|mr|prof|dhr|mevr|mw|mevrouw|de heer|mrs|ms|miss)\.?\s+')
+TAAL_NAAM_WOORDEN = {'engels', 'nederlands', 'duits', 'frans', 'spaans', 'italiaans', 'portugees', 'arabisch',
+                     'turks', 'pools', 'russisch', 'chinees', 'english', 'dutch', 'german', 'french', 'spanish',
+                     'italian', 'portuguese', 'arabic', 'turkish', 'polish', 'russian', 'chinese', 'hindi', 'urdu',
+                     'vloeiend', 'fluent', 'moedertaal', 'native', 'goed', 'redelijk', 'basis', 'talen', 'languages'}
+NAAM_STAART = {'cms', 'crm', 'erp', 'sap', 'fe', 'bd', 'ict', 'cv', 'nl', 'uk', 'java'}
 TITLE_AFTER = {'msc', 'bsc', 'ba', 'ma', 'mba', 'phd', 'pmp', 'cissp', 'binftech', 'mtd', 'llm', 'bba', 'ra',
                'rc', 'nl', 'ing', 'ir', 'drs', 'cpa', 'cisa', 'cism', 'itil', 'prince2'}
 LABEL_BEFORE = re.compile(r'(?i)^(?:macrobutton|mergefield|formtext|naam|name|full\s*name|volledige\s*naam|voornaam|roepnaam|naam\s*kandidaat|'
@@ -342,6 +353,8 @@ def clean_person_name(name):
         if len(w) >= 4 and len(w) % 2 == 0 and [x.casefold() for x in w[:len(w)//2]] == [x.casefold() for x in w[len(w)//2:]]:
             return ' '.join(w[:len(w)//2])
         return t
+    # Word-veldcode aan de naam geplakt: 'MERGEFORMATtom Coenraad' -> 'tom Coenraad'.
+    s = re.sub(r'(?i)^(?:mergeformat|macrobutton|mergefield|formtext)(?=[a-z])', '', s).strip()
     s = undouble(s)
     # 'Jan Smitjan Smitwerkervaringwerkervaring': naam dubbel + kopje erachter geplakt.
     m = re.match(r'(?is)^(.{5,40}?)\1(.*)$', s)
@@ -371,6 +384,15 @@ def clean_person_name(name):
     # Plaatsnaam erachter ('Marieke van OmmenZoetermeer'), maar niet 'Sander van Rijswijk'.
     if len(words) >= 3 and normalized_name(words[-1]) in NL_PLACES and normalized_name(words[-2]) not in NAME_FILLERS:
         words = words[:-1]
+    # Alleen talen ('Engels Nederlands Duits') of nationaliteiten: geen naam.
+    if words and all(asciifold(w).lower().strip('.,') in TAAL_NAAM_WOORDEN for w in words):
+        return ''
+    # Losse afkortingen/vakwoorden achteraan ('Ray Hyde Fe Bd', 'Ray Hyde Cms'), niet 'Jan de' / 'Li Na'.
+    while len(words) > 2 and asciifold(words[-1]).lower().strip('.,') in NAAM_STAART \
+            and normalized_name(words[-2]) not in NAME_FILLERS:
+        words.pop()
+    if words and words[0][:1].islower() and normalized_name(words[0]) not in NAME_FILLERS:
+        words[0] = words[0][:1].upper() + words[0][1:]
     s = ' '.join(words).strip(' .,-')
     if normalized_name(s) in NL_PLACES or normalized_name(s).replace(' ', '') in {p.replace(' ', '') for p in NL_PLACES}:
         return ''                                   # 'Hendrik Ido Ambacht' is een plaats
@@ -416,7 +438,12 @@ def name_order_by_email(name, emails):
             continue
         parts = [x for x in re.split(r'[._\-]+', e.split('@')[0].lower()) if x.isalpha()]
         first, last = normalized_name(words[0]), normalized_name(words[-1])
-        if len(parts) >= 2 and parts[-1] == first and last not in parts and first not in NAME_FILLERS:
+        rest = [normalized_name(w) for w in words[1:]]
+        # De rest van het adres moet ook bij de voornaam/voornamen passen ('ron' bij Ronald, 'h' bij Henri);
+        # 'gerk.dennis@' bij 'Dennis Andre' past niet -> niet omdraaien (liever laten staan dan fout).
+        voornaam_past = any(p == r or (len(p) >= 3 and r.startswith(p)) or (len(p) == 1 and r.startswith(p))
+                            for p in parts[:-1] for r in rest if r)
+        if len(parts) >= 2 and parts[-1] == first and last not in parts and first not in NAME_FILLERS and voornaam_past:
             return ' '.join(words[1:] + [words[0]])
     return name
 
@@ -487,7 +514,8 @@ def _fix_email(e):
     """'1330info@bedrijf.comwww.bedrijf.com' (aan elkaar geplakt in een pdf) -> 'info@bedrijf.com'."""
     e = e.strip('.,:;').lower()
     # 'haage-mailadresinfo@…' / 'e-mailjan@…': label (en wat ervoor zat) eraf.
-    e = re.sub(r'^.*?(?:e-?mail(?:adres)?|email(?:address)?|mailadres|mail:)(?=[a-z0-9])', '', e.split('@')[0]) + '@' + e.split('@', 1)[1] \
+    e = re.sub(r'^(?:.*?(?:e-mail(?:address|adres)?|email(?:address|adres)|mailadres|mail:)\d?|.+?email\d?)(?=[a-z0-9])',
+               '', e.split('@')[0]) + '@' + e.split('@', 1)[1] \
         if re.search(r'(?:e-?mail(?:adres)?|email(?:address)?|mailadres)[a-z0-9]', e.split('@')[0]) else e
     # '…@x.nlgeboortedatum', '…@x.comtelefoon': woord achter het domein (zonder punt erna) eraf.
     e = re.sub(r'(\.(?:com|nl|org|net|eu|be|de|io|info|biz|uk|nu|me|fr|it|es))[a-z]{3,}$', r'\1', e)
@@ -2061,6 +2089,21 @@ def safe_read_document(path, use_ocr, ocr_lang, ocr_pages, timeout_seconds=90):
                                 encoding='utf-8', errors='replace', check=False,
                                 env=env)
     except subprocess.TimeoutExpired as exc:
+        # Traag (vaak OCR van veel plaatjes): probeer snel alleen de tekst, zonder OCR.
+        if looks_like_pdf(path):
+            try:
+                return fallback_pdf_via_poppler(path, timeout_seconds=60)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                pass
+        if use_ocr and not getattr(safe_read_document, '_retry', False):
+            safe_read_document._retry = True
+            try:
+                text, note, bonus = safe_read_document(path, False, ocr_lang, ocr_pages, timeout_seconds=60)
+                return text, ('Gelezen zonder OCR (bestand was te traag). ' + (note or '')).strip(), bonus
+            except Exception:
+                pass
+            finally:
+                safe_read_document._retry = False
         raise TimeoutError(f'Bestand lezen duurde langer dan {timeout_seconds} seconden') from exc
     if result.returncode != 0:
         if looks_like_pdf(path):
@@ -2530,7 +2573,7 @@ def ingest(args, db, out, roots=None, label=None):
             elif cloud_placeholder(stat):
                 deferred_reason = ('Staat alleen online (OneDrive/iCloud). Vink "Ook cv\'s die alleen in OneDrive/iCloud staan" aan '
                                    'en scan opnieuw om het te downloaden en te lezen.')
-            elif stat.st_size > args.max_mb * 1024*1024 and not (p.suffix.lower() == '.pdf' and stat.st_size <= 500 * 1024*1024):
+            elif stat.st_size > limiet_mb(p.suffix, args) * 1024*1024:
                 # Grote pdf's (tot 500 MB) worden wél gelezen, maar alleen de eerste pagina's (zie read_document).
                 deferred_reason = (f'Bestand groter dan scanlimiet ({args.max_mb} MB); '
                                    'niet gelezen, handmatig beoordelen.')
@@ -2717,8 +2760,8 @@ def ingest_zip(zpath, zstat, args, db, archive, lang, summary, seen_paths):
             problem = ''
             if info.flag_bits & 0x1:
                 problem = 'Bestand in zip is met een wachtwoord beveiligd; niet gelezen.'
-            elif info.file_size > args.max_mb * 1024 * 1024:
-                problem = f'Bestand in zip groter dan scanlimiet ({args.max_mb} MB); niet gelezen.'
+            elif info.file_size > limiet_mb(ext, args) * 1024 * 1024:
+                problem = f'Bestand in zip groter dan scanlimiet ({limiet_mb(ext, args)} MB); niet gelezen.'
             elif info.compress_size and info.file_size / info.compress_size > ZIP_MAX_RATIO and info.file_size > 5 * 1024 * 1024:
                 problem = 'Verdacht sterk gecomprimeerd bestand (mogelijke zip-bom); niet gelezen.'
             elif total + info.file_size > ZIP_MAX_TOTAL_MB * 1024 * 1024:
@@ -2732,7 +2775,7 @@ def ingest_zip(zpath, zstat, args, db, archive, lang, summary, seen_paths):
             tmpfile = Path(tmp) / f'doc_{n}{ext}'
             try:
                 # Gestreamd kopieren met harde limiet; de zip blijft onaangeroerd.
-                limit = args.max_mb * 1024 * 1024
+                limit = limiet_mb(ext, args) * 1024 * 1024
                 written = 0
                 with zf.open(info) as src, tmpfile.open('wb') as dst:
                     for chunk in iter(lambda: src.read(1048576), b''):
@@ -2824,6 +2867,17 @@ def safe_pair(a, b):
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
+    # Zelfde persoonlijk e-mailadres + zelfde voornaam, en het adres past bij beide namen:
+    # 'Botwin Wytze' en 'Botwin Sijtsma' met botwin.sijtsma@ = één persoon. Niet bij gezinsleden
+    # ('Piet Jansen' / 'Marie Jansen' met jansen@): de voornaam moet gelijk zijn.
+    for e in ae & be:
+        if GENERIC_EMAIL.match(e) or not an or not bn:
+            continue
+        local = re.sub(r'[^a-z]', '', e.split('@')[0].lower())
+        aw1, bw1 = an.split(), bn.split()
+        if aw1[0] == bw1[0] and len(aw1[0]) >= 3 and aw1[0] in local and \
+                any(len(w) >= 3 and w in local for w in aw1) and any(len(w) >= 3 and w in local for w in bw1):
+            return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
     aw0, bw0 = set(an.split()), set(bn.split())
     if conflict and strong and not (min(len(aw0), len(bw0)) >= 2 and (aw0 <= bw0 or bw0 <= aw0)):
         return False, True, 'gedeelde contactgegevens maar afwijkende namen'
