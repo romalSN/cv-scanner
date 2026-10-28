@@ -3897,7 +3897,7 @@ def ai_dubbel_controle(docs, reviews, samenvoegen, out_dir):
     3. AI vergelijkt beide cv's (houdt rekening met oude/nieuwe versie en andere taal).
     4. Tweede, gerichte AI-vraag: een concreet feit dat in beide staat (werkgever+jaren, opleiding+jaar).
     5. Python: past het bij ALLE cv's van de kandidaatgroep? Pas dan samen. Anders blijft het een twijfelgeval."""
-    if not reviews or os.environ.get('CV_AI_DUBBEL', '1') != '1':
+    if not reviews or os.environ.get('CV_AI_DUBBEL', '0') != '1':   # pas aan na geslaagde AI-test
         return reviews
     try:
         import ai_rechter
