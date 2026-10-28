@@ -1,0 +1,110 @@
+[
+ {
+  "id": 1,
+  "waar": "cv",
+  "naam": "Bas Hilberts",
+  "tekst": "bas hilberts bas hilberts voorbeeldmail nl 06 00000201 haarlem ik ben een gedreven applicatiebeheerder met 10 jaar ervaring 2018 heden applicatiebeheerder bij voorbeeldbank 2012 2018 beheerder bij datafabriek hbo informatica hogeschool van amsterdam itil prince2"
+ },
+ {
+  "id": 2,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "bas hilberts bas hilberts voorbeeldmail nl haarlem 3 maart 2024 betreft sollicitatie applicatiebeheerder geachte heer mevrouw met veel interesse las ik uw vacature ik werk nu 6 jaar bij voorbeeldbank en zoek een nieuwe uitdaging graag licht ik mijn motivatie toe in een gesprek met vriendelijke groet bas hilberts"
+ },
+ {
+  "id": 3,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "vacature senior java developer wat ga je doen je bouwt mee aan ons platform wat vragen wij hbo 5 jaar java ervaring wat bieden wij salaris 4000 5500 40 uur per week reageer voor 1 juni via jobs voorbeeldbedrijf nl"
+ },
+ {
+  "id": 4,
+  "waar": "cv",
+  "naam": "Anil Kapoor",
+  "tekst": "name anil kapoor anil kapoor voorbeeldmail nl professional experience jan 2018 present data engineer datafabriek amsterdam mar 2014 dec 2017 software engineer infosys pune education b tech computer science"
+ },
+ {
+  "id": 5,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "intakeformulier kandidaat naam kandidaat beschikbaarheid gewenst salaris ingevuld door recruiter handtekening"
+ },
+ {
+  "id": 6,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "referentie hierbij verklaar ik dat bas hilberts van 2012 tot 2018 bij datafabriek werkzaam was als beheerder hij was betrouwbaar en accuraat met vriendelijke groet anton bakker teamleider datafabriek anton bakker datafabriek nl"
+ },
+ {
+  "id": 7,
+  "waar": "cv",
+  "naam": "Marloes Kuiper",
+  "tekst": "marloes kuiper scrum master marloes kuiper voorbeeldmail nl feb 2020 heden scrum master codewerk jun 2016 jan 2020 projectleider datafabriek kennis scrum safe jira confluence opleiding hbo bedrijfskunde hanzehogeschool"
+ },
+ {
+  "id": 8,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "projectverslag smart parking auteur ruben vos studentnummer 500123456 inleiding in dit verslag beschrijven we het ontwerp van een slim parkeersysteem methode resultaten conclusie en aanbevelingen bronnenlijst"
+ },
+ {
+  "id": 9,
+  "waar": "cv",
+  "naam": "Karin Veld",
+  "tekst": "profielschets karin veld senior java developer beschikbaar per 1 juni kernkwaliteiten analytisch teamspeler recente opdrachten opdrachtgever codewerk 2019 2024 java developer spring boot opdrachtgever webbouwers 2015 2019 developer opleidingen hbo ict hogeschool utrecht"
+ },
+ {
+  "id": 10,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "overzicht kandidaten week 12 1 jan de vries java developer beschikbaar 2 lisa groen consultant 32 uur 3 tom brandsma sales per direct 4 karin veld senior java per juni status voorgesteld bij klant"
+ },
+ {
+  "id": 11,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "arbeidsovereenkomst partijen voorbeeldbank b v en de heer b hilberts artikel 1 functie applicatiebeheerder artikel 2 salaris artikel 3 proeftijd aldus overeengekomen en ondertekend te amsterdam"
+ },
+ {
+  "id": 12,
+  "waar": "cv",
+  "naam": "Tom Brandsma",
+  "tekst": "curriculum vitae tom brandsma tom brandsma voorbeeldmail nl geboren 12 04 1990 opleiding hbo commerciele economie hanzehogeschool 2008 2012 vaardigheden excel salesforce engels duits hobbys voetbal lezen"
+ },
+ {
+  "id": 13,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "certificaat hierbij verklaren wij dat tom brandsma met goed gevolg de training scrum master psm i heeft afgerond op 12 mei 2021 scrum org"
+ },
+ {
+  "id": 14,
+  "waar": "cv",
+  "naam": "Sven Oud",
+  "tekst": "sven oud tester sven oud voorbeeldmail nl linkedin com in svenoud over mij ervaren tester met oog voor kwaliteit ervaring testhuis bv 2018 heden kwaliteit co 2014 2018 certificaten tmap istqb opleiding mbo ict"
+ },
+ {
+  "id": 15,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "offerte detachering kandidaat sven oud tester tarief 85 euro per uur excl btw looptijd 6 maanden opdrachtgever voorbeeldbank voorwaarden zie algemene voorwaarden solutionnow"
+ },
+ {
+  "id": 16,
+  "waar": "onzeker",
+  "naam": "",
+  "tekst": "sven 06 00000103 zie bijlage groeten"
+ },
+ {
+  "id": 17,
+  "waar": "cv",
+  "naam": "Lisa Groen",
+  "tekst": "lisa groen persoonlijke gegevens woonplaats utrecht e mail lisa groen voorbeeldmail nl werk 2019 heden consultant voorbeeld experts 2015 2019 adviseur gemeente utrecht studie universiteit utrecht bestuurskunde"
+ },
+ {
+  "id": 18,
+  "waar": "geen_cv",
+  "naam": "",
+  "tekst": "motivatiebrief beste recruiter ik ben lisa groen en ik wil graag bij jullie werken als consultant ik heb 5 jaar ervaring bij de gemeente en ben toe aan iets nieuws ik hoop op een gesprek groet lisa"
+ }
+]

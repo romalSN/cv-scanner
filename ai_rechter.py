@@ -186,6 +186,43 @@ def judge(cv_text: str, profiel_text: str) -> dict | None:
         return {'oordeel': 'onzeker', 'past': [], 'botst': [], 'fout': str(exc)[:100], 'sec': round(time.time() - t, 1)}
 
 
+INSTRUCTIE_CV = (
+    "Je beoordeelt documenten voor een recruitmentbureau. De tekst is automatisch uitgelezen (kleine letters, "
+    "zonder leestekens). Beslis of het document een CV is: een overzicht van de loopbaan van EEN persoon "
+    "(werkervaring en/of opleiding, vaak met contactgegevens). Een profielschets of kandidaatprofiel van een "
+    "persoon met opdrachten/werkervaring telt ook als cv.\n"
+    "GEEN cv: sollicitatiebrief of motivatiebrief, vacature, referentie of aanbevelingsbrief, certificaat of "
+    "diploma, contract of overeenkomst, offerte, factuur, verslag of scriptie, leeg formulier, lijst met meerdere "
+    "kandidaten, e-mail of notitie.\n"
+    "Is het een cv, geef dan de volledige naam van de persoon zoals die in de tekst staat.\n"
+    "Antwoord met JSON: 'soort' (cv / geen_cv / onzeker), 'naam' (of leeg), 'reden' (kort).")
+SCHEMA_CV = {"type": "object", "properties": {
+    "soort": {"type": "string", "enum": ["cv", "geen_cv", "onzeker"]},
+    "naam": {"type": "string"}, "reden": {"type": "string"}},
+    "required": ["soort", "naam", "reden"]}
+
+
+def classify(text: str) -> dict | None:
+    """Twijfelgeval: {'soort': 'cv'|'geen_cv'|'onzeker', 'naam': str, 'reden': str} of None (geen AI)."""
+    if not available():
+        return None
+    llm = _load()
+    if llm is None:
+        return None
+    vraag = f"{INSTRUCTIE_CV}\n\nDOCUMENT:\n{text[:3000]}"
+    t = time.time()
+    try:
+        with _lock:
+            out = llm.create_chat_completion(messages=[{"role": "user", "content": vraag}], temperature=0,
+                                             max_tokens=160, response_format={"type": "json_object", "schema": SCHEMA_CV})
+        a = json.loads(out['choices'][0]['message']['content'])
+        soort = a.get('soort') if a.get('soort') in ('cv', 'geen_cv', 'onzeker') else 'onzeker'
+        return {'soort': soort, 'naam': str(a.get('naam') or '')[:80], 'reden': str(a.get('reden') or '')[:160],
+                'sec': round(time.time() - t, 1)}
+    except Exception as exc:
+        return {'soort': 'onzeker', 'naam': '', 'reden': '', 'fout': str(exc)[:100], 'sec': round(time.time() - t, 1)}
+
+
 def self_test(model: str) -> int:
     """Voor de bouwmachine: laad een (klein) model en beoordeel 2 gevallen. Print 'AI OK'."""
     os.environ['CV_AI_MODEL'] = model
