@@ -6012,11 +6012,13 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     ai_o = info['ai']['oordeel']
                     beats = len(options) == 1 or score_of(info) > score_of(options[1][1]) or \
                         options[1][1].get('ai', {}).get('oordeel') != 'ja'
-                    ok = rank == 0 and beats and (
-                        (ai_o == 'ja' and (st >= 1 or me + sm >= 2)) or
+                    # 0 fouten: 'zeker' alleen met minstens één SPECIFIEK bewijs (eigen werkgever/stagebedrijf
+                    # als bedrijf, specifieke school/functie). Groot bedrijf + plaats is nooit genoeg, ook niet met AI-ja.
+                    ok = rank == 0 and beats and st >= 1 and (
+                        (ai_o == 'ja') or
                         (ai_o == 'onzeker' and st >= 1 and ((sum(weight(info)) >= 2) or len(options) == 1)))
                     sure = 'waarschijnlijk' if ok else 'controleren'
-                elif (typ == 'linkedin' and rank == 0
+                elif (typ == 'linkedin' and rank == 0 and weight(info)[0] >= 1      # altijd een specifiek bewijs
                       and ((weight(info)[0] >= 1 and sum(weight(info)) >= 2) or weight(info)[1] >= 3
                            or (weight(info)[1] >= 2 and weight(info)[2] >= 1)
                            # Maar één profiel met deze naam gevonden én daarop klopt een echt kenmerk

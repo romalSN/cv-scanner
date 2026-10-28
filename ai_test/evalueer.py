@@ -35,14 +35,10 @@ SCHEMA = {"type": "object", "properties": {
 
 
 def eind(ai, bewijs, past=()):
+    """Zoals de scanner nu beslist (0-fouten-regel): AI 'nee' = afgewezen; 'zeker' alleen met een SPECIFIEK bewijs
+    (eigen werkgever als bedrijf, specifieke school/functie) en AI niet 'nee'. Groot bedrijf of plaats = controleren."""
     if ai == 'nee':
         return 'afgewezen'
-    if ai == 'ja' and bewijs == 'specifiek':
-        return 'zeker'
-    # Groot bedrijf/school (Albert Heijn, ING, gemeente): naam van het bedrijf alleen is te weinig,
-    # de AI moet nog iets anders noemen dat klopt (functie, school, afdeling).
-    if ai == 'ja' and bewijs == 'groot' and len([p for p in past if p.strip()]) >= 2:
-        return 'zeker'
     if bewijs == 'specifiek':
         return 'zeker'
     return 'controleren'

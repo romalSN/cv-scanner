@@ -61,12 +61,15 @@ def li(slug, title, content):
     return {'url': f'https://nl.linkedin.com/in/{slug}', 'title': title, 'content': content}
 
 
-# 1. Enige profiel + 1 echt kenmerk (ook grote werkgever) = zeker, met uitleg
-b, x = online('Bram Hoekstra', 'Teamleider bij Coolblue', 'Coolblue', '',
-              [li('bramhoekstra', 'Bram Hoekstra - Teamleider at Coolblue', 'Teamleider at Coolblue')])
-check('enige profiel + Coolblue = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
+# 1. Enige profiel + specifiek bedrijf = zeker, met uitleg. Groot bedrijf alleen (Coolblue) = controleren (0 fouten).
+b, x = online('Bram Hoekstra', 'Teamleider bij Datafabriek Noord', 'Datafabriek Noord', '',
+              [li('bramhoekstra', 'Bram Hoekstra - Teamleider at Datafabriek Noord', 'Teamleider at Datafabriek Noord')])
+check('enige profiel + specifiek bedrijf = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
 check('uitleg "enige LinkedIn-profiel"', 'enige LinkedIn-profiel' in b.get('overeenkomst', ''), b)
 check('Excel: vinkje bij zeker', '✓ zeker' in x['gezocht_zekerheid'], x)
+b, x = online('Bram Hoekstra', 'Teamleider bij Coolblue', 'Coolblue', '',
+              [li('bramhoekstra', 'Bram Hoekstra - Teamleider at Coolblue', 'Teamleider at Coolblue')])
+check('enige profiel + alleen groot bedrijf (Coolblue) = controleren', b.get('zekerheid') == 'controleren', b)
 
 # 2. Enige profiel + alleen 1 plaats = controleren
 b, _ = online('Kees Leeg', 'Bakker bij Bakkerij Fictief', 'Bakkerij Fictief', 'amsterdam',
@@ -76,7 +79,7 @@ check('enige profiel + 1 plaats = controleren', b.get('zekerheid') == 'controler
 # 3. Enige profiel + 2 plaatsen = zeker (Sander van Rijswijk)
 b, _ = online('Sander van Rijswijk', 'Analist bij ING Erasmus Universiteit Rotterdam Amsterdam', 'ING', 'amsterdam',
               [li('sandervanrijswijk', 'Sander van Rijswijk - Analist', 'Amsterdam. Studied in Rotterdam.')])
-check('enige profiel + 2 plaatsen = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
+check('enige profiel + alleen 2 plaatsen = controleren (plaatsen zijn geen specifiek bewijs)', b.get('zekerheid') == 'controleren', b)
 check('geen "rijswijk" als plaats uit de achternaam', 'rijswijk' not in b.get('overeenkomst', '').replace('van rijswijk', ''), b)
 
 # 4. Alleen naamgenoten, niets klopt -> niet invullen, duidelijke uitleg
