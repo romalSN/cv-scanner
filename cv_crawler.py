@@ -3453,8 +3453,158 @@ def role_is_specific(role):
     return any(w not in GENERIC_EVIDENCE and len(w) >= 3 for w in words)
 
 
-MIN_JAREN_EIS = 5       # regel opdrachtgever: minimaal 5 jaar in NL/BE; 4 tot 5 jaar = twijfel (AI kijkt mee)
+MIN_JAREN_EIS = 5       # regel opdrachtgever: minimaal 5 jaar in NL/BE; 4 tot 5 jaar = marge (door)
 EXCLUDED = {}           # pad -> reden 'niet meegenomen' (laatste export)
+
+
+# ---- Stap 3-7: verblijfsduur in NL/BE ----------------------------------------------------------------------
+MAANDEN = {'jan': 1, 'januari': 1, 'january': 1, 'feb': 2, 'februari': 2, 'february': 2, 'mrt': 3, 'mar': 3,
+           'maart': 3, 'march': 3, 'apr': 4, 'april': 4, 'mei': 5, 'may': 5, 'jun': 6, 'juni': 6, 'june': 6,
+           'jul': 7, 'juli': 7, 'july': 7, 'aug': 8, 'augustus': 8, 'august': 8, 'sep': 9, 'sept': 9,
+           'september': 9, 'okt': 10, 'oct': 10, 'oktober': 10, 'october': 10, 'nov': 11, 'november': 11,
+           'dec': 12, 'december': 12}
+LOPEND = {'heden', 'present', 'nu', 'now', 'current', 'currently', 'today', 'huidig', 'actualidad', 'dd'}
+NL_BE_SCHOOL_WOORD = re.compile(
+    r' (?:basisschool|lagere school|middelbare school|secundair onderwijs|lyceum|gymnasium|scholengemeenschap|'
+    r'atheneum|koninklijk atheneum|havo|vwo|vmbo|mavo|mbo|roc|hogeschool|universiteit|hbo|wo bachelor|'
+    r'tu delft|tu eindhoven|hva|uva|vu|avans|fontys|saxion|windesheim|hanzehogeschool|inholland|nhl stenden|'
+    r'zuyd|han|erasmus universiteit|ku leuven|ugent|vub|hogent|thomas more|odisee|vives|howest|pxl|'
+    r'karel de grote|artesis|ap hogeschool|ucll|uhasselt|uantwerpen) ')
+ONLINE_RE = re.compile(r' (?:online|remote|op afstand|afstandsonderwijs|distance learning|e learning|thuiswerk|'
+                       r'work from home|wfh|vanuit nederland|vanuit belgie|from the netherlands|from belgium) ')
+AANKOMST_RE = re.compile(
+    r' (?:(?:moved|relocated|came|arrived|migrated|verhuisd|verhuist|gekomen|aangekomen|geemigreerd)'
+    r'(?: (?:to|in|naar))? (?:the )?(?P<land1>netherlands|nederland|belgium|belgie|holland)'
+    r'(?: (?:in|since|sinds))? (?:(?:[a-z]+|\d{1,2}) )?(?P<j1>(?:19|20)\d\d)|'
+    r'(?:living|wonend|woonachtig|resident|based|woon|woont|wonen)(?: [a-z]+){0,2} (?:in )?(?:the )?'
+    r'(?P<land2>netherlands|nederland|belgium|belgie|holland) (?:since|sinds|vanaf) (?:(?:[a-z]+|\d{1,2}) )?'
+    r'(?P<j2>(?:19|20)\d\d)|'
+    r'(?:sinds|since) (?:(?:[a-z]+|\d{1,2}) )?(?P<j3>(?:19|20)\d\d) (?:woonachtig |wonend |living |based |resident )?'
+    r'in (?:the )?(?P<land3>netherlands|nederland|belgium|belgie|holland)|'
+    r'(?:in|naar|to) (?:the )?(?P<land4>netherlands|nederland|belgium|belgie|holland) (?:sinds|since|vanaf) '
+    r'(?:(?:[a-z]+|\d{1,2}) )?(?P<j4>(?:19|20)\d\d)) ')
+
+
+def _jaar(tok):
+    """Jaartal uit een woord; duidelijke OCR-fout (2O18 -> 2018) wordt hersteld. Onmogelijke jaren: 0."""
+    t = tok.translate(str.maketrans({'o': '0', 'l': '1', 'i': '1'})) if sum(ch.isdigit() for ch in tok) >= 3 else tok
+    if not re.fullmatch(r'(?:19|20)\d\d', t):
+        return 0
+    y = int(t)
+    return y if 1950 <= y <= dt.date.today().year else 0
+
+
+def _maand(tok):
+    if tok in MAANDEN:
+        return MAANDEN[tok]
+    return int(tok) if re.fullmatch(r'0?[1-9]|1[0-2]', tok) else 0
+
+
+def periodes_uit_cv(snippet):
+    """Alle periodes met jaartallen: [(begin_maand, eind_maand, venster_tekst, exact)].
+    Maandnummer = jaar*12 + maand-1. Notaties: 2015 2020, 03 2018 06 2022, mar 2018 jun 2022, 2021 heden,
+    maart 2019 present. Alleen jaartallen: geen maanden verzonnen; de periode loopt dan van midden tot midden
+    (2015-2020 = 5 jaar). Onmogelijke of omgekeerde periodes worden overgeslagen (niet gokken)."""
+    words = _woorden_en_cijfers(snippet or '').split()
+    nu = dt.date.today()
+    nu_m = nu.year * 12 + nu.month - 1
+    uit, i = [], 0
+    while i < len(words):
+        y1 = _jaar(words[i])
+        if not y1:
+            i += 1
+            continue
+        m1 = _maand(words[i - 1]) if i > 0 and (words[i - 1] in MAANDEN or (re.fullmatch(r'\d{1,2}', words[i - 1])
+                                                and not _jaar(words[i - 1]))) else 0
+        j, eind, m2, lopend = i + 1, 0, 0, False
+        # einde binnen 3 woorden: (maand) jaar, of heden/present
+        for k in range(i + 1, min(i + 4, len(words))):
+            w = words[k]
+            if w in LOPEND:
+                lopend, j = True, k + 1
+                break
+            if _jaar(w) or re.fullmatch(r'(?:19|20)\d\d', w):
+                eind = _jaar(w)
+                if k > i + 1 and (words[k - 1] in MAANDEN or re.fullmatch(r'0?[1-9]|1[0-2]', words[k - 1])):
+                    m2 = _maand(words[k - 1])
+                j = k + 1
+                if not eind:
+                    eind = -1                      # onmogelijk jaartal (toekomst/OCR-onzin)
+                break
+            if w not in MAANDEN and w not in ('tot', 'to', 'until', 'till', 'en', 't', 'm', 'tm') \
+                    and not re.fullmatch(r'0?[1-9]|1[0-2]', w):
+                break
+        if eind == -1:
+            i = j
+            continue
+        if not eind and not lopend:
+            i += 1                                 # los jaartal: geen periode
+            continue
+        exact = bool(m1) and (bool(m2) or lopend)
+        b = y1 * 12 + (m1 - 1 if m1 else 6)
+        e = nu_m if lopend else (eind * 12 + (m2 - 1 if m2 else 6))
+        if e < b or e > nu_m:
+            i = j
+            continue                               # tegenstrijdig: einde voor begin
+        venster = ' ' + ' '.join(words[j:j + 25]) + ' '
+        voor = ' ' + ' '.join(words[max(0, i - 4):i]) + ' '
+        uit.append((b, max(e, b), venster, exact, voor))
+        i = j
+    return uit
+
+
+def _is_nl_be(venster):
+    nl = ' ' + venster
+    plaats = any(f' {p} ' in nl for p in NL_PLACES | BE_PLACES) or any(f' {p} ' in nl for p in NL_LAND | BE_LAND)
+    return plaats or bool(NL_BE_SCHOOL_WOORD.search(nl))
+
+
+def _is_buitenland(venster):
+    buiten = (FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE - BE_PLACES
+    return any(f' {p} ' in venster for p in buiten)
+
+
+def verblijf_beoordelen(snippet):
+    """Verblijfsduur in NL/BE volgens het cv. Geeft (uitkomst, jaren, uitleg):
+    - 'bevestigd'  : 5 jaar of meer aantoonbaar (werk/opleiding/adres met NL/BE-plaats of NL/BE-school)
+    - 'marge'      : 4 tot 5 jaar aantoonbaar (door, maar 5 jaar is NIET bevestigd)
+    - 'te_kort'    : het cv zegt zelf wanneer iemand naar NL/BE kwam (bv. 'moved to the Netherlands in 2024')
+                     en er staat niets van eerder verblijf in NL/BE -> volledige verblijfsduur bekend en < 4 jaar
+    - 'onbekend'   : minder zichtbaar, maar geen bewijs van de volledige duur -> gewoon door
+    Overlap telt één keer; gaten zijn geen buitenland; werk-/schoolplaats is aanwijzing, geen woonplaats.
+    Online/remote vanuit NL/BE telt als NL/BE; online vanuit buitenland niet als NL/BE."""
+    nu = dt.date.today()
+    nu_m = nu.year * 12 + nu.month - 1
+    maanden = set()
+    vanuit_nlbe = re.compile(r' (?:vanuit|from) (?:the )?(?:nederland|netherlands|belgie|belgium) ')
+    for b, e, venster, _exact, voor in periodes_uit_cv(snippet):
+        stuk = venster[:160]
+        ctx = voor + stuk                                   # 'online cursus 2019 2022 ...' staat soms ervoor
+        if vanuit_nlbe.search(ctx):
+            maanden |= set(range(b, e + (1 if e == b else 0)))   # remote/online vanuit NL/BE telt als NL/BE
+        elif _is_nl_be(stuk) and not (ONLINE_RE.search(ctx) and _is_buitenland(ctx)):
+            maanden |= set(range(b, e + (1 if e == b else 0)))
+    jaren = round(len(maanden) / 12, 1)
+    text = ' ' + _woorden_en_cijfers(snippet or '') + ' '
+    aankomst = 0
+    for m in AANKOMST_RE.finditer(text):
+        y = _jaar(m.group('j1') or m.group('j2') or m.group('j3') or m.group('j4'))
+        if y:
+            aankomst = min(aankomst, y) if aankomst else y
+    if aankomst:
+        sinds = nu_m - (aankomst * 12 + 6)
+        eerder = [x for x in maanden if x < aankomst * 12]
+        if eerder:
+            return ('onbekend' if jaren < MIN_JAREN_NL else 'marge' if jaren < MIN_JAREN_EIS else 'bevestigd',
+                    jaren, f'kwam {aankomst}, maar ook eerder in NL/BE')     # tegenstrijdig: niet gokken
+        jaren = max(jaren, round(sinds / 12, 1))
+        if jaren < MIN_JAREN_NL:
+            return 'te_kort', jaren, f'in NL/BE sinds {aankomst}'
+    if jaren >= MIN_JAREN_EIS:
+        return 'bevestigd', jaren, ''
+    if jaren >= MIN_JAREN_NL:
+        return 'marge', jaren, ''
+    return 'onbekend', jaren, ''
 
 
 def _periodes_met_plaats(snippet):
@@ -3498,19 +3648,13 @@ def filter_kandidaat(doc, phones, emails, ai_vraag):
         # Twee verschillende AI-vragen moeten het eens zijn voordat iemand wegvalt (geen onterechte uitsluiting).
         if ai_vraag('woont') == 'nee' and ai_vraag('woont_buiten') == 'ja':
             return 'weg', 'woont niet in Nederland of België'
-    # 3. Minimaal 5 jaar in NL/BE (alleen als het cv een buitenlandse periode laat zien)
-    laatst, _plek = laatst_buitenland(snippet)
-    if laatst:
-        jaren = max(jaren_nl_be(snippet), dt.date.today().year - laatst)
-        if jaren < MIN_JAREN_EIS:
-            a = ai_vraag('verblijf')
-            if a == 'ja':
-                return 'ok', ''
-            if a == 'nee':
-                return 'weg', f'korter dan {MIN_JAREN_EIS} jaar in Nederland of België'
-            if jaren < MIN_JAREN_NL and _periodes_met_plaats(snippet) >= 2:
-                return 'weg', f'korter dan {MIN_JAREN_EIS} jaar in Nederland of België'
-            return 'controleren', 'verblijfsduur in Nederland/België onduidelijk'
+    # 3. Minimaal 5 jaar in NL/BE. Alleen uitsluiten als het cv zelf de VOLLEDIGE verblijfsduur noemt
+    #    ('sinds 2024 in Nederland') en die korter is dan 4 jaar. Opgetelde werk-/studiejaren zijn nooit genoeg
+    #    om uit te sluiten: ontbrekende jaren zijn geen bewijs. 4-5 jaar = door (marge), niet als 5 jaar bevestigd.
+    uitkomst, _jaren, _uitleg = verblijf_beoordelen(snippet)
+    if uitkomst == 'te_kort':
+        if ai_vraag('verblijf') != 'ja':            # AI kan het alleen nog redden, nooit zelf uitsluiten
+            return 'weg', f'korter dan {MIN_JAREN_EIS} jaar in Nederland of België'
     return 'ok', ''
 
 

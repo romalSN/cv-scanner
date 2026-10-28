@@ -244,8 +244,11 @@ FILTER_VRAGEN = {
                      "welk adres het huidige is, is het antwoord 'nee'. Een buitenlands telefoonnummer, geboorteplaats, "
                      "nationaliteit, oud adres of werk/opleiding in het buitenland is NIET genoeg.",
                      ["ja", "nee"]),
-    'verblijf': ("Heeft deze persoon in totaal minstens 5 jaar in Nederland of België gewoond (huidige en eerdere "
-                 "jaren samen, werk en opleiding tellen mee)? Antwoord 'onduidelijk' als het cv het niet laat zien.",
+    'verblijf': ("Heeft deze persoon in totaal minstens 5 jaar in Nederland en/of België gewoond (eerdere en huidige "
+                 "jaren samen; school, studie en werk in NL/BE tellen mee als aanwijzing)? Gebruik alleen wat er echt "
+                 "staat: verzin geen jaartallen of adressen. Ontbrekende jaren zijn geen bewijs van 'nee'. "
+                 "Antwoord 'ja' als het cv eerder verblijf in NL/BE laat zien dat samen 5 jaar of meer is, 'nee' alleen "
+                 "als het cv duidelijk zegt dat de persoon pas korter dan 5 jaar in NL/BE is, anders 'onduidelijk'.",
                  ["ja", "nee", "onduidelijk"]),
 }
 

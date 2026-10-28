@@ -444,16 +444,16 @@ check('filter: Indiase naam, 9 jaar in NL = mee', fk[0] == 'ok', fk)
 fk = _filter(f"Rajesh Kumar\nAmsterdam\n06-00000705\nExperience\n{_Y-1} - present Developer, Adyen, Amsterdam. Responsible for the "
              f"development of payment services and worked with the team.\n{_Y-6} - {_Y-1} Developer, Infosys, Pune, India. "
              "Developed tools for the clients and maintained the systems.", ['+31600000705'])
-check('filter: pas 1 jaar in NL (duidelijk in cv) = niet meegenomen (verblijf)', fk[0] == 'weg' and 'jaar' in fk[1], fk)
+check('filter: 1 jaar NL-werk zichtbaar, daarvoor India-werk, geen aankomstjaar = door (werkjaren zijn geen bewijs)', fk[0] == 'ok', fk)
 _twijfel = (f"Rajesh Kumar\nAmsterdam\n06-00000706\nExperience\n{_Y-4} - present Developer, Adyen, Amsterdam. Responsible for the "
             f"development of payment services and worked with the team.\n{_Y-9} - {_Y-4} Developer, Infosys, Pune, India. "
             "Developed tools for the clients and maintained the systems.")
 fk = _filter(_twijfel, ['+31600000706'])
-check('filter: 4 jaar in NL (marge) zonder AI = controleren', fk[0] == 'controleren', fk)
+check('filter: 4 jaar in NL (marge) zonder AI = door', fk[0] == 'ok', fk)
 fk = _filter(_twijfel, ['+31600000706'], ai={'verblijf': 'ja'})
 check('filter: 4 jaar in NL, AI bevestigt 5 jaar = mee', fk[0] == 'ok', fk)
 fk = _filter(_twijfel, ['+31600000706'], ai={'verblijf': 'nee'})
-check('filter: 4 jaar in NL, AI zegt nee = niet meegenomen', fk[0] == 'weg', fk)
+check('filter: 4 jaar in NL, AI zegt nee = door (AI-vermoeden is geen bewijs)', fk[0] == 'ok', fk)
 fk = _filter(f"Jan de Vries\nLondon, United Kingdom\n+44 7700 900123\nWerkervaring\n{_Y-2} - heden Developer bij Monzo. "
              f"Verantwoordelijk voor de ontwikkeling van het platform.\n{_Y-10} - {_Y-2} Developer bij Datafabriek, Utrecht. "
              "Ik heb daar veel ervaring opgedaan met het team.", ['+447700900123'], werk='utrecht')
@@ -538,6 +538,66 @@ check('postcode: onleesbaar = door', _filter("Jan\n2?1l A8\n" + _ENK, [])[0] == 
 
 fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee', 'woont_buiten': 'nee'})
 check('filter: AI-vragen oneens = door (geen onterechte uitsluiting)', fk[0] == 'ok', fk)
+
+# --- Stap 3-7: verblijfsduur (verplichte tabel + extra) ---
+def _v(text):
+    return c.verblijf_beoordelen(c.normalized_snippet(text))
+def _f(text, phones=(), ai=None):
+    return _filter(text, list(phones), ai=ai)[0]
+_W = "Ik werk met het team aan de ontwikkeling van systemen en help klanten."
+t = f"Jan\nUtrecht\nWerkervaring\n{_Y-8} - heden Developer bij Datafabriek, Utrecht. {_W}"
+check('verblijf: 8 jaar NL = bevestigd, door', _v(t)[0] == 'bevestigd' and _f(t) == 'ok', _v(t))
+t = f"Jan\nUtrecht\nWerkervaring\n{_Y-6} - {_Y-3} Developer bij Havenbouw, Antwerpen. {_W}\n{_Y-3} - heden Developer bij Datafabriek, Utrecht. {_W}"
+check('verblijf: 3 jaar NL + 3 jaar BE = bevestigd', _v(t)[0] == 'bevestigd', _v(t))
+_m = (_dt.date.today().month - 6 - 1) % 12 + 1; _yy = _Y - 4 - (1 if _dt.date.today().month <= 6 else 0)
+t = f"Jan\nUtrecht\nWerkervaring\n{_m:02d}/{_yy} - heden Developer bij Datafabriek, Utrecht. {_W}"
+check('verblijf: 4,5 jaar NL = marge (door, niet als 5 jaar bevestigd)', _v(t)[0] == 'marge' and _f(t) == 'ok', _v(t))
+t = f"Jan\nWerkervaring\n{_Y-2} - heden Developer bij Datafabriek, Utrecht. {_W}"
+check('verblijf: alleen 2 jaar werk = onbekend, door', _v(t)[0] == 'onbekend' and _f(t) == 'ok', _v(t))
+t = f"Jan\nWerkervaring\n{_Y-3} - {_Y} Developer bij Datafabriek, Rotterdam. {_W}"
+check('verblijf: alleen werk 2023-2026 = niet uitsluiten', _f(t) == 'ok')
+t = "Jan\nDeveloper. " + _W
+check('verblijf: geen adres of jaren = door', _v(t)[0] == 'onbekend' and _f(t) == 'ok', _v(t))
+t = (f"Jan de Vries\nUtrecht\nOpleiding\n{_Y-16} - {_Y-10} Havo, Stedelijk Gymnasium Utrecht\nWerkervaring\n"
+     f"{_Y-10} - {_Y-7} Developer bij Monzo, London. {_W}\n{_Y-7} - heden Developer bij Datafabriek, Utrecht. {_W}")
+check('verblijf: middelbare school NL, daarna Londen = bevestigd (school + werk)', _v(t)[0] == 'bevestigd' and _f(t) == 'ok', _v(t))
+t = (f"Jan de Vries\nOpleiding\n{_Y-16} - {_Y-10} Lyceum, Haarlem\nWerkervaring\n{_Y-10} - heden Developer bij Monzo, London. {_W}")
+check('verblijf: NL-school, nu lang Londen, geen aankomstjaar = niet uitsluiten op verblijf', c.verblijf_beoordelen(c.normalized_snippet(t))[0] != 'te_kort')
+t = (f"Rajesh\nAmsterdam\nEducation\n{_Y-14} - {_Y-10} B.Tech, Anna University, Chennai\nExperience\n{_Y-8} - present Developer, Adyen, Amsterdam. {_W}")
+check('verblijf: buitenlandse universiteit, nu 8 jaar NL = door', _v(t)[0] == 'bevestigd' and _f(t) == 'ok', _v(t))
+t = (f"Lies\nMeir 10, 2000 Antwerpen\n+32 470 00 00 01\nExperience\n{_Y-6} - present Developer at Google (remote) from Belgium. {_W}")
+check('verblijf: buitenlandse werkgever, woont in BE = door', _f(t, ['+32470000001']) == 'ok')
+t = (f"Jan\nWerkervaring\n{_Y-5} - heden Developer bij Datafabriek, Utrecht. {_W}\n{_Y-5} - heden Docent bij ROC, Utrecht. {_W}")
+check('verblijf: twee overlappende banen van 5 jaar != 10 jaar', 4.5 <= _v(t)[1] <= 5.5, _v(t))
+t = (f"Jan\nWerkervaring\n{_Y-12} - {_Y-10} Developer bij Datafabriek, Utrecht. {_W}\n{_Y-3} - heden Developer bij Codewerk, Utrecht. {_W}")
+check('verblijf: gaten in werkhistorie = niet uitsluiten', _f(t) == 'ok')
+t = (f"Arjun\nStudieadres: Anna University Campus, Chennai, India\n06-00000901\nExperience\n{_Y-6} - present Developer, Adyen, Amsterdam. {_W}")
+check('woon: alleen buitenlands studieadres = geen huidig buitenlands adres', _w(t, ['+31600000901']) != 'buitenland' and _f(t, ['+31600000901']) == 'ok', _w(t, ['+31600000901']))
+t = (f"Arjun\nExperience\n{_Y-12} - {_Y-9} Developer, Infosys, Pune, India. {_W}\n{_Y-2} - present Developer, Adyen, Amsterdam. {_W}")
+check('woon: alleen oude buitenlandse werkgever = geen bewijs huidig buitenland', _w(t) in ('', 'nl') and _f(t) == 'ok', _w(t))
+t = f"Arjun\nMoved to the Netherlands in {_Y-1}.\nExperience\n{_Y-1} - present Developer, Adyen, Amsterdam. {_W}"
+check('verblijf: onzekere woonduur, AI onduidelijk, geen bewijs volledige duur -> door', _filter(f"Arjun\nExperience\n{_Y-1} - present Developer, Adyen, Amsterdam. {_W}", [], ai={'verblijf': 'onduidelijk'})[0] == 'ok')
+check('verblijf: AI niet beschikbaar = niet uitsluiten op ontbrekende info', _filter(f"Arjun\nExperience\n{_Y-1} - present Developer, Adyen, Amsterdam. {_W}", [], ai=None)[0] == 'ok')
+t2 = f"Jan\nWerkervaring\n{_Y} - {_Y-6} Developer bij Datafabriek, Utrecht. {_W}\n{_Y+3} - heden Developer bij Codewerk. {_W}"
+check('verblijf: tegenstrijdige/onmogelijke jaartallen = niet gokken, door', _f(t2) == 'ok' and _v(t2)[1] == 0, _v(t2))
+check('woon: actueel bevestigd buitenlands adres = woonplaatsregel (niet meegenomen)',
+      _filter("Rahul\nCurrent address: MG Road 5, Bangalore, India\n+91 98450 12345\n" + _ENK, ['+919845012345'])[0] == 'weg')
+check('verblijf: expliciet sinds vorig jaar in NL, niets eerder = te kort -> niet meegenomen', _v(t)[0] == 'te_kort' and _f(t) == 'weg', _v(t))
+check('verblijf: expliciet te kort, maar AI ziet 5 jaar = door', _filter(t, [], ai={'verblijf': 'ja'})[0] == 'ok')
+t3 = f"Arjun\nLiving in the Netherlands since {_Y-2}\nOpleiding\n{_Y-15} - {_Y-10} Lyceum, Haarlem\nExperience\n{_Y-2} - present Developer, Adyen, Amsterdam. {_W}"
+check('verblijf: "sinds" maar ook eerder NL-school = niet gokken, geen uitsluiting', _v(t3)[0] != 'te_kort' and _f(t3) == 'ok', _v(t3))
+t4 = f"Arjun\nIn Nederland sinds {_Y-7}\nWerkervaring\n{_Y-2} - heden Developer bij Codewerk, Utrecht. {_W}"
+check('verblijf: expliciet sinds 7 jaar in NL = bevestigd', _v(t4)[0] == 'bevestigd', _v(t4))
+# datumnotaties
+for _txt, _min, _max in ((f"03/{_Y-6} - 06/{_Y-1} Developer bij X, Utrecht", 5.2, 5.3),
+                         (f"Mar {_Y-6} - Jun {_Y-1} Developer at X, Utrecht", 5.2, 5.3),
+                         (f"maart {_Y-6} tot juni {_Y-1} Developer bij X, Utrecht", 5.2, 5.3),
+                         (f"{_Y-6}–{_Y-1} Developer bij X, Utrecht", 5.0, 5.0),
+                         (f"2O{str(_Y-6)[2:]} - {_Y-1} Developer bij X, Utrecht", 5.0, 5.0)):
+    _j = _v("Piet\n" + _txt + ". " + _W)[1]
+    check(f'datum: {_txt[:28]} = {_min}-{_max} jaar', _min <= _j <= _max, _j)
+_j = _v(f"Jan\nOnline cursus {_Y-6} - {_Y-1} Universiteit Utrecht, vanuit India Pune. {_W}")
+check('school: online vanuit buitenland telt niet als NL-verblijf', _j[1] == 0, _j)
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
