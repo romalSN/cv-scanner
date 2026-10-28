@@ -607,6 +607,32 @@ def stage_from(text):
     return ' ; '.join(found[:4])
 
 
+LEVERANCIER_LABEL = re.compile(r'(?i)^(?:via|aangeboden door|aangeboden via|namens|leverancier|bemiddeld door|'
+                               r'ingediend door|voorgesteld door|supplier|agency|bureau)\s*[:\-]?\s*(.{2,60})$')
+LEGAL_SUFFIX = re.compile(r'(?i)(?:^|\s)(?:b\.?v\.?|bvba|n\.?v\.?|v\.?o\.?f\.?|ltd\.?|gmbh|holding)(?=\s|$|[.,])')
+
+
+def leverancier_from(text):
+    """Bedrijf bovenaan het cv (detacheerder, bureau of eigen BV): 'Via: Detachering Voorbeeld',
+    'Voorbeeld Experts BV'. Alleen in de kop (vóór het eerste cv-kopje), niet uit de werkervaring."""
+    lines = [' '.join(l.split()) for l in (text or '').splitlines()[:15] if l.strip()]
+    for line in lines[:12]:
+        clean = line.strip(' :•*-\t')
+        if any(rx.fullmatch(clean) for rx in CV_SECTION_PATTERNS.values()):
+            break                                   # werkervaring e.d. begint: daar staan werkgevers, geen leverancier
+        if re.search(r'\b(?:19|20)\d{2}\b|@|https?://|www\.', line):
+            continue
+        m = LEVERANCIER_LABEL.match(clean)
+        if m:
+            return m.group(1).strip(' .,')
+        words = clean.split()
+        if 1 <= len(words) <= 6 and (LEGAL_SUFFIX.search(clean) or any(
+                asciifold(w).lower().strip('.,') in COMPANY_WORDS for w in words)):
+            if not re.search(r'(?i)\b(?:cv|curriculum|vitae|profiel|resume)\b', clean):
+                return clean.strip(' .,')
+    return ''
+
+
 def woonplaats_from(text):
     """Woonplaats = plaats in de kop of op een contactregel (naast adres, postcode, mail of telefoon).
     Een plaats bij een baan of stage ('Projectmanager, Den Haag') is de WERKplek, niet de woonplaats."""
@@ -1706,6 +1732,8 @@ def db_open(out):
         db.execute('ALTER TABLE docs ADD COLUMN received_ns INTEGER NOT NULL DEFAULT 0')
     if 'websites' not in current:
         db.execute("ALTER TABLE docs ADD COLUMN websites TEXT NOT NULL DEFAULT '[]'")
+    if 'leverancier' not in current:
+        db.execute("ALTER TABLE docs ADD COLUMN leverancier TEXT NOT NULL DEFAULT ''")
     db.execute('CREATE INDEX IF NOT EXISTS docs_sha ON docs(sha)')
     # Eigen API-sleutels mogen nooit in de index of Excel staan (oude versies lazen ze soms mee).
     db.execute("DELETE FROM docs WHERE path LIKE '%_sleutel.txt' OR path LIKE '%.cv-scanner-windows%' "
@@ -2138,7 +2166,7 @@ def ingest(args, db, out, roots=None, label=None):
                             tokens=json.dumps(signature(text)), year=year_from(text,p.stem),
                             employer=field_value(text,['werkgever','huidige werkgever','employer','company']) or current_job(text)[1],
                             role=field_value(text,['functie','huidige functie','job title','position']) or current_job(text)[0],
-                            websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text),
+                            websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text), leverancier=leverancier_from(text),
                             archive=dst, error='', classifier_version=CLASSIFIER_VERSION,
                             name_verified=int(bool(name) and status == 'cv'))
                 write_doc(db, data)
@@ -2341,7 +2369,7 @@ def process_document(real_file, path_str, stem, ext, stat, args, db, archive, la
               tokens=json.dumps(signature(text)), year=year_from(text, stem),
               employer=field_value(text, ['werkgever','huidige werkgever','employer','company']) or current_job(text)[1],
               role=field_value(text, ['functie','huidige functie','job title','position']) or current_job(text)[0],
-              websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text),
+              websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text), leverancier=leverancier_from(text),
               archive=dst, error='', classifier_version=CLASSIFIER_VERSION,
               name_verified=int(bool(name) and status == 'cv')))
     summary[status] += 1
@@ -3117,7 +3145,9 @@ def deduplicate(db, merge_file=None):
                 if values:
                     return values[0]
             return ''
-        candidate = dict(persoon_id=ident, naam=name, email=latest('emails'),
+        levs = collections.Counter(d['leverancier'] for d in group if 'leverancier' in d.keys() and d['leverancier'])
+        candidate = dict(persoon_id=ident, naam=name, leverancier=levs.most_common(1)[0][0] if levs else '',
+           email=latest('emails'),
            telefoon=latest('phones'), linkedin=latest('links'),
            alle_emails=' | '.join(all_emails), alle_telefoons=' | '.join(all_phones),
            alle_linkedin=' | '.join(all_links), huidige_functie=roles[0] if roles else '',
@@ -3428,7 +3458,7 @@ def only_ticks(text):
 def personen_overzicht(people):
     """Eerste tabblad: per gegeven 'uit cv' naast 'gezocht' (online), plus zekerheid en waarom."""
     cols = ['naam', 'kandidaat_id', 'cv_id', 'open_cv', 'email', 'email_bron', 'telefoon', 'telefoon_bron',
-            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom',
+            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'leverancier',
             ]
     rows = []
     for p in people:
@@ -3493,7 +3523,7 @@ def personen_overzicht(people):
                          email=email, email_bron=email_bron, telefoon=tel, telefoon_bron=tel_bron,
                          linkedin=li, linkedin_bron=li_bron,
                          gezocht_zekerheid='\n'.join(labels), gezocht_waarom=pretty_waarom(only_ticks(p.get('online_waarom', ''))),
-                         huidige_functie=role, laatst_bekende_werkgever=employer,
+                         huidige_functie=role, laatst_bekende_werkgever=employer, leverancier=p.get('leverancier', ''),
                          zelf_zoeken_google=google_xray_link(p['naam'], not p['email'] and not found('email', ''),
                                                              not p['telefoon'] and not found('telefoon', '')),
                          persoon_id=p['persoon_id']))

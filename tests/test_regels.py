@@ -349,6 +349,10 @@ _ar.available, _ar.classify = _o
 
 check('bedrijfsregel bovenaan: naam die bij e-mail past', c.guess_name("Jak Verhuur\nLisa Groen\nWerkervaring", 'document', ['lisa.groen@voorbeeldmail.nl']) == 'Lisa Groen')
 
+check('leverancier bovenaan (BV)', c.leverancier_from("Voorbeeld Experts BV\nCV van Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == 'Voorbeeld Experts BV')
+check('leverancier via-regel', c.leverancier_from("Anna Visser\nVia: Detachering Voorbeeld\nWerkervaring") == 'Detachering Voorbeeld')
+check('werkgever in werkervaring is geen leverancier', c.leverancier_from("Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == '')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

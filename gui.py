@@ -942,7 +942,8 @@ class ScannerApp:
         names = {'kandidaat_id': 'Kandidaat-ID', 'cv_id': 'Cv-ID', 'email_bron': 'E-mail komt uit',
                  'telefoon_bron': 'Telefoon komt uit', 'linkedin_bron': 'LinkedIn komt uit',
                  'gezocht_zekerheid': 'Online zekerheid', 'gezocht_waarom': 'Waarom (wat klopt)',
-                 'huidige_functie': 'Functie', 'laatst_bekende_werkgever': 'Werkgever'}
+                 'huidige_functie': 'Functie', 'laatst_bekende_werkgever': 'Werkgever',
+                 'leverancier': 'Leverancier / bureau'}
 
         win = tk.Toplevel(self.root)
         win.title(f'Kandidaten ({len(rows)})')
