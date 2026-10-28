@@ -1245,6 +1245,11 @@ def werkgevers_from(text):
             re.search(r'\s[·|]\s*([A-Z0-9][\w&.\'\- ]{1,50})', line)
         if m:
             org = re.split(r'\s*(?:,|\(| - | – |·|\|)\s*', m.group(1))[0].strip(' .')
+            # Zin loopt door: 'Cloudig. Verantwoordelijk voor ...' -> 'Cloudig' (niet bij 'J.P. Morgan', 'B.V.').
+            zin = re.search(r'(?<![A-Z])(?<![A-Z]\.[A-Z])\.\s+(?=[A-Z][a-z])', org)
+            if zin and len(org[:zin.start()]) >= 3:
+                org = org[:zin.start()].strip(' .')
+            org = re.split(r'(?<=B\.V\.|N\.V\.)\s+(?=[A-Z][a-z])', org)[0].strip(' ')
             if len(org) >= 3 and normalized_name(org) not in NL_PLACES and org not in out:
                 out.append(org)
     return ' ; '.join(out[:8])
@@ -3151,6 +3156,12 @@ def safe_pair(a, b):
         if shared_strong and shared_weak and zelfde_werk(a, b):
             return True, False, ('zelfde naam + zelfde ' + ', '.join(sorted(shared_strong)) + ' + ' +
                                  ', '.join(sorted(x.split(':', 1)[1] for x in shared_weak)) + ' (nieuwere cv-versie)')
+    if same_name and len(an.split()) >= 2:
+        # Nieuwe versie zonder gedeeld contact (ander mailadres én nummer): zelfde volledige naam + minstens 2
+        # verschillende (niet-grote) werkgevers met dezelfde jaren + geen botsende loopbaan = dezelfde persoon.
+        zw = zelfde_werk(a, b)
+        if len(zw) >= 2 and not loopbaan_botst(a, b):    # 2 perioden (werkgever + beginjaar) precies gelijk
+            return True, False, 'zelfde naam + zelfde werkgevers met dezelfde jaren (' + ', '.join(zw[:2]) + ')'
     if same_name or (name_sim >= .91 and (overlap >= 9 or text_sim >= .60)):
         return False, True, f'gelijke naam; inhoudsoverlap {overlap} termen; tekstovereenkomst {text_sim:.2f}'
     return False, False, ''
@@ -3945,7 +3956,7 @@ def werk_periodes(d):
         m = re.search(r' (?:bij|at|voor|for) ([a-z0-9]+(?: [a-z0-9]+)?)', stuk)
         if not m:
             continue
-        if BIG_EMPLOYERS.match(m.group(1)):
+        if BIG_EMPLOYERS.match(m.group(1)) or BIG_EMPLOYERS.match(m.group(1).split()[0]):
             w = '*' + m.group(1).split()[0]          # groot bedrijf: telt mee voor botsingen, niet als bewijs
         else:
             w = m.group(1).split()[0]
@@ -3979,7 +3990,7 @@ def zelfde_werk(a, b):
     """Dezelfde (niet-grote) werkgever met (bijna) dezelfde beginjaar in beide cv's: 'Datafabriek 2017-2021'."""
     pa, pb = werk_periodes(a), werk_periodes(b)
     return sorted({f'{w} {y1}' for w, y1, _e in pa for w2, z1, _f in pb
-                   if w == w2 and not w.startswith('*') and abs(y1 - z1) <= 1})
+                   if w == w2 and not w.startswith('*') and y1 == z1})
 
 
 def cv_samenvatting(d, max_chars=1800):
