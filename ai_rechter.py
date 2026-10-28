@@ -253,6 +253,66 @@ FILTER_VRAGEN = {
 }
 
 
+DUBBEL_VRAAG_1 = (
+    "Je krijgt twee cv's (automatisch uitgelezen: kleine letters, zonder leestekens). Zijn dit cv's van DEZELFDE "
+    "persoon (bijvoorbeeld een oudere en een nieuwere versie, of een Nederlandse en een Engelse versie), of van twee "
+    "verschillende personen?\n"
+    "Let op:\n"
+    "- Een nieuwere versie heeft vaak een baan erbij of is korter. Dat is dezelfde persoon als de werkgevers en "
+    "jaartallen die in beide staan overeenkomen.\n"
+    "- Hetzelfde vak (bv. allebei Java-developer), dezelfde grote werkgever of dezelfde school alleen is NIET genoeg.\n"
+    "- Andere voornaam, andere geboortedatum, andere opleiding in dezelfde jaren of andere werkgevers in dezelfde "
+    "jaren: verschillende personen.\n"
+    "- Twijfel je: 'onzeker'.\n"
+    "Antwoord met JSON: 'zelfde' (lijst met wat echt overeenkomt: werkgever+jaartal, opleiding+jaartal, "
+    "persoonlijke gegevens), 'verschil' (lijst met wat elkaar tegenspreekt), 'oordeel' (zelfde/anders/onzeker).")
+DUBBEL_SCHEMA_1 = {"type": "object", "properties": {
+    "zelfde": {"type": "array", "items": {"type": "string"}},
+    "verschil": {"type": "array", "items": {"type": "string"}},
+    "oordeel": {"type": "string", "enum": ["zelfde", "anders", "onzeker"]}},
+    "required": ["zelfde", "verschil", "oordeel"]}
+DUBBEL_VRAAG_2 = (
+    "Twee cv's. Noem een concreet feit dat in BEIDE cv's precies hetzelfde staat en dat bij maar één persoon past: "
+    "dezelfde werkgever met dezelfde jaren, dezelfde opleiding met hetzelfde jaar, of dezelfde geboortedatum. "
+    "Geen beroep, geen vaardigheid, geen plaats. Staat er zo'n feit in beide, antwoord dan 'ja' en noem het. "
+    "Staat er iets dat elkaar tegenspreekt (andere werkgever in dezelfde jaren, andere opleiding, andere "
+    "geboortedatum), antwoord 'nee'. Anders 'onzeker'.")
+DUBBEL_SCHEMA_2 = {"type": "object", "properties": {
+    "feit": {"type": "string"}, "antwoord": {"type": "string", "enum": ["ja", "nee", "onzeker"]}},
+    "required": ["feit", "antwoord"]}
+
+
+def zelfde_persoon(cv_a: str, cv_b: str) -> dict | None:
+    """Twee cv's vergelijken (alleen voor 'mogelijk dubbel'-paren). Twee verschillende vragen; 'zelfde' alleen als
+    BEIDE het zeggen. Geeft {'oordeel': 'zelfde'|'anders'|'onzeker', ...} of None (geen AI)."""
+    if not available():
+        return None
+    llm = _load()
+    if llm is None:
+        return None
+    tekst = f"CV 1:\n{cv_a[:2200]}\n\nCV 2:\n{cv_b[:2200]}"
+    try:
+        with _lock:
+            o1 = llm.create_chat_completion(messages=[{"role": "user", "content": DUBBEL_VRAAG_1 + "\n\n" + tekst}],
+                                            temperature=0, max_tokens=220,
+                                            response_format={"type": "json_object", "schema": DUBBEL_SCHEMA_1})
+        a1 = json.loads(o1['choices'][0]['message']['content'])
+        r1 = a1.get('oordeel') if a1.get('oordeel') in ('zelfde', 'anders', 'onzeker') else 'onzeker'
+        if r1 != 'zelfde':
+            return {'oordeel': r1, 'zelfde': a1.get('zelfde') or [], 'verschil': a1.get('verschil') or []}
+        with _lock:
+            o2 = llm.create_chat_completion(messages=[{"role": "user", "content": DUBBEL_VRAAG_2 + "\n\n" + tekst}],
+                                            temperature=0, max_tokens=80,
+                                            response_format={"type": "json_object", "schema": DUBBEL_SCHEMA_2})
+        a2 = json.loads(o2['choices'][0]['message']['content'])
+        r2 = a2.get('antwoord')
+        oordeel = 'zelfde' if r2 == 'ja' else 'anders' if r2 == 'nee' else 'onzeker'
+        return {'oordeel': oordeel, 'zelfde': a1.get('zelfde') or [], 'verschil': a1.get('verschil') or [],
+                'feit': str(a2.get('feit') or '')[:120]}
+    except Exception as exc:
+        return {'oordeel': 'onzeker', 'fout': str(exc)[:100]}
+
+
 def filter_vraag(soort: str, text: str) -> str | None:
     """Extra controle bij twijfel (taal / woont in NL-BE / 5 jaar in NL-BE). Geeft het antwoord of None (geen AI)."""
     if not available() or soort not in FILTER_VRAGEN:

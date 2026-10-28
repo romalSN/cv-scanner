@@ -2916,26 +2916,59 @@ class DSU:
             self.parent[max(a,b)] = min(a,b)
 
 
+# Contactgegevens van bureaus/recruiters (staan bij 3+ verschillende namen, of info@-achtig): tellen nooit als
+# bewijs om twee cv's samen te voegen. Wordt per scan gevuld in deduplicate().
+BUREAU_CONTACT = set()
+GESPLITST = []   # (oud persoon-id, bestanden) van kandidaten die bij deze scan zijn gesplitst
+
+
+def _voornaam_botst(an, bn):
+    """Twee volledige, verschillende voornamen (Jan / Piet, Jan / Jana) = verschillende personen.
+    Geen botsing bij een voorletter (J / Jan), een korte vorm (Chris / Christopher, Ron / Ronald) of één naam leeg."""
+    if not an or not bn:
+        return False
+    a0, b0 = an.split()[0], bn.split()[0]
+    if a0 == b0 or len(a0) <= 2 or len(b0) <= 2 or a0 in NAME_FILLERS or b0 in NAME_FILLERS:
+        return False
+    kort, lang = sorted((a0, b0), key=len)
+    if lang.startswith(kort) and len(lang) - len(kort) >= 3 and len(kort) >= 3:
+        return False                      # Chris / Christopher, Ron / Ronald
+    return True
+
+
+def harde_blokkade(a, b):
+    """Redenen waarom twee cv's NOOIT dezelfde persoon kunnen zijn (ook niet als de AI 'zelfde' zegt)."""
+    an, bn = normalized_name(a['name']), normalized_name(b['name'])
+    if _voornaam_botst(an, bn):
+        return 'andere voornaam'
+    keys = a.keys() if hasattr(a, 'keys') else a
+    if 'path' in keys and 'path' in (b.keys() if hasattr(b, 'keys') else b):
+        fa, fb = naam_uit_bestandsnaam(a['path'], a['snippet']), naam_uit_bestandsnaam(b['path'], b['snippet'])
+        wa = {w for w in normalized_name(fa).split() if w not in NAME_FILLERS}
+        wb = {w for w in normalized_name(fb).split() if w not in NAME_FILLERS}
+        if wa and wb and not (wa & wb):
+            return 'andere naam in bestandsnaam'
+    return ''
+
+
 def safe_pair(a, b):
     """Geeft (auto, review, motivatie); automatisch uitsluitend met sterk bewijs."""
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
     same_name = bool(an and bn and an == bn)
     name_sim = difflib.SequenceMatcher(None, an, bn).ratio() if an and bn else 0
     conflict = bool(an and bn and name_sim < .70)
-    ae, be = set(json.loads(a['emails'])), set(json.loads(b['emails']))
-    ap, bp = set(json.loads(a['phones'])), set(json.loads(b['phones']))
-    al, bl = set(json.loads(a['links'])), set(json.loads(b['links']))
+    ae, be = set(json.loads(a['emails'])) - BUREAU_CONTACT, set(json.loads(b['emails'])) - BUREAU_CONTACT
+    ap, bp = set(json.loads(a['phones'])) - BUREAU_CONTACT, set(json.loads(b['phones'])) - BUREAU_CONTACT
+    al, bl = set(json.loads(a['links'])) - BUREAU_CONTACT, set(json.loads(b['links'])) - BUREAU_CONTACT
+    ae = {e for e in ae if not GENERIC_EMAIL.match(e)}
+    be = {e for e in be if not GENERIC_EMAIL.match(e)}
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
-    # Bestandsnamen met (in het cv bevestigde) namen van verschillende personen: nooit samen, ook niet bij
-    # gedeelde contactgegevens (bureau-cv's met het telefoonnummer en de LinkedIn van de recruiter).
-    if 'path' in a.keys() and 'path' in b.keys():
-        fa, fb = naam_uit_bestandsnaam(a['path'], a['snippet']), naam_uit_bestandsnaam(b['path'], b['snippet'])
-        wa = {w for w in normalized_name(fa).split() if w not in NAME_FILLERS}
-        wb = {w for w in normalized_name(fb).split() if w not in NAME_FILLERS}
-        if wa and wb and not (wa & wb):
-            return False, False, ''
+    # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
+    blok = harde_blokkade(a, b)
+    if blok:
+        return False, False, ''
     # Eén cv zonder bruikbare naam ('Persoonlijke Gegevens'), het andere met naam: samen als e-mail ÉN telefoon
     # gelijk zijn en het mailadres bij die naam past (frank.jansen@ bij Frank Jansen). Niet bij info@/bureau-adressen.
     if bool(an) != bool(bn) and (ap & bp):
@@ -3828,6 +3861,84 @@ def filter_kandidaat(doc, phones, emails, ai_vraag):
     return 'ok', ''
 
 
+def _bewijs_stukken(a, b):
+    """Onafhankelijke Python-bewijzen dat twee cv's van dezelfde persoon zijn (bureaugegevens tellen niet)."""
+    stukken = []
+    def sets(d, k):
+        try:
+            return set(json.loads(d[k] or '[]')) - BUREAU_CONTACT
+        except ValueError:
+            return set()
+    if {e for e in sets(a, 'emails') & sets(b, 'emails') if not GENERIC_EMAIL.match(e)}:
+        stukken.append('zelfde persoonlijk e-mailadres')
+    if sets(a, 'phones') & sets(b, 'phones'):
+        stukken.append('zelfde telefoonnummer')
+    if sets(a, 'links') & sets(b, 'links'):
+        stukken.append('zelfde LinkedIn')
+    an, bn = normalized_name(a['name']), normalized_name(b['name'])
+    if an and an == bn and len(an.split()) >= 2:
+        stukken.append('zelfde volledige naam')
+    def lijst(d, k):
+        v = d[k] if k in d.keys() else ''
+        return {normalized_name(x) for x in re.split(r'\s*[;|]\s*', v or '') if len(normalized_name(x)) >= 4}
+    wg = {w for w in lijst(a, 'werkgevers') & lijst(b, 'werkgevers') if not BIG_EMPLOYERS.match(w)}
+    if wg:
+        stukken.append('zelfde werkgever (' + sorted(wg)[0] + ')')
+    if lijst(a, 'opleidingen') & lijst(b, 'opleidingen'):
+        stukken.append('zelfde opleiding')
+    return stukken
+
+
+def ai_dubbel_controle(docs, reviews, samenvoegen, out_dir):
+    """'Mogelijk dubbel'-paren zoveel mogelijk automatisch oplossen:
+    1. Python: harde blokkades (andere voornaam, andere persoon in bestandsnaam) -> nooit samen.
+    2. Python: minstens 2 onafhankelijke bewijzen (persoonlijk mailadres, telefoon, LinkedIn, volledige naam,
+       werkgever, opleiding); bureaugegevens tellen niet.
+    3. AI vergelijkt beide cv's (houdt rekening met oude/nieuwe versie en andere taal).
+    4. Tweede, gerichte AI-vraag: een concreet feit dat in beide staat (werkgever+jaren, opleiding+jaar).
+    5. Python: past het bij ALLE cv's van de kandidaatgroep? Pas dan samen. Anders blijft het een twijfelgeval."""
+    if not reviews or os.environ.get('CV_AI_DUBBEL', '1') != '1':
+        return reviews
+    try:
+        import ai_rechter
+        if not ai_rechter.available():
+            return reviews
+    except Exception:
+        return reviews
+    cache_path = (out_dir / 'ai_dubbel.json') if out_dir else None
+    try:
+        cache = json.loads(cache_path.read_text(encoding='utf-8')) if cache_path else {}
+    except (OSError, ValueError):
+        cache = {}
+    over, samen = [], 0
+    for a, b, reason in reviews:
+        da, db_ = docs[a], docs[b]
+        if harde_blokkade(da, db_) or len(_bewijs_stukken(da, db_)) < 2:
+            over.append((a, b, reason))
+            continue
+        key = f"{ai_rechter.MODEL_ID}|" + '|'.join(sorted((da['sha'] or da['path'], db_['sha'] or db_['path'])))
+        res = cache.get(key)
+        if res is None:
+            res = ai_rechter.zelfde_persoon(da['snippet'] or '', db_['snippet'] or '')
+            if res is None:
+                over.append((a, b, reason))
+                continue
+            if not res.get('fout'):
+                cache[key] = res
+        if res.get('oordeel') == 'zelfde' and samenvoegen(a, b):
+            samen += 1
+            continue
+        over.append((a, b, reason))
+    if cache_path:
+        try:
+            cache_path.write_text(json.dumps(cache), encoding='utf-8')
+        except OSError:
+            pass
+    if samen:
+        print(f'AI-DUBBEL: {samen} mogelijk dubbele kandidaten automatisch samengevoegd (Python + 2x AI akkoord).', flush=True)
+    return over
+
+
 def deduplicate(db, merge_file=None):
     if merge_file:
         apply_decisions(db, Path(merge_file).parent)
@@ -3882,15 +3993,42 @@ def deduplicate(db, merge_file=None):
         for link in json.loads(d['links']): by_link[link].append(i)
         name = normalized_name(d['name'])
         if name: by_name[name].append(i)
+    # Bureau-/recruitergegevens: een e-mail, nummer of LinkedIn dat in cv's van 3+ verschillende namen staat.
+    BUREAU_CONTACT.clear()
+    for groups in (by_email, by_phone, by_link):
+        for value, idxs in groups.items():
+            namen = {normalized_name(naam_uit_bestandsnaam(docs[i]['path'], docs[i]['snippet']) or docs[i]['name'])
+                     for i in idxs} - {''}
+            if len(namen) >= 3 or (groups is by_email and GENERIC_EMAIL.match(value)):
+                BUREAU_CONTACT.add(value)
     candidates = set()
     for groups in (by_sha, by_email, by_phone, by_link, by_name):
         for group in groups.values():
             if len(group) > 1:
                 for idx, a in enumerate(group):
                     for b in group[idx+1:]: candidates.add((min(a,b), max(a,b)))
+    GESPLITST.clear()
     reviews = []
     component_names = {i: ({normalized_name(docs[i]['name'])} if docs[i]['name'] else set())
                        for i in range(len(docs))}
+    leden = {i: [i] for i in range(len(docs))}
+
+    def groep_botst(ra, rb):
+        """Hele kandidaatgroep controleren: een nieuw cv moet bij ALLE cv's van de groep passen."""
+        return any(harde_blokkade(docs[x], docs[y]) for x in leden[ra] for y in leden[rb])
+
+    def samenvoegen(a, b):
+        ra, rb = dsu.find(a), dsu.find(b)
+        if ra == rb:
+            return True
+        if groep_botst(ra, rb):
+            return False
+        combined = component_names[ra] | component_names[rb]
+        alle = leden[ra] + leden[rb]
+        dsu.union(a, b)
+        component_names[dsu.find(a)] = combined
+        leden[dsu.find(a)] = alle
+        return True
     for a, b in sorted(candidates):
         auto, review, reason = safe_pair(docs[a], docs[b])
         if auto:
@@ -3899,13 +4037,11 @@ def deduplicate(db, merge_file=None):
             left, right = component_names[ra], component_names[rb]
             if ra!=rb and any(difflib.SequenceMatcher(None,n,m).ratio()<.70 for n in left for m in right):
                 reviews.append((a,b,'mogelijk contactgegeven van meerdere personen; groepsnamen verschillen'))
-            else:
-                if ra != rb:
-                    combined = left | right
-                    dsu.union(a,b)
-                    component_names[dsu.find(a)] = combined
+            elif not samenvoegen(a, b):
+                pass                       # botst met een ander cv in de groep: apart houden
         elif review:
             reviews.append((a,b,reason))
+    reviews = ai_dubbel_controle(docs, reviews, samenvoegen, out_dir)
     # Extra samenvoegingen alleen als de gebruiker dit expliciet bevestigt in CSV.
     if merge_file and merge_file.exists():
         pre_groups = collections.defaultdict(list)
@@ -3961,6 +4097,10 @@ def deduplicate(db, merge_file=None):
         # Stabiele ID op de vroegst aanwezige bestandsfingerprint (per volledige exportsnapshot).
         known = collections.Counter(id_map[d['sha']] for d in group if d['sha'] in id_map)
         known_ids = [i for i, _n in sorted(known.items(), key=lambda kv: (-kv[1], kv[0])) if i not in used_ids]
+        if known and not known_ids:
+            # Deze cv's hoorden eerder bij een kandidaat die nu gesplitst is (bv. bureau-cv's die ten onrechte
+            # waren samengevoegd): krijgt een nieuw nummer; het oude nummer blijft bij de andere groep.
+            GESPLITST.append((sorted(known)[0], [d['path'] for d in group]))
         ident = known_ids[0] if known_ids else str(uuid.uuid5(uuid.NAMESPACE_URL, min(d['sha'] for d in group)))[:12]
         if ident in used_ids:
             ident = str(uuid.uuid5(uuid.NAMESPACE_URL, 'x' + min(d['sha'] for d in group)))[:12]
@@ -4085,6 +4225,26 @@ def deduplicate(db, merge_file=None):
             num_file.write_text(json.dumps(nums, indent=0), encoding='utf-8')
         except OSError as exc:
             print('WAARSCHUWING: kandidaatnummers niet opgeslagen:', exc, flush=True)
+    if GESPLITST:
+        # Melden welke eerder samengevoegde kandidaten nu gesplitst zijn (in Loxo even nalopen).
+        per_pad = {}
+        for person in identities:
+            per_pad[person['persoon_id']] = person
+        regels = []
+        for oud, paden in GESPLITST:
+            nieuw = next((per_pad.get(doc_to_person.get(pth, '')) for pth in paden if doc_to_person.get(pth)), None)
+            oud_nr = nums.get(oud, oud)
+            if nieuw:
+                regels.append(f"{oud_nr} -> {nieuw['kandidaat_id']} {nieuw['naam']}")
+        if regels:
+            print(f'GESPLITST ({len(regels)}): eerder één kandidaat, nu apart (in Loxo nalopen): ' + '; '.join(regels[:20]),
+                  flush=True)
+            if id_file:
+                try:
+                    with (id_file.parent / 'gesplitste_kandidaten.txt').open('a', encoding='utf-8') as fh:
+                        fh.write(dt.datetime.now().strftime('%Y-%m-%d %H:%M') + '\n' + '\n'.join(regels) + '\n\n')
+                except OSError:
+                    pass
     distinct_review = []
     for a,b,reason in reviews:
         if docs[a]['path'] not in doc_to_person or docs[b]['path'] not in doc_to_person:

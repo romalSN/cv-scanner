@@ -722,6 +722,47 @@ _a = _dp('Elmer van den Heuvel', '/u/JR/denBulck Tom HQ1 (U).txt', 'Elmer van de
 _b = _dp('Elmer van den Heuvel', '/u/JR/Enyedi Robert HQ2 (U).txt', 'Elmer van den Heuvel Robert Enyedi', ['aplitrakmail@broadbean.net'], ['+31224227904'])
 check('dubbel: bureau-cv\'s met zelfde recruiter-naam/contact maar andere kandidaat in bestandsnaam = apart', not c.safe_pair(_a, _b)[0])
 
+# --- Dubbelen: harde blokkades, groepscontrole, AI-controle (nagebootst) ---
+check('voornaam: Jan / Piet botst', c._voornaam_botst('jan bakker', 'piet bakker'))
+check('voornaam: Jan / Jana botst', c._voornaam_botst('jan bakker', 'jana bakker'))
+check('voornaam: J / Jan botst niet', not c._voornaam_botst('j bakker', 'jan bakker'))
+check('voornaam: Chris / Christopher botst niet', not c._voornaam_botst('chris pahlmann', 'christopher pahlmann'))
+check('voornaam: leeg botst niet', not c._voornaam_botst('', 'jan bakker'))
+import ai_rechter as _air
+def _dd(name, emails=(), phones=(), werk='', opl='', path=None, snippet=''):
+    return {'name': name, 'emails': _jj.dumps(list(emails)), 'phones': _jj.dumps(list(phones)), 'links': '[]',
+            'sha': (path or name) + str(emails) + str(phones), 'path': path or f'/u/{name}.pdf', 'snippet': snippet or c.normalized_snippet(name),
+            'tokens': '[]', 'werkgevers': werk, 'opleidingen': opl}
+class _Row(dict):
+    def keys(self): return super().keys()
+def _ai_test(paren, ai_antwoord):
+    docs = [_Row(d) for pair in paren for d in pair]
+    reviews = [(2 * k, 2 * k + 1, 'mogelijk dubbel') for k in range(len(paren))]
+    samen = []
+    _oud = (_air.available, _air.zelfde_persoon, os.environ.get('CV_AI_DUBBEL'))
+    _air.available = lambda: True
+    _air.zelfde_persoon = lambda a, b: {'oordeel': ai_antwoord}
+    os.environ['CV_AI_DUBBEL'] = '1'
+    try:
+        over = c.ai_dubbel_controle(docs, reviews, lambda a, b: samen.append((a, b)) or True, None)
+    finally:
+        _air.available, _air.zelfde_persoon = _oud[0], _oud[1]
+    return samen, over
+_p1 = (_dd('Chris Pahlmann', ['chris.pahlmann@gmail.com'], ['+31612345678'], 'Codewerk'),
+       _dd('Christopher Pahlmann', ['chris.pahlmann@gmail.com'], ['+31612345678'], 'Codewerk'))
+check('AI-dubbel: 2 bewijzen + AI zelfde = samen', len(_ai_test([_p1], 'zelfde')[0]) == 1)
+check('AI-dubbel: AI anders = apart (twijfelgeval)', len(_ai_test([_p1], 'anders')[0]) == 0)
+check('AI-dubbel: AI onzeker = apart (twijfelgeval)', len(_ai_test([_p1], 'onzeker')[0]) == 0)
+_p2 = (_dd('Jan Bakker', ['jan.bakker@gmail.com'], ['+31612345678']), _dd('Piet Bakker', ['jan.bakker@gmail.com'], ['+31612345678']))
+check('AI-dubbel: andere voornaam = nooit samen, ook als AI zelfde zegt', len(_ai_test([_p2], 'zelfde')[0]) == 0)
+_p3 = (_dd('Chris Pahlmann', ['chris.pahlmann@gmail.com']), _dd('Christopher Pahlmann', ['chris.pahlmann@gmail.com']))
+check('AI-dubbel: maar 1 bewijs (alleen mail) = niet samen', len(_ai_test([_p3], 'zelfde')[0]) == 0)
+c.BUREAU_CONTACT.update({'+31224227904', 'aplitrakmail@broadbean.net'})
+_p4 = (_dd('Tom Bulck', ['aplitrakmail@broadbean.net'], ['+31224227904']), _dd('Tom Bulcke', ['aplitrakmail@broadbean.net'], ['+31224227904']))
+check('AI-dubbel: bureaugegevens tellen niet als bewijs', len(_ai_test([_p4], 'zelfde')[0]) == 0)
+c.BUREAU_CONTACT.clear()
+os.environ.pop('CV_AI_DUBBEL', None)
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
