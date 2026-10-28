@@ -239,6 +239,11 @@ FILTER_VRAGEN = {
               "Zeg alleen 'nee' als het cv duidelijk laat zien dat de persoon nu buiten Nederland en België woont. "
               "Antwoord 'onduidelijk' als het cv het niet duidelijk laat zien.",
               ["ja", "nee", "onduidelijk"]),
+    'woont_buiten': ("Staat er in dit cv DUIDELIJK dat deze persoon op dit moment buiten Nederland en België woont? "
+                     "Let op: als er een huidig of recent adres in Nederland of België staat, of als niet duidelijk is "
+                     "welk adres het huidige is, is het antwoord 'nee'. Een buitenlands telefoonnummer, geboorteplaats, "
+                     "nationaliteit, oud adres of werk/opleiding in het buitenland is NIET genoeg.",
+                     ["ja", "nee"]),
     'verblijf': ("Heeft deze persoon in totaal minstens 5 jaar in Nederland of België gewoond (huidige en eerdere "
                  "jaren samen, werk en opleiding tellen mee)? Antwoord 'onduidelijk' als het cv het niet laat zien.",
                  ["ja", "nee", "onduidelijk"]),

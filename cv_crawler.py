@@ -3495,7 +3495,8 @@ def filter_kandidaat(doc, phones, emails, ai_vraag):
         if ai_vraag('woont') != 'ja':
             return 'weg', 'woont niet in Nederland of België'
     elif land in ('tegenstrijdig', 'aanwijzing_buitenland'):
-        if ai_vraag('woont') == 'nee':
+        # Twee verschillende AI-vragen moeten het eens zijn voordat iemand wegvalt (geen onterechte uitsluiting).
+        if ai_vraag('woont') == 'nee' and ai_vraag('woont_buiten') == 'ja':
             return 'weg', 'woont niet in Nederland of België'
     # 3. Minimaal 5 jaar in NL/BE (alleen als het cv een buitenlandse periode laat zien)
     laatst, _plek = laatst_buitenland(snippet)

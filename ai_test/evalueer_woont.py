@@ -26,13 +26,19 @@ G = [  # (tekst, waarheid: ja = woont in NL/BE, nee = woont erbuiten, ? = niet t
     ("Rahul Sharma\n1012 AB, Bangalore, India\n" + E, '?'),
     ("Sanne Visser\nsanne.test@gmail.com\n" + E, '?'),
 ]
-gevaarlijk, goed, t0 = [], 0, time.time()
+t0 = time.time()
+res = {'enkel': [], 'dubbel': []}
+regel = []
 for i, (tekst, waar) in enumerate(G, 1):
-    a = ai_rechter.filter_vraag('woont', c.normalized_snippet(tekst))
-    if a == 'nee' and waar != 'nee':
-        gevaarlijk.append(i)
-    if (waar == 'ja' and a == 'ja') or (waar == 'nee' and a == 'nee') or (waar == '?' and a != 'nee'):
-        goed += 1
-    print(f"{naam} {i:2d} waar={waar} ai={a}")
-print(f"::notice::{naam} | WOONT: {goed}/{len(G)} goed, ONTERECHT 'woont buiten NL/BE': {gevaarlijk}, "
-      f"{(time.time() - t0) / len(G):.1f}s per geval")
+    sn = c.normalized_snippet(tekst)
+    a = ai_rechter.filter_vraag('woont', sn)
+    b = ai_rechter.filter_vraag('woont_buiten', sn)
+    land = c.woonplaats_bepalen(sn, [p for p in ['+31600000901', '+919845012345', '+4740000000', '+447700900123', '+32470000001']
+                                     if p[-4:] in sn.replace(' ', '')])[0]
+    for soort, weg in (('enkel', a == 'nee'), ('dubbel', a == 'nee' and b == 'ja')):
+        if weg and waar != 'nee':
+            res[soort].append(i)
+    regel.append(f"{i}:{waar}/{a[:3]}/{b}/{land[:6]}")
+print(f"::notice::{naam} | WOONT enkel: onterecht weg {res['enkel']} | dubbel (woont=nee EN woont_buiten=ja): "
+      f"onterecht weg {res['dubbel']} | {(time.time() - t0) / len(G):.1f}s per geval")
+print(f"::notice::{naam} | " + ' '.join(regel))
