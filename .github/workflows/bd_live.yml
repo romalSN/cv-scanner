@@ -19,4 +19,4 @@ jobs:
           BD_TEST_URLS: ${{ secrets.BD_TEST_URLS }}
           BD_BATCH: ${{ github.event.inputs.batch }}
         run: |
-          if [ "${{ github.event.inputs.batch }}" = "sync" ]; then python tests/bd_live2.py; else python tests/bd_live.py; fi
+          if [ "${{ github.event.inputs.batch }}" = "sync" ] || [ "${{ github.event.inputs.batch }}" = "lijst" ]; then python tests/bd_live2.py; else python tests/bd_live.py; fi

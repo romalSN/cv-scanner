@@ -17,6 +17,8 @@ try:
     print(f'::notice::eerdere snapshots (status, aantal): {rij}')
 except Exception as exc:
     print(f'::notice::snapshots-lijst: {type(exc).__name__} {str(exc)[:100]}')
+if os.environ.get('BD_BATCH') == 'lijst':
+    sys.exit(0)
 # 2. synchroon: 3 profielen
 t0 = time.time()
 try:
