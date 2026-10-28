@@ -18,4 +18,5 @@ jobs:
           BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
           BD_TEST_URLS: ${{ secrets.BD_TEST_URLS }}
           BD_BATCH: ${{ github.event.inputs.batch }}
-        run: python tests/bd_live.py
+        run: |
+          if [ "${{ github.event.inputs.batch }}" = "sync" ]; then python tests/bd_live2.py; else python tests/bd_live.py; fi
