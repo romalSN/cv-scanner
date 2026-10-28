@@ -316,6 +316,7 @@ c.tavily_search = _old_online_tav
 import ai_rechter as _ar, json as _js
 _o = (_ar.available, _ar.classify)
 _ar.available = lambda: True
+_ar.TWIJFEL_AAN = True
 _ar.classify = lambda t: ({'soort': 'geen_cv', 'naam': '', 'reden': 'sollicitatiebrief'} if 'geachte' in t else
                           {'soort': 'cv', 'naam': 'henk winters', 'reden': 'loopbaan'})
 _out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)

@@ -23,6 +23,8 @@ MODEL_FILE = 'Phi-3.5-mini-instruct-Q4_K_M.gguf'
 MODEL_ID = 'phi35mini-q4km-v1'          # in de cache-sleutel: ander model/prompt = opnieuw beoordelen
 MIN_BYTES = 2_000_000_000
 AI_DIR = Path.home() / '.cv-scanner-ai'
+# AI bij twijfelgevallen (cv of niet) pas aan als de test bewijst dat hij geen niet-cv's als cv aanmerkt.
+TWIJFEL_AAN = os.environ.get('CV_AI_TWIJFEL', '0') == '1'
 
 INSTRUCTIE = (
     "Je bent een zorgvuldige recruiter. Je krijgt een cv en een kort stukje tekst van een LinkedIn-profiel met "

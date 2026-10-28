@@ -5015,7 +5015,7 @@ def ai_twijfel(db, out):
         import ai_rechter
     except Exception:
         return
-    if not ai_rechter.available():
+    if not ai_rechter.available() or not ai_rechter.TWIJFEL_AAN:
         return
     try:
         decided = set(json.loads((out / DECISIONS_FILE).read_text(encoding='utf-8')))
