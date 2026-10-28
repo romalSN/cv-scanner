@@ -608,6 +608,8 @@ def _d(name, emails, phones=()):
             'snippet': '', 'tokens': '[]'}
 check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = samen', c.safe_pair(_d('Botwin Wytze', ['botwin.sijtsma@gmail.com']), _d('Botwin Sijtsma', ['botwin.sijtsma@gmail.com']))[0])
 check('dubbel: Piet Jansen + Marie Jansen, zelfde gezinsmail = NIET samen', not c.safe_pair(_d('Piet Jansen', ['jansen@ziggo.nl']), _d('Marie Jansen', ['jansen@ziggo.nl']))[0])
+check('dubbel: bureaumail jan@bureau met Jan Bakker + Jan de Vries = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan@itbureau.nl']), _d('Jan de Vries', ['jan@itbureau.nl']))[0])
+check('dubbel: recruiter jan.bakker@bureau.nl bij Jan Bakker + Jan Smit = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan.bakker@itbureau.nl']), _d('Jan Smit', ['jan.bakker@itbureau.nl']))[0])
 check('dubbel: recruitermail bij 2 kandidaten = NIET samen', not c.safe_pair(_d('Bobby van den Berg', ['erik.mertz@salves.nl']), _d('Kevin Lok', ['erik.mertz@salves.nl']))[0])
 for _ruw, _goed in (('Engels Nederlands Duits', ''), ('Mergeformattom Coenraad', 'Tom Coenraad'), ('Ray Hyde Fe Bd', 'Ray Hyde'), ('Kees van der Be', 'Kees van der Be')):
     _x = c.clean_person_name(_ruw); _x = c.tidy_name(_x) if _x else _x

@@ -326,6 +326,11 @@ def name_from_linkedin(link):
 
 
 TITLE_BEFORE = re.compile(r'(?i)^(?:ir|ing|drs|dr|mr|prof|dhr|mevr|mw|mevrouw|de heer|mrs|ms|miss)\.?\s+')
+PRIVE_MAILDOMEINEN = {'gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.nl', 'live.nl', 'live.com', 'outlook.com',
+                      'outlook.nl', 'msn.com', 'yahoo.com', 'yahoo.nl', 'icloud.com', 'me.com', 'mac.com', 'ziggo.nl',
+                      'kpnmail.nl', 'kpnplanet.nl', 'planet.nl', 'xs4all.nl', 'home.nl', 'hetnet.nl', 'chello.nl',
+                      'casema.nl', 'upcmail.nl', 'tele2.nl', 'online.nl', 'zeelandnet.nl', 'quicknet.nl',
+                      'telenet.be', 'skynet.be', 'proximus.be', 'protonmail.com', 'proton.me', 'gmx.com', 'gmx.net'}
 TAAL_NAAM_WOORDEN = {'engels', 'nederlands', 'duits', 'frans', 'spaans', 'italiaans', 'portugees', 'arabisch',
                      'turks', 'pools', 'russisch', 'chinees', 'english', 'dutch', 'german', 'french', 'spanish',
                      'italian', 'portuguese', 'arabic', 'turkish', 'polish', 'russian', 'chinese', 'hindi', 'urdu',
@@ -2875,8 +2880,11 @@ def safe_pair(a, b):
             continue
         local = re.sub(r'[^a-z]', '', e.split('@')[0].lower())
         aw1, bw1 = an.split(), bn.split()
-        if aw1[0] == bw1[0] and len(aw1[0]) >= 3 and aw1[0] in local and \
-                any(len(w) >= 3 and w in local for w in aw1) and any(len(w) >= 3 and w in local for w in bw1):
+        # Alleen een privé-adres (gmail, hotmail, ziggo …): een bureau of recruiter mailt vanaf een bedrijfsdomein.
+        # En de achternaam van minstens één van beide namen moet in het adres staan (niet alleen 'jan@').
+        prive = e.split('@')[-1].lower() in PRIVE_MAILDOMEINEN
+        achternaam_in = any(len(w) >= 3 and w in local and w != aw1[0] for w in aw1[1:] + bw1[1:])
+        if prive and achternaam_in and aw1[0] == bw1[0] and len(aw1[0]) >= 3 and aw1[0] in local:
             return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
     aw0, bw0 = set(an.split()), set(bn.split())
     if conflict and strong and not (min(len(aw0), len(bw0)) >= 2 and (aw0 <= bw0 or bw0 <= aw0)):
@@ -4395,7 +4403,7 @@ def build_exports(db, out):
     files = []
     checks = []
     error_details = []
-    legacy_count = unread_count = 0
+    legacy_count = unread_count = niet_leesbaar = 0
     doubt = {}
     scanned = set()
     for d in all_docs:
@@ -4404,6 +4412,8 @@ def build_exports(db, out):
         label = 'oude_beoordeling' if legacy and d['status'] in ('cv','review') else d['status']
         if d['path'] in EXCLUDED or (d['reason'] or '').startswith('niet meegenomen:'):
             label = 'niet meegenomen'
+        if d['status'] == 'error':
+            label = 'niet leesbaar'          # kapot/wachtwoord/niet te openen: weg, geen controlepunt
         files.append(dict(persoon_id=pid, cv_id=cv_id_of(d['sha']), naam=d['name'] if not legacy else '',status=label,cv_score=d['score'] if not legacy else 0,
              oorspronkelijk_bestand=d['path'],archiefkopie=d['archive'],sha256=d['sha'],
              jaar=d['year'],toelichting=(EXCLUDED[d['path']] if d['path'] in EXCLUDED else
@@ -4412,6 +4422,9 @@ def build_exports(db, out):
         if (legacy and d['status'] in ('cv','review')):
             legacy_count += 1
         if d['status'] in ('review','error','deferred') and not (legacy and d['status']=='review'):
+            if d['status'] == 'error':
+                niet_leesbaar += 1
+                continue                 # niet als twijfel- of controlepunt; wordt bij een volgende scan wel opnieuw geprobeerd
             if d['status'] in ('error','deferred'):
                 error_details.append(dict(categorie=error_category(d['error']) if d['status']=='error'
                     else 'Niet lokaal beschikbaar / overschreden limiet',
@@ -4460,6 +4473,8 @@ def build_exports(db, out):
             (out / old_file).unlink()
         except OSError:
             pass
+    if niet_leesbaar:
+        print(f'NIET LEESBAAR: {niet_leesbaar} bestand(en) (beschadigd, wachtwoord of niet te openen) – overgeslagen.', flush=True)
     if error_details:
         print(f'LEESFOUTEN ({len(error_details)}):', flush=True)
         for cat, n in categories.most_common():
