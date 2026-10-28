@@ -1314,9 +1314,11 @@ def read_document(path, use_ocr=True, ocr_lang='eng', ocr_pages=5):
         note = ''
         layout_bonus = 0
         ocr_possible = bool(use_ocr and shutil.which('tesseract') and shutil.which('pdftoppm'))
+        big = path.stat().st_size > 30 * 1024 * 1024
+        max_pages = 7 if big else 30           # groot bestand: een cv staat vooraan (eerste 7 pagina's)
         for i, page in enumerate(reader.pages):
-            if i >= 30:
-                note = 'Alleen eerste 30 pagina’s onderzocht'
+            if i >= max_pages:
+                note = f'Alleen eerste {max_pages} pagina’s onderzocht' + (' (groot bestand)' if big else '')
                 break
             content = page.extract_text() or ''
             if i == 0 and len(content.strip()) > 120:
@@ -2065,7 +2067,8 @@ def ingest(args, db, out, roots=None, label=None):
             elif cloud_placeholder(stat):
                 deferred_reason = ('Staat alleen online (OneDrive/iCloud). Vink "Ook cv\'s die alleen in OneDrive/iCloud staan" aan '
                                    'en scan opnieuw om het te downloaden en te lezen.')
-            elif stat.st_size > args.max_mb * 1024*1024:
+            elif stat.st_size > args.max_mb * 1024*1024 and not (p.suffix.lower() == '.pdf' and stat.st_size <= 500 * 1024*1024):
+                # Grote pdf's (tot 500 MB) worden wél gelezen, maar alleen de eerste pagina's (zie read_document).
                 deferred_reason = (f'Bestand groter dan scanlimiet ({args.max_mb} MB); '
                                    'niet gelezen, handmatig beoordelen.')
                 summary['te_groot'] += 1
@@ -4335,6 +4338,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     checked = used = 0
     google_used = 0
     google_via = {}
+    tavily_out = False          # Tavily-tegoed op: verder via Google (Serper/SerpApi)
     todo = [p for p in people if p['naam'] and not all(p[k] for k in ('email','telefoon','linkedin'))]
     name_count = collections.Counter(normalized_name(p['naam']) for p in people if p['naam'])
     print(f'ONLINE: {len(todo)} van {len(people)} personen missen LinkedIn, e-mail of telefoon.', flush=True)
@@ -4513,29 +4517,42 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 results = cache[cache_key]
                 summary_cached = True
             else:
-                try:
-                    results = tavily_search(query, key, include_domains=domains, exclude_domains=excluded,
-                                            max_results=20 if kind == 'linkedin' else 8,
-                                            raw=(kind == 'linkedin'))
-                    used += 1
-                except urllib.error.HTTPError as exc:
-                    if exc.code in (401, 403):
-                        print('ONLINE FOUT: Tavily-sleutel ongeldig of geweigerd. Controleer je sleutel.', flush=True)
-                        return False
-                    if exc.code in (429, 432, 433):
-                        print('ONLINE: Tavily-tegoed of limiet bereikt; rest volgende keer.', flush=True)
+                results = None
+                if not tavily_out:
+                    try:
+                        results = tavily_search(query, key, include_domains=domains, exclude_domains=excluded,
+                                                max_results=20 if kind == 'linkedin' else 8,
+                                                raw=(kind == 'linkedin'))
+                        used += 1
+                    except urllib.error.HTTPError as exc:
+                        if exc.code in (401, 403):
+                            print('ONLINE FOUT: Tavily-sleutel ongeldig of geweigerd. Controleer je sleutel.', flush=True)
+                            return False
+                        if exc.code in (429, 432, 433):
+                            print('ONLINE: Tavily-tegoed op; verder via Google (Serper/SerpApi).', flush=True)
+                            tavily_out = True
+                        else:
+                            print('ONLINE zoekfout:', exc.code, flush=True)
+                            search_failed = True
+                            continue
+                    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+                        print('ONLINE zoekfout:', type(exc).__name__, str(exc)[:120], flush=True)
+                        search_failed = True
+                        continue
+                if results is None:
+                    # Tavily op: zelfde zoekvraag via Google (1 Serper/SerpApi-credit).
+                    res, via = google_search(f'site:linkedin.com/in {query}' if kind == 'linkedin' else query)
+                    if res is None:
+                        print('ONLINE: ook het Google-tegoed is op (of geen Google-sleutel); rest volgende keer.', flush=True)
                         stop = True
                         break
-                    print('ONLINE zoekfout:', exc.code, flush=True)
-                    search_failed = True
-                    continue
-                except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-                    print('ONLINE zoekfout:', type(exc).__name__, str(exc)[:120], flush=True)
-                    search_failed = True
-                    continue
+                    google_used += 1
+                    google_via[via] = google_via.get(via, 0) + 1
+                    results = res
                 cache['q|' + cache_key] = query
                 cache[cache_key] = [dict({k: r.get(k, '') for k in ('url', 'title', 'content')},
-                                         **({'raw': own_profile_text(r.get('raw_content'))} if kind == 'linkedin' else {}))
+                                         **({'raw': own_profile_text(r.get('raw_content'))}
+                                            if kind == 'linkedin' and r.get('raw_content') else {}))
                                     for r in results]
                 time.sleep(delay)
             for result in results:
@@ -5010,7 +5027,7 @@ def main(argv=None):
     parser.add_argument('--include-volumes',action='store_true',help='Neem USB/netwerkschijven (Windows) of /Volumes (Mac) mee')
     parser.add_argument('--force',action='store_true',help='Verwerk eerder gescande bestanden opnieuw')
     parser.add_argument('--online',action='store_true',help='Vul ontbrekende LinkedIn/e-mail/telefoon online aan via Tavily (TAVILY_API_KEY); alleen suggesties')
-    parser.add_argument('--online-limit',type=int,default=500,help='Maximaal aantal personen voor online zoekstap (standaard 500)')
+    parser.add_argument('--online-limit',type=int,default=0,help='Maximaal aantal personen voor online zoekstap (0 = geen limiet)')
     parser.add_argument('--no-refresh',action='store_true',help='Sla het bijwerken van verplaatste bestanden en oude leesfouten over')
     parser.add_argument('--opschonen',action='store_true',help='Verplaats losse cv-originelen naar Alle_cvs (zips blijven staan)')
     parser.add_argument('--opschonen-plan',action='store_true',help='Laat alleen zien wat Opschonen zou doen')
@@ -5095,7 +5112,7 @@ def main(argv=None):
                                          else 'uit (model of onderdelen ontbreken); alleen de regels beslissen'), flush=True)
             except Exception:
                 pass
-            if online_suggestions(people,out,db=db,max_people=args.online_limit):
+            if online_suggestions(people,out,db=db,max_people=args.online_limit or 10**9):
                 build_exports(db,out)   # Excel opnieuw, nu met de online-kolommen
     finally:
         db.close()

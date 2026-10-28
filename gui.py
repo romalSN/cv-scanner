@@ -660,7 +660,7 @@ class ScannerApp:
                 if not options['ocr']:
                     cmd.append('--no-ocr')
                 if options.get('online') and online_key:
-                    cmd += ['--online', '--online-limit', '500'] + (['--online-vers'] if self.online_fresh else [])
+                    cmd += ['--online', '--online-limit', '0'] + (['--online-vers'] if self.online_fresh else [])
             elif mode in ('plan', 'opschonen', 'terugzetten'):
                 cmd += [{'plan': '--opschonen-plan', 'opschonen': '--opschonen',
                          'terugzetten': '--terugzetten'}[mode]]
@@ -669,7 +669,7 @@ class ScannerApp:
             else:
                 cmd += ['--export-only']
                 if mode == 'online':
-                    cmd += ['--online', '--online-limit', '500'] + (['--online-vers'] if self.online_fresh else [])
+                    cmd += ['--online', '--online-limit', '0'] + (['--online-vers'] if self.online_fresh else [])
             env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
             # Windows gebruikt soms cp1252; bestanden met emoji/Unicode crashten dan de scan.

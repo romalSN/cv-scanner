@@ -286,6 +286,32 @@ ai_rechter.available, ai_rechter.judge = _orig
 for ruw, goed in [('+31 06 55857419', '+31655857419'), ('+31 6 1853 358', ''), ('+27 1172624', ''), ('+44 7700 900123', '+447700900123')]:
     check(f'telefoon {ruw} -> {goed or "afgekeurd"}', c.norm_phone(ruw) == goed, c.norm_phone(ruw))
 
+# --- Tavily-tegoed op: verder via Google ---
+import urllib.error as _ue
+def _tav_op(*a, **k):
+    raise _ue.HTTPError('', 432, 'op', None, None)
+_old_online_tav = c.tavily_search
+def _online_tav_op(naam, cvt, werkgever, woonplaats, google):
+    out = Path(tempfile.mkdtemp())
+    c.tavily_search = _tav_op
+    c.google_search = google
+    db = c.db_open(out)
+    row = dict(path=str(out / 'cv.docx'), name=naam, status='cv', snippet=c.normalized_snippet(cvt), employer=werkgever,
+               woonplaats=woonplaats, sha=naam, classifier_version=c.CLASSIFIER_VERSION)
+    db.execute(f"insert into docs({','.join(row)}) values({','.join('?' * len(row))})", list(row.values())); db.commit()
+    person = dict(naam=naam, persoon_id='p1', email='x@voorbeeldmail.nl', telefoon='+31600000000', linkedin='',
+                  huidige_functie='', laatst_bekende_werkgever=werkgever, woonplaats=woonplaats)
+    c.online_suggestions([person], out, db=db, delay=0)
+    rows = list(csv.DictReader(open(out / 'online_suggesties.csv', encoding='utf-8-sig'), delimiter=';'))
+    return next((r for r in rows if r['type'] == 'linkedin'), {})
+vragen = []
+def _g(q):
+    vragen.append(q)
+    return [li('ruben-hofstede', 'Ruben Hofstede - Developer at Topicus', 'Topicus. Deventer')], 'Serper'
+b = _online_tav_op('Ruben Hofstede', 'Developer bij Topicus Deventer', 'Topicus', 'deventer', _g)
+check('Tavily op -> Google gebruikt en profiel gevonden', any('site:linkedin.com/in' in q for q in vragen) and 'ruben-hofstede' in b.get('gevonden_waarde', ''), (vragen, b))
+c.tavily_search = _old_online_tav
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
