@@ -438,6 +438,8 @@ class ScannerApp:
             return 'err'
         if msg.startswith('ONLINE'):
             return 'info'
+        if msg.startswith(('AI-MODEL', 'AI-CONTROLE', 'AI:')):
+            return 'info'
         if ('WERKT NIET' in msg or 'LEESFOUT' in msg
                 or msg.startswith(('FOUT', 'Traceback', 'SCAN ONDERBROKEN', 'PermissionError', 'File "'))):
             return 'err'
