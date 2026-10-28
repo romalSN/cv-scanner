@@ -388,7 +388,10 @@ check('taal: werkt ook op opgeslagen tekst (zonder accenten)', c.cv_taal(c.norma
 check('woont in India (+91) = buitenland', c.woonland(c.normalized_snippet("Rahul\nBangalore, India\n+91 98450 12345"), ['+919845012345'])[0] == 'buitenland')
 check('Indiase naam, woont in Amsterdam = nl', c.woonland(c.normalized_snippet("Arjun Mehta\nAmsterdam\n06-00000601\n2014 - 2019 Infosys, Pune, India"), ['+31600000601'])[0] == 'nl')
 check('woont in België (+32) = blijft erin', c.woonland(c.normalized_snippet("Jan Peeters\nAntwerpen, Belgie\n+32 470 00 00 00"), ['+32470000000'])[0] != 'buitenland')
-check('woont in Spanje maar Engels cv = blijft erin', c.woonland(c.normalized_snippet("John Smith\nMadrid, Spain\n+34 600 000 000"), ['+34600000000'])[0] != 'buitenland')
+check('woont in Spanje (Engels cv) = niet voor Loxo', c.woonland(c.normalized_snippet("John Smith\nMadrid, Spain\n+34 600 000 000"), ['+34600000000'])[0] == 'buitenland')
+check('Engels cv, woont in Utrecht = blijft erin', c.woonland(c.normalized_snippet("John Smith\nUtrecht\njohn@x.com\nExperience"), [])[0] == 'nl')
+check('Engels cv, woont in Antwerpen zonder nummer = blijft erin', c.woonland(c.normalized_snippet("John Smith\nAntwerp, Belgium\nExperience"), [])[0] == 'nl')
+check('woont in Londen (+44) = niet voor Loxo', c.woonland(c.normalized_snippet("John Smith\nLondon, UK\n+44 7700 900123"), ['+447700900123'])[0] == 'buitenland')
 check('geen adres of nummer = onduidelijk (blijft erin)', c.woonland(c.normalized_snippet("Kees Mol\nkees@x.nl\nWerkervaring"), [])[0] == '')
 
 print()

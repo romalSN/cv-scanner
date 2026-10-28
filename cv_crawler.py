@@ -701,14 +701,19 @@ def cv_taal(text):
     return best if tel[best] >= 8 and tel[best] > rest else ''
 
 
-# Alleen wie in INDIA woont gaat naar 'Niet voor Loxo' (wens opdrachtgever: kandidaten moeten hier wonen;
-# andere landen, zoals België, blijven erin). Gebaseerd op woonplaats/telefoon, nooit op naam of afkomst.
+# Wens opdrachtgever: kandidaten moeten in Nederland of België wonen. Wie aantoonbaar ergens anders woont,
+# gaat naar 'Niet voor Loxo'. Gebaseerd op woonplaats/telefoon in de kop, nooit op naam, afkomst of cv-taal.
 INDIA_PLACES = {'india', 'bangalore', 'bengaluru', 'mumbai', 'bombay', 'delhi', 'new delhi', 'chennai', 'madras', 'pune',
                 'hyderabad', 'kolkata', 'calcutta', 'noida', 'gurgaon', 'gurugram', 'ahmedabad', 'kochi', 'cochin',
                 'coimbatore', 'trivandrum', 'thiruvananthapuram', 'chandigarh', 'jaipur', 'indore', 'nagpur', 'mysore',
                 'mysuru', 'visakhapatnam', 'vizag', 'bhubaneswar', 'lucknow', 'mangalore', 'karnataka', 'maharashtra',
                 'tamil nadu', 'telangana', 'kerala', 'andhra pradesh', 'uttar pradesh', 'west bengal', 'gujarat',
                 'haryana', 'rajasthan', 'punjab', 'odisha'}
+BE_PLACES = {'belgie', 'belgium', 'belgique', 'belgien', 'antwerpen', 'antwerp', 'brussel', 'brussels', 'bruxelles',
+             'gent', 'ghent', 'leuven', 'brugge', 'bruges', 'mechelen', 'hasselt', 'genk', 'luik', 'liege', 'namen',
+             'namur', 'charleroi', 'kortrijk', 'aalst', 'oostende', 'ostend', 'sint niklaas', 'turnhout', 'roeselare',
+             'mons', 'bergen', 'lier', 'zaventem', 'vilvoorde', 'dendermonde', 'beveren', 'geel', 'vlaanderen',
+             'flanders', 'wallonie', 'limburg'}
 BUITENLAND_IGNORE = {'nederland', 'netherlands', 'holland', 'the netherlands', 'remote', 'worldwide', 'emea',
                      'benelux', 'europe', 'europa', 'us'}
 
@@ -721,12 +726,12 @@ def woonland(snippet, phones):
     nl_phone = any(str(p).startswith('+31') for p in phones or [])
     nl_post = re.search(r'(?<![a-z0-9])[1-9]\d{3} ?[a-z]{2}(?![a-z0-9])', head) is not None
     nl_place = any(f' {pl} ' in head for pl in NL_PLACES)
-    if nl_phone or (nl_post and nl_place) or nl_place and (' nederland ' in head or ' netherlands ' in head):
-        return 'nl', ''
-    foreign_phone = [p for p in phones or [] if str(p).startswith('+91')]
-    foreign_place = next((pl for pl in sorted(INDIA_PLACES, key=len, reverse=True) if f' {pl} ' in head), '')
-    if nl_place or nl_post:
-        return 'nl', ''
+    be = any(str(p).startswith('+32') for p in phones or []) or any(f' {pl} ' in head for pl in BE_PLACES)
+    if nl_phone or nl_place or nl_post or be:
+        return 'nl', ''                                   # Nederland of België: blijft erin
+    foreign_phone = [p for p in phones or [] if str(p).startswith('+') and not str(p).startswith(('+31', '+32'))]
+    places = (FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE - BE_PLACES
+    foreign_place = next((pl for pl in sorted(places, key=len, reverse=True) if f' {pl} ' in head), '')
     if foreign_phone or foreign_place:
         return 'buitenland', (foreign_place.title() if foreign_place else 'telefoon ' + foreign_phone[0][:4])
     return '', ''
@@ -3265,7 +3270,7 @@ def deduplicate(db, merge_file=None):
             why.append('Spaanstalig cv')
         land, waar = woonland(first['snippet'] or '', all_phones)
         if land == 'buitenland':
-            why.append(f'woont in India ({waar})')
+            why.append(f'woont niet in Nederland of België ({waar})')
         candidate['niet_voor_loxo'] = '; '.join(why)
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
@@ -3812,7 +3817,7 @@ def build_exports(db, out):
     save_csv(out/'unieke_personen.csv',view,vcols)
     save_csv(out/'niet_voor_loxo.csv',apart,acols)
     if apart:
-        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv of woont in India); '
+        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv of woont niet in NL/België); '
               'zie tabblad ‘Niet voor Loxo’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
