@@ -2970,6 +2970,14 @@ def _zelfde_naam_andere_volgorde(an, bn):
     return bool(x) and len(x) == len(y) and x != y and y in x + x
 
 
+def naam_variant(an, bn):
+    """Zelfde naam in een andere schrijfwijze: 'Michel Bisschof' / 'Michael Bisschoff' (elk woord lijkt sterk)."""
+    a = [w for w in an.split() if w not in NAME_FILLERS]
+    b = [w for w in bn.split() if w not in NAME_FILLERS]
+    return (len(a) == len(b) >= 2 and a != b and a[0][0] == b[0][0]
+            and all(difflib.SequenceMatcher(None, x, y).ratio() >= .85 for x, y in zip(a, b)))
+
+
 def _voornaam_botst(an, bn):
     """Twee volledige, verschillende voornamen (Jan / Piet, Jan / Jana) = verschillende personen.
     Geen botsing bij een voorletter (J / Jan), een korte vorm (Chris / Christopher, Ron / Ronald) of één naam leeg."""
@@ -2981,6 +2989,8 @@ def _voornaam_botst(an, bn):
     kort, lang = sorted((a0, b0), key=len)
     if lang.startswith(kort) and len(lang) - len(kort) >= 3 and len(kort) >= 3:
         return False                      # Chris / Christopher, Ron / Ronald
+    if min(len(a0), len(b0)) >= 5 and a0[0] == b0[0] and difflib.SequenceMatcher(None, a0, b0).ratio() >= .9:
+        return False                      # schrijfwijze: Michel / Michael, Mohamed / Mohammed
     return True
 
 
@@ -3024,7 +3034,9 @@ def harde_blokkade(a, b):
         fa, fb = naam_uit_bestandsnaam(a['path'], a['snippet']), naam_uit_bestandsnaam(b['path'], b['snippet'])
         wa = {w for w in normalized_name(fa).split() if w not in NAME_FILLERS}
         wb = {w for w in normalized_name(fb).split() if w not in NAME_FILLERS}
-        if wa and wb and not (wa & wb):
+        # Schrijfwijze telt niet als ander persoon: 'Bisschof Michel' / 'Bisschoff Michael'.
+        lijkt = any(difflib.SequenceMatcher(None, x, y).ratio() >= .85 for x in wa for y in wb if len(x) >= 4 and len(y) >= 4)
+        if wa and wb and not (wa & wb) and not lijkt:
             return 'andere naam in bestandsnaam'
     return ''
 
@@ -3034,6 +3046,11 @@ def safe_pair(a, b):
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
     if _zelfde_naam_andere_volgorde(an, bn):
         bn = an                                        # 'Bork Hansgeorg' = 'Hans-Georg Bork'
+    if an and bn and an != bn and [w for w in an.split() if w not in NAME_FILLERS] == [w for w in bn.split() if w not in NAME_FILLERS] \
+            and len([w for w in an.split() if w not in NAME_FILLERS]) >= 2 \
+            and (not [w for w in an.split() if w in NAME_FILLERS] or not [w for w in bn.split() if w in NAME_FILLERS]):
+        # Alleen als in één naam het tussenvoegsel ontbreekt; 'de Vries' en 'van der Vries' blijven verschillend.
+        bn = an                                        # 'Erwin Boven' = 'Erwin van Boven'
     same_name = bool(an and bn and an == bn)
     name_sim = difflib.SequenceMatcher(None, an, bn).ratio() if an and bn else 0
     conflict = bool(an and bn and name_sim < .70)
@@ -3180,7 +3197,7 @@ def safe_pair(a, b):
         if shared_strong and shared_weak and zelfde_werk(a, b):
             return True, False, ('zelfde naam + zelfde ' + ', '.join(sorted(shared_strong)) + ' + ' +
                                  ', '.join(sorted(x.split(':', 1)[1] for x in shared_weak)) + ' (nieuwere cv-versie)')
-    if same_name and len(an.split()) >= 2:
+    if (same_name or naam_variant(an, bn)) and len(an.split()) >= 2:
         # Nieuwe versie zonder gedeeld contact (ander mailadres én nummer): zelfde volledige naam + minstens 2
         # verschillende (niet-grote) werkgevers met dezelfde jaren + geen botsende loopbaan = dezelfde persoon.
         zw = zelfde_werk(a, b)
@@ -4192,7 +4209,12 @@ def deduplicate(db, merge_file=None):
         for phone in json.loads(d['phones']): by_phone[phone].append(i)
         for link in json.loads(d['links']): by_link[link].append(i)
         name = normalized_name(d['name'])
-        if name: by_name[name].append(i)
+        if name:
+            by_name[name].append(i)
+            kern = [w for w in name.split() if w not in NAME_FILLERS]
+            if len(kern) >= 2:
+                # ook 'Erwin Boven' ~ 'Erwin van Boven' en 'Michel Bisschof' ~ 'Michael Bisschoff' vergelijken
+                by_name['~' + kern[0][0] + ' ' + kern[-1][:5]].append(i)
     # Bureau-/recruitergegevens: een e-mail, nummer of LinkedIn dat in cv's van 3+ verschillende namen staat.
     BUREAU_CONTACT.clear()
     for groups in (by_email, by_phone, by_link):
