@@ -394,6 +394,12 @@ check('Engels cv, woont in Antwerpen zonder nummer = blijft erin', c.woonland(c.
 check('woont in Londen (+44) = niet voor Loxo', c.woonland(c.normalized_snippet("John Smith\nLondon, UK\n+44 7700 900123"), ['+447700900123'])[0] == 'buitenland')
 check('geen adres of nummer = onduidelijk (blijft erin)', c.woonland(c.normalized_snippet("Kees Mol\nkees@x.nl\nWerkervaring"), [])[0] == '')
 
+_pad = ' x' * 250
+check('woont buitenland, werkte/studeerde in NL = band (blijft erin)',
+      c.nl_be_band(c.normalized_snippet("Jan\nLondon\n+44 7700 900123" + _pad + "\nWerkervaring\nDeveloper bij Datafabriek, Utrecht\nOpleiding\nHogeschool Utrecht"), []) != '')
+check('woont in India, geen band met NL/BE = geen band',
+      c.nl_be_band(c.normalized_snippet("Rahul\nBangalore, India\n+91 98450 12345" + _pad + "\nExperience\nDeveloper at Infosys, Pune\nEducation\nB.Tech, Anna University"), []) == '')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

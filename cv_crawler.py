@@ -737,6 +737,30 @@ def woonland(snippet, phones):
     return '', ''
 
 
+NL_BE_SCHOOL = re.compile(r'(?i)\b(?:hogeschool|universiteit|tu delft|tu eindhoven|tu/e|vrije universiteit|uva|hva|'
+                          r'avans|fontys|saxion|windesheim|hanzehogeschool|inholland|haagse hogeschool|nhl|stenden|'
+                          r'zuyd|han|rotterdam school|erasmus|nyenrode|tilburg university|ku leuven|ugent|vub|'
+                          r'universiteit gent|universiteit antwerpen|hogent|thomas more|odisee|vives|howest|pxl|'
+                          r'karel de grote|roc|mbo|hbo|vwo|havo|vmbo)\b')
+
+
+def nl_be_band(snippet, docs=()):
+    """Band met Nederland/België in de rest van het cv: Nederlandstalig, werk in een NL/BE-plaats, of opleiding
+    op een NL/BE-school. Geeft een korte uitleg of ''."""
+    redenen = []
+    if cv_taal(snippet) == 'nl':
+        redenen.append('Nederlandstalig cv')
+    werk = ' '.join(str(d['werkplaatsen'] or '') for d in docs if 'werkplaatsen' in d.keys())
+    body = ' ' + normalized_name((snippet or '')[450:]) + ' '
+    plekken = [pl for pl in NL_PLACES | BE_PLACES if f' {pl} ' in ' ' + normalized_name(werk) + ' ' or f' {pl} ' in body]
+    if plekken:
+        redenen.append('werkte/woonde in NL/BE (' + ', '.join(sorted(plekken)[:2]) + ')')
+    opl = ' '.join(str(d['opleidingen'] or '') for d in docs if 'opleidingen' in d.keys())
+    if NL_BE_SCHOOL.search(opl) or NL_BE_SCHOOL.search(body):
+        redenen.append('studeerde in NL/BE')
+    return ' en '.join(redenen[:2])
+
+
 def woonplaats_from(text):
     """Woonplaats = plaats in de kop of op een contactregel (naast adres, postcode, mail of telefoon).
     Een plaats bij een baan of stage ('Projectmanager, Den Haag') is de WERKplek, niet de woonplaats."""
@@ -3269,8 +3293,14 @@ def deduplicate(db, merge_file=None):
         if cv_taal(first['snippet'] or '') == 'es':
             why.append('Spaanstalig cv')
         land, waar = woonland(first['snippet'] or '', all_phones)
+        candidate['woont'] = ''
         if land == 'buitenland':
-            why.append(f'woont niet in Nederland of België ({waar})')
+            band = nl_be_band(first['snippet'] or '', [d for d in group])
+            if band:
+                # Bv. Nederlander die tijdelijk in Londen werkt, of iemand die hier studeerde: blijft kandidaat.
+                candidate['woont'] = f'buitenland ({waar}), maar {band} – zelf checken'
+            else:
+                why.append(f'woont niet in Nederland of België ({waar})')
         candidate['niet_voor_loxo'] = '; '.join(why)
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
@@ -3578,7 +3608,7 @@ def only_ticks(text):
 def personen_overzicht(people):
     """Eerste tabblad: per gegeven 'uit cv' naast 'gezocht' (online), plus zekerheid en waarom."""
     cols = ['naam', 'kandidaat_id', 'cv_id', 'open_cv', 'email', 'email_bron', 'telefoon', 'telefoon_bron',
-            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'bedrijf', 'bedrijf_soort',
+            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'bedrijf', 'bedrijf_soort', 'woont',
             ]
     rows = []
     for p in people:
@@ -3644,7 +3674,7 @@ def personen_overzicht(people):
                          linkedin=li, linkedin_bron=li_bron,
                          gezocht_zekerheid='\n'.join(labels), gezocht_waarom=pretty_waarom(only_ticks(p.get('online_waarom', ''))),
                          huidige_functie=role, laatst_bekende_werkgever=employer,
-                         bedrijf=p.get('bedrijf', ''), bedrijf_soort=p.get('bedrijf_soort', ''),
+                         bedrijf=p.get('bedrijf', ''), bedrijf_soort=p.get('bedrijf_soort', ''), woont=p.get('woont', ''),
                          zelf_zoeken_google=google_xray_link(p['naam'], not p['email'] and not found('email', ''),
                                                              not p['telefoon'] and not found('telefoon', '')),
                          persoon_id=p['persoon_id']))
