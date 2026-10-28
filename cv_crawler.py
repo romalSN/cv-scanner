@@ -2941,6 +2941,14 @@ def harde_blokkade(a, b):
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
     if _voornaam_botst(an, bn):
         return 'andere voornaam'
+    if loopbaan_botst(a, b):
+        return 'andere loopbaan (andere werkgevers in dezelfde jaren)'
+    aw, bw = [w for w in an.split() if w not in NAME_FILLERS], [w for w in bn.split() if w not in NAME_FILLERS]
+    if len(aw) >= 2 and len(bw) >= 2:
+        la, lb = aw[-1], bw[-1]
+        if (la != lb and la not in lb and lb not in la and difflib.SequenceMatcher(None, la, lb).ratio() < .75
+                and not (set(aw) <= set(bw) or set(bw) <= set(aw))):
+            return 'andere achternaam'
     keys = a.keys() if hasattr(a, 'keys') else a
     if 'path' in keys and 'path' in (b.keys() if hasattr(b, 'keys') else b):
         fa, fb = naam_uit_bestandsnaam(a['path'], a['snippet']), naam_uit_bestandsnaam(b['path'], b['snippet'])
@@ -2968,6 +2976,9 @@ def safe_pair(a, b):
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
     if blok:
+        if blok == 'andere achternaam' and ((ae & be) or (ap & bp) or (al & bl)):
+            # Bv. 'Botwin Wytze' / 'Botwin Sijtsma' met hetzelfde mailadres: niet automatisch, wel laten zien.
+            return False, True, 'zelfde contactgegevens, maar andere achternaam'
         return False, False, ''
     # Eén cv zonder bruikbare naam ('Persoonlijke Gegevens'), het andere met naam: samen als e-mail ÉN telefoon
     # gelijk zijn en het mailadres bij die naam past (frank.jansen@ bij Frank Jansen). Niet bij info@/bureau-adressen.
@@ -3046,7 +3057,10 @@ def safe_pair(a, b):
     overlap = len(at & bt)
     jacc = overlap / max(1, len(at | bt))
     if same_name and (text_sim >= .87 or (overlap >= 18 and jacc >= .32)):
-        return True, False, 'zelfde naam en zeer sterk gelijkende CV-inhoud'
+        # Gelijke tekst kan ook komen door hetzelfde sjabloon (bureau). Alleen samen met nog een hard bewijs.
+        if (ae & be) or (ap & bp) or (al & bl) or zelfde_werk(a, b):
+            return True, False, 'zelfde naam en zeer sterk gelijkende CV-inhoud'
+        return False, True, 'zelfde naam en gelijkende tekst, maar geen gedeeld contact of werkgever+jaren'
     if same_name:
         # Nieuwere versie van hetzelfde cv (bv. er is een baan bijgekomen): zelfde naam
         # + minstens 1 STERK gedeeld kenmerk (zelfde specifieke werkgever/stagebedrijf)
@@ -3076,7 +3090,7 @@ def safe_pair(a, b):
         shared_strong = shared(orgs(a), orgs(b))
         # Plaatsnamen exact (Leiden ≠ Weiden); opleidingen mogen een typfout hebben.
         shared_weak = shared(weak(a), weak(b), lambda v: v.startswith('opleidingen:'))
-        if shared_strong and shared_weak:
+        if shared_strong and shared_weak and zelfde_werk(a, b):
             return True, False, ('zelfde naam + zelfde ' + ', '.join(sorted(shared_strong)) + ' + ' +
                                  ', '.join(sorted(x.split(':', 1)[1] for x in shared_weak)) + ' (nieuwere cv-versie)')
     if same_name or (name_sim >= .91 and (overlap >= 9 or text_sim >= .60)):
@@ -3861,6 +3875,74 @@ def filter_kandidaat(doc, phones, emails, ai_vraag):
     return 'ok', ''
 
 
+WERK_STOP = {'de', 'het', 'een', 'the', 'a', 'an', 'een', 'diverse', 'verschillende', 'eigen', 'own', 'various'}
+
+
+def werk_periodes(d):
+    """(werkgever, beginjaar, eindjaar) uit het HELE uitgelezen cv: elke periode met jaartallen en daarna
+    'bij X' / 'at X' / '@ X'. Werkgever = eerste woord na bij/at (robuust, ook als de zin doorloopt)."""
+    uit = []
+    for b, e, venster, _exact, _voor in periodes_uit_cv(d['snippet'] or ''):
+        stuk = ' ' + ' '.join(venster.split()[:12]) + ' '
+        m = re.search(r' (?:bij|at|voor|for) ([a-z0-9]+(?: [a-z0-9]+)?)', stuk)
+        if not m:
+            continue
+        if BIG_EMPLOYERS.match(m.group(1)):
+            w = '*' + m.group(1).split()[0]          # groot bedrijf: telt mee voor botsingen, niet als bewijs
+        else:
+            w = m.group(1).split()[0]
+        if len(w) < 3 or w in WERK_STOP or w in NL_PLACES:
+            continue
+        uit.append((w, b // 12, e // 12))
+    return uit
+
+
+def loopbaan_botst(a, b):
+    """Twee cv's met elk minstens 2 banen, die in DEZELFDE jaren bij ANDERE werkgevers werkten (die werkgever
+    komt in het andere cv niet voor) en geen enkele werkgever gemeen hebben = twee verschillende personen."""
+    pa, pb = werk_periodes(a), werk_periodes(b)
+    if not pa or not pb or len(pa) + len(pb) < 3:
+        return False
+    def ook_daar(lijst, w, b, e):
+        # Staat werkgever w in het andere cv in (ongeveer) dezelfde jaren? (1 jaar speling)
+        return any(x == w and min(e, y2) - max(b, y1) >= 0 for x, y1, y2 in lijst)
+    for w1, b1, e1 in pa:
+        for w2, b2, e2 in pb:
+            # Minstens 2 jaar tegelijk bij twee verschillende werkgevers, en geen van beide cv's noemt de
+            # werkgever van het andere cv in die jaren.
+            lo, hi = max(b1, b2), min(e1, e2)
+            if (w1 != w2 and hi - lo >= 2
+                    and not ook_daar(pb, w1, lo + 1, hi - 1) and not ook_daar(pa, w2, lo + 1, hi - 1)):
+                return True
+    return False
+
+
+def zelfde_werk(a, b):
+    """Dezelfde (niet-grote) werkgever met (bijna) dezelfde beginjaar in beide cv's: 'Datafabriek 2017-2021'."""
+    pa, pb = werk_periodes(a), werk_periodes(b)
+    return sorted({f'{w} {y1}' for w, y1, _e in pa for w2, z1, _f in pb
+                   if w == w2 and not w.startswith('*') and abs(y1 - z1) <= 1})
+
+
+def cv_samenvatting(d, max_chars=1800):
+    """Korte, gestructureerde samenvatting van het hele cv voor de AI (in plaats van alleen het begin)."""
+    regels = [f"naam: {d['name'] or '-'}"]
+    try:
+        regels.append('e-mail: ' + ', '.join(json.loads(d['emails'] or '[]')[:3]))
+        regels.append('telefoon: ' + ', '.join(json.loads(d['phones'] or '[]')[:3]))
+    except ValueError:
+        pass
+    per = periodes_uit_cv(d['snippet'] or '')
+    for b, e, venster, _x, _v in per[:12]:
+        regels.append(f"{b // 12}-{e // 12}: " + ' '.join(venster.split()[:10]))
+    if 'opleidingen' in d.keys() and d['opleidingen']:
+        regels.append('opleiding: ' + str(d['opleidingen'])[:160])
+    tekst = '\n'.join(regels)
+    if len(tekst) < 600:
+        tekst += '\n' + (d['snippet'] or '')[:max_chars - len(tekst)]
+    return tekst[:max_chars]
+
+
 def _bewijs_stukken(a, b):
     """Onafhankelijke Python-bewijzen dat twee cv's van dezelfde persoon zijn (bureaugegevens tellen niet)."""
     stukken = []
@@ -3881,9 +3963,13 @@ def _bewijs_stukken(a, b):
     def lijst(d, k):
         v = d[k] if k in d.keys() else ''
         return {normalized_name(x) for x in re.split(r'\s*[;|]\s*', v or '') if len(normalized_name(x)) >= 4}
-    wg = {w for w in lijst(a, 'werkgevers') & lijst(b, 'werkgevers') if not BIG_EMPLOYERS.match(w)}
-    if wg:
-        stukken.append('zelfde werkgever (' + sorted(wg)[0] + ')')
+    zw = zelfde_werk(a, b)
+    if zw:
+        stukken.append('zelfde werkgever met zelfde jaren (' + zw[0] + ')')
+    else:
+        wg = {w for w in lijst(a, 'werkgevers') & lijst(b, 'werkgevers') if not BIG_EMPLOYERS.match(w)}
+        if wg:
+            stukken.append('zelfde werkgever (' + sorted(wg)[0] + ')')
     if lijst(a, 'opleidingen') & lijst(b, 'opleidingen'):
         stukken.append('zelfde opleiding')
     return stukken
@@ -3897,7 +3983,20 @@ def ai_dubbel_controle(docs, reviews, samenvoegen, out_dir):
     3. AI vergelijkt beide cv's (houdt rekening met oude/nieuwe versie en andere taal).
     4. Tweede, gerichte AI-vraag: een concreet feit dat in beide staat (werkgever+jaren, opleiding+jaar).
     5. Python: past het bij ALLE cv's van de kandidaatgroep? Pas dan samen. Anders blijft het een twijfelgeval."""
-    if not reviews or os.environ.get('CV_AI_DUBBEL', '0') != '1':   # pas aan na geslaagde AI-test
+    if not reviews:
+        return reviews
+    # Stap A (Python, zonder AI): persoonlijk contactgegeven gedeeld (geen bureau) + dezelfde specifieke werkgever
+    # met dezelfde jaren + geen harde blokkade + past in de hele groep -> samen.
+    rest = []
+    for a, b, reason in reviews:
+        da, db_ = docs[a], docs[b]
+        st = _bewijs_stukken(da, db_)
+        contact = any(x.startswith(('zelfde persoonlijk', 'zelfde telefoon', 'zelfde LinkedIn')) for x in st)
+        if not harde_blokkade(da, db_) and contact and zelfde_werk(da, db_) and samenvoegen(a, b):
+            continue
+        rest.append((a, b, reason))
+    reviews = rest
+    if not reviews or os.environ.get('CV_AI_DUBBEL', '0') != '1':   # AI pas aan na geslaagde AI-test
         return reviews
     try:
         import ai_rechter
@@ -3919,7 +4018,7 @@ def ai_dubbel_controle(docs, reviews, samenvoegen, out_dir):
         key = f"{ai_rechter.MODEL_ID}|" + '|'.join(sorted((da['sha'] or da['path'], db_['sha'] or db_['path'])))
         res = cache.get(key)
         if res is None:
-            res = ai_rechter.zelfde_persoon(da['snippet'] or '', db_['snippet'] or '')
+            res = ai_rechter.zelfde_persoon(cv_samenvatting(da), cv_samenvatting(db_))
             if res is None:
                 over.append((a, b, reason))
                 continue

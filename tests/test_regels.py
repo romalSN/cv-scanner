@@ -609,7 +609,7 @@ def _d(name, emails, phones=()):
     import json as _j
     return {'name': name, 'emails': _j.dumps(emails), 'phones': _j.dumps(list(phones)), 'links': '[]', 'sha': name,
             'snippet': '', 'tokens': '[]'}
-check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = samen', c.safe_pair(_d('Botwin Wytze', ['botwin.sijtsma@gmail.com'], ['+31638189335']), _d('Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], ['+31638189335']))[0])
+check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = mogelijk dubbel (andere achternaam, niet automatisch)', not c.safe_pair(_d('Botwin Wytze', ['botwin.sijtsma@gmail.com'], ['+31638189335']), _d('Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], ['+31638189335']))[0])
 check('dubbel: Piet Jansen + Marie Jansen, zelfde gezinsmail = NIET samen', not c.safe_pair(_d('Piet Jansen', ['jansen@ziggo.nl']), _d('Marie Jansen', ['jansen@ziggo.nl']))[0])
 check('dubbel: bureaumail jan@bureau met Jan Bakker + Jan de Vries = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan@itbureau.nl']), _d('Jan de Vries', ['jan@itbureau.nl']))[0])
 check('dubbel: recruiter jan.bakker@bureau.nl bij Jan Bakker + Jan Smit = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan.bakker@itbureau.nl']), _d('Jan Smit', ['jan.bakker@itbureau.nl']))[0])
@@ -638,7 +638,7 @@ for _wg, _fn, _verwacht in (('Datafabriek B.V.', 'Backend developer', 'Datafabri
 T = '+31612345678'; T2 = '+31687654321'
 C = [  # (naam a, naam b, mails, tel a, tel b, verwacht samen?)
  # zelfde persoon
- ('Botwin Wytze', 'Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], [T], [T], True),
+ ('Botwin Wytze', 'Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], [T], [T], False),   # andere achternaam: twijfelgeval
  ('Jan van Dijk', 'Jan van Dijk Pietersen', ['jandijk@hotmail.com'], [], [], True),
  ('Jan Bakker', 'Jan Bakker', ['jan.bakker@gmail.com'], [], [], True),
  ('Jan Bakker', 'J. Bakker', ['jan.bakker@gmail.com'], [], [], True),
@@ -765,6 +765,30 @@ _p4 = (_dd('Tom Bulck', ['aplitrakmail@broadbean.net'], ['+31224227904']), _dd('
 check('AI-dubbel: bureaugegevens tellen niet als bewijs', len(_ai_test([_p4], 'zelfde')[0]) == 0)
 c.BUREAU_CONTACT.clear()
 os.environ.pop('CV_AI_DUBBEL', None)
+
+# --- Dubbelen: 400 verzonnen paren (zelfde persoon in allerlei versies / naamgenoten, familie, bureaus) ---
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'ai_test'))
+from dubbel_paren import paren as _paren
+class _R(dict):
+    def keys(self): return super().keys()
+def _doc_t(t, i):
+    em = c.emails_in(t); ph = sorted(set(filter(None, (c.norm_phone(x) for x in c.phones_in(t)))))
+    return _R(name=c.guess_name(t, f'cv{i}', em), emails=_jj.dumps(em), phones=_jj.dumps(ph), links='[]', sha=str(i),
+              path=f'/u/cv{i}.pdf', snippet=c.normalized_snippet(t), tokens=_jj.dumps(c.signature(t)),
+              werkgevers=c.werkgevers_from(t), opleidingen=c.opleidingen_from(t))
+_fout, _samen, _zelfde = [], 0, 0
+for _k, (_waar, _soort, _ta, _tb) in enumerate(_paren(400, seed=11)):
+    _a, _b = _doc_t(_ta, 2 * _k), _doc_t(_tb, 2 * _k + 1)
+    _auto, _rev, _ = c.safe_pair(_a, _b)
+    if not _auto and _rev:
+        _st = c._bewijs_stukken(_a, _b)
+        _auto = bool(not c.harde_blokkade(_a, _b) and c.zelfde_werk(_a, _b)
+                     and any(x.startswith(('zelfde persoonlijk', 'zelfde telefoon', 'zelfde LinkedIn')) for x in _st))
+    if _waar == 'anders' and _auto:
+        _fout.append(_soort)
+    _zelfde += _waar == 'zelfde'; _samen += _waar == 'zelfde' and _auto
+check('dubbel-set 400 paren: 0 verschillende personen samengevoegd', not _fout, _fout)
+check(f'dubbel-set 400 paren: minstens 90% echte dubbelen samen ({_samen}/{_zelfde})', _samen >= .9 * _zelfde, (_samen, _zelfde))
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
