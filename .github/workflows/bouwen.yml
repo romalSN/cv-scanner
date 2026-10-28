@@ -22,6 +22,8 @@ jobs:
             naam: Mac
           - os: macos-15          # zelfde M-versie op een tweede soort machine (GitHub heeft vaak te weinig M-Macs)
             naam: Mac-15
+          - os: macos-26          # nieuwste M-machines bij GitHub: vaak wél vrij als macos-14/15 vol zitten
+            naam: Mac-26
           - os: macos-15-intel    # oudere Macs met Intel-processor (t/m 2020)
             naam: Mac-Intel
     runs-on: ${{ matrix.os }}
