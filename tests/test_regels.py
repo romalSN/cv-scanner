@@ -416,6 +416,60 @@ check('havo in NL = hier opgegroeid', c.jaren_nl_be(c.normalized_snippet("Jan\nO
 check('pas 1 jaar in NL = te weinig jaren',
       c.jaren_nl_be(c.normalized_snippet(f"Arjun\nExperience\n{_jr-1} - Present Developer, Adyen, Amsterdam\n{_jr-6} - {_jr-1} Developer, Infosys, Pune, India")) < c.MIN_JAREN_NL)
 
+# --- Stap 1: taal, woonplaats NL/BE, 5 jaar (marge 4), AI bij twijfel, anders controleren ---
+_Y = _dt.date.today().year
+def _doc(text, taal=None, opl='', werk=''):
+    return {'snippet': c.normalized_snippet(text), 'taal': c.cv_hoofdtaal(text) if taal is None else taal,
+            'opleidingen': opl, 'werkplaatsen': werk, 'sha': str(hash(text))}
+def _filter(text, phones, emails=(), ai=None, **kw):
+    return c.filter_kandidaat(_doc(text, **kw), phones, list(emails), (lambda soort: ai.get(soort)) if ai else (lambda soort: None))
+_EN = ("Experience\n{a} - present Senior developer at Banco Ejemplo. Responsible for the development of the payment platform "
+       "and worked with the team on the migration.\n{b} - {a} Developer at Telco Ejemplo. Developed internal tools using Java "
+       "and maintained the pipelines for the apps.\nEducation\nMSc Computer Science. I have experience with agile teams and "
+       "I enjoy working with international colleagues.")
+fk = _filter("Carlos Rodriguez\nMadrid, Spain\n+34 600 000 000\n" + _EN.format(a=_Y-3, b=_Y-8), ['+34600000000'])
+check('filter: Engels cv, woont in Madrid, geen band NL/BE = niet meegenomen (woonplaats)', fk == ('weg', 'woont niet in Nederland of België'), fk)
+fk = _filter("Carlos Rodriguez\nAmsterdam\n06-00000701\n" + _EN.format(a=_Y-8, b=_Y-12), ['+31600000701'])
+check('filter: Engels cv, Spaanse naam, woont in Amsterdam = mee', fk[0] == 'ok', fk)
+fk = _filter("Carlos Rodriguez\nAmsterdam\n" + "Experiencia\nResponsable del desarrollo de la plataforma con el equipo y de los clientes "
+             "para la empresa durante varios años.\nTrabajo con Java y Python desde hace mucho tiempo con clientes internacionales "
+             "y también gestión de proyectos para el banco.", ['+31600000702'])
+check('filter: Spaanstalig cv = niet meegenomen (taal), ook als iemand hier woont', fk == ('weg', 'taal van het cv'), fk)
+fk = _filter("x", ['+31600000703'], taal='indiaas')
+check('filter: cv in Indiase taal = niet meegenomen (taal)', fk == ('weg', 'taal van het cv'), fk)
+fk = _filter(f"Rajesh Kumar\nAmsterdam\n06-00000704\nExperience\n{_Y-9} - present Developer, Adyen, Amsterdam. Responsible for the "
+             f"development of payment services and worked with the team.\n{_Y-14} - {_Y-9} Developer, Infosys, Pune, India. "
+             "Developed tools for the clients and maintained the systems.", ['+31600000704'])
+check('filter: Indiase naam, 9 jaar in NL = mee', fk[0] == 'ok', fk)
+fk = _filter(f"Rajesh Kumar\nAmsterdam\n06-00000705\nExperience\n{_Y-1} - present Developer, Adyen, Amsterdam. Responsible for the "
+             f"development of payment services and worked with the team.\n{_Y-6} - {_Y-1} Developer, Infosys, Pune, India. "
+             "Developed tools for the clients and maintained the systems.", ['+31600000705'])
+check('filter: pas 1 jaar in NL (duidelijk in cv) = niet meegenomen (verblijf)', fk[0] == 'weg' and 'jaar' in fk[1], fk)
+_twijfel = (f"Rajesh Kumar\nAmsterdam\n06-00000706\nExperience\n{_Y-4} - present Developer, Adyen, Amsterdam. Responsible for the "
+            f"development of payment services and worked with the team.\n{_Y-9} - {_Y-4} Developer, Infosys, Pune, India. "
+            "Developed tools for the clients and maintained the systems.")
+fk = _filter(_twijfel, ['+31600000706'])
+check('filter: 4 jaar in NL (marge) zonder AI = controleren', fk[0] == 'controleren', fk)
+fk = _filter(_twijfel, ['+31600000706'], ai={'verblijf': 'ja'})
+check('filter: 4 jaar in NL, AI bevestigt 5 jaar = mee', fk[0] == 'ok', fk)
+fk = _filter(_twijfel, ['+31600000706'], ai={'verblijf': 'nee'})
+check('filter: 4 jaar in NL, AI zegt nee = niet meegenomen', fk[0] == 'weg', fk)
+fk = _filter(f"Jan de Vries\nLondon, United Kingdom\n+44 7700 900123\nWerkervaring\n{_Y-2} - heden Developer bij Monzo. "
+             f"Verantwoordelijk voor de ontwikkeling van het platform.\n{_Y-10} - {_Y-2} Developer bij Datafabriek, Utrecht. "
+             "Ik heb daar veel ervaring opgedaan met het team.", ['+447700900123'], werk='utrecht')
+check('filter: Nederlander nu in Londen, band met NL, zonder AI = controleren (niet weg)', fk[0] == 'controleren', fk)
+fk = _filter("Kees Mol\nkees@x.nl\nWerkervaring\nDeveloper bij Codewerk. Ik werk graag met het team aan de ontwikkeling van "
+             "de systemen en heb veel ervaring met Java.", [])
+check('filter: geen woon- of verblijfsinfo = mee (geen aanname)', fk[0] == 'ok', fk)
+fk = _filter("x", ['+31600000707'], taal='onduidelijk')
+check('filter: taal onduidelijk zonder AI = controleren', fk[0] == 'controleren', fk)
+fk = _filter("x", ['+31600000707'], taal='onduidelijk', ai={'taal': 'engels'})
+check('filter: taal onduidelijk, AI zegt Engels = mee', fk[0] == 'ok', fk)
+fk = _filter(f"Rajesh Kumar\nAmsterdam\n06-00000708\nExperience\n{_Y-9} - present Developer, Adyen, Amsterdam. Responsible for the "
+             "development of payment services and worked with the team.\nEducation\nB.Tech Computer Science, Anna University, Chennai",
+             ['+31600000708'])
+check('filter: woont lang in NL, opleiding in India = mee (geen uitsluiting op opleidingsland)', fk[0] == 'ok', fk)
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

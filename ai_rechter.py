@@ -228,6 +228,41 @@ def classify(text: str) -> dict | None:
         return {'soort': 'onzeker', 'naam': '', 'reden': '', 'fout': str(exc)[:100], 'sec': round(time.time() - t, 1)}
 
 
+FILTER_VRAGEN = {
+    'taal': ("In welke taal zijn de ZINNEN van dit cv geschreven (werkervaring, opleiding, vaardigheden)? "
+             "Negeer namen, plaatsnamen, bedrijfsnamen en schoolnamen: een Spaanse of Indiase naam of een stad als "
+             "Madrid zegt niets over de taal van het cv.",
+             ["nederlands", "engels", "spaans", "indiase_taal", "andere_taal", "onduidelijk"]),
+    'woont': ("Woont deze persoon NU in Nederland of België? Kijk naar het adres of de woonplaats bovenaan, het "
+              "telefoonnummer en de huidige baan. Eerder werk in het buitenland zegt niets over waar iemand nu woont. "
+              "Antwoord 'onduidelijk' als het cv het niet laat zien.",
+              ["ja", "nee", "onduidelijk"]),
+    'verblijf': ("Heeft deze persoon in totaal minstens 5 jaar in Nederland of België gewoond (huidige en eerdere "
+                 "jaren samen, werk en opleiding tellen mee)? Antwoord 'onduidelijk' als het cv het niet laat zien.",
+                 ["ja", "nee", "onduidelijk"]),
+}
+
+
+def filter_vraag(soort: str, text: str) -> str | None:
+    """Extra controle bij twijfel (taal / woont in NL-BE / 5 jaar in NL-BE). Geeft het antwoord of None (geen AI)."""
+    if not available() or soort not in FILTER_VRAGEN:
+        return None
+    llm = _load()
+    if llm is None:
+        return None
+    vraag, opties = FILTER_VRAGEN[soort]
+    schema = {"type": "object", "properties": {"antwoord": {"type": "string", "enum": opties}}, "required": ["antwoord"]}
+    try:
+        with _lock:
+            out = llm.create_chat_completion(
+                messages=[{"role": "user", "content": f"{vraag}\n\nCV:\n{text[:3000]}"}], temperature=0,
+                max_tokens=30, response_format={"type": "json_object", "schema": schema})
+        a = json.loads(out['choices'][0]['message']['content']).get('antwoord')
+        return a if a in opties else 'onduidelijk'
+    except Exception:
+        return 'onduidelijk'
+
+
 def self_test(model: str) -> int:
     """Voor de bouwmachine: laad een (klein) model en beoordeel 2 gevallen. Print 'AI OK'."""
     os.environ['CV_AI_MODEL'] = model

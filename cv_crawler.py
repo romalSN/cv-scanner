@@ -667,42 +667,81 @@ def bedrijf_soort(bedrijf_raw, name, emails, shared=1):
     return bedrijf, 'onbekend'
 
 
-# Taal herkennen met woorden die ALLEEN in die taal voorkomen. Gedeelde woorden ('de', 'en', 'al', 'no', 'la',
-# 'me', 'a', 'o', 'van', 'op') tellen bewust niet: die staan ook in Nederlandse of Engelse cv's.
+# Taalherkenning van het cv. Kijkt naar de ZINNEN (werkervaring, opleiding, vaardigheden): woorden met een
+# hoofdletter (namen, plaatsen, bedrijven, scholen) en woorden met cijfers tellen niet mee. Per zin wordt de
+# taal bepaald met kleine woordjes die alleen in die taal voorkomen; de taal met de meeste tekst is de hoofdtaal.
+# Gedeelde woordjes ('de', 'en', 'in', 'op', 'a', 'o', 'la', 'no', 'son', 'he', 'era') tellen bewust niet.
 TAAL_WOORDEN = {
-    'es': {'y', 'el', 'los', 'las', 'del', 'con', 'para', 'por', 'una', 'que', 'como', 'sus', 'experiencia',
-           'educación', 'educacion', 'formación', 'formacion', 'años', 'anos', 'trabajo', 'empresa', 'desarrollo',
-           'gestión', 'gestion', 'idiomas', 'español', 'espanol', 'inglés', 'ingles', 'actualidad', 'habilidades',
-           'conocimientos', 'responsable', 'proyectos', 'también', 'tambien', 'más', 'sobre', 'desde', 'hasta',
-           'nivel', 'datos', 'personales', 'teléfono', 'telefono', 'correo', 'dirección', 'direccion', 'licenciatura',
-           'grado', 'universidad', 'estudios', 'cursos', 'laboral', 'puesto', 'funciones', 'cliente', 'clientes',
-           'equipo', 'sistemas', 'redes', 'informática', 'informatica', 'ingeniero', 'ingeniería', 'ingenieria'},
-    'nl': {'het', 'een', 'met', 'voor', 'naar', 'bij', 'werkervaring', 'opleiding', 'opleidingen', 'vaardigheden',
-           'heden', 'jaar', 'werkzaamheden', 'verantwoordelijk', 'ontwikkeling', 'kennis', 'ervaring', 'talen',
-           'nederlands', 'engels', 'rijbewijs', 'woonplaats', 'geboortedatum', 'ik', 'wij', 'zijn', 'wordt', 'ook',
-           'binnen', 'tussen', 'onder', 'door', 'als', 'niet', 'deze', 'die', 'dat', 'waar'},
-    'en': {'the', 'and', 'with', 'for', 'experience', 'education', 'skills', 'present', 'responsible', 'years',
-           'development', 'team', 'languages', 'english', 'dutch', 'which', 'this', 'that', 'from', 'was', 'were',
-           'have', 'has', 'within', 'between', 'including', 'worked', 'working', 'management'},
+    'es': {'el', 'los', 'las', 'del', 'con', 'para', 'por', 'una', 'que', 'como', 'sus', 'pero', 'muy', 'mas',
+           'más', 'esta', 'este', 'estos', 'entre', 'sobre', 'desde', 'hasta', 'durante', 'tambien', 'también',
+           'donde', 'cuando', 'mediante', 'segun', 'según', 'fue', 'está', 'están', 'estan', 'ser', 'hacer',
+           'realizar', 'realizado', 'experiencia', 'formacion', 'formación', 'conocimientos', 'habilidades',
+           'responsable', 'gestion', 'gestión', 'desarrollo', 'trabajo', 'idiomas', 'nivel', 'actualidad',
+           'funciones', 'equipo', 'clientes', 'datos', 'empresa', 'proyectos', 'años', 'anos', 'y'},
+    'nl': {'het', 'een', 'met', 'voor', 'naar', 'bij', 'van', 'zijn', 'wordt', 'worden', 'heb', 'heeft', 'hebben',
+           'ook', 'niet', 'deze', 'dit', 'dat', 'die', 'waar', 'wat', 'als', 'door', 'onder', 'tussen', 'binnen',
+           'op', 'werkervaring', 'opleiding', 'vaardigheden', 'heden', 'jaar', 'ervaring', 'kennis',
+           'verantwoordelijk', 'werkzaamheden', 'ontwikkeling', 'ik', 'wij', 'mijn', 'onze', 'gewerkt', 'werk'},
+    'en': {'the', 'and', 'with', 'for', 'of', 'to', 'is', 'are', 'was', 'were', 'have', 'has', 'been', 'this',
+           'that', 'which', 'from', 'at', 'by', 'an', 'as', 'our', 'my', 'experience', 'education', 'skills',
+           'responsible', 'development', 'team', 'present', 'years', 'working', 'worked', 'including', 'within',
+           'managed', 'developed', 'using'},
+    'hi': {'hai', 'hain', 'aur', 'ka', 'ki', 'ke', 'mein', 'se', 'ko', 'nahi', 'nahin', 'bhi', 'tha', 'thi',
+           'kya', 'yeh', 'woh', 'liye', 'ek', 'kiya', 'karna', 'karte'},
 }
+# Indiase schriften: Devanagari, Bengaals, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam.
+INDIC_RE = re.compile(r'[\u0900-\u0D7F]')
+
+
+def cv_hoofdtaal(text):
+    """Hoofdtaal van het cv: 'nl', 'en', 'es', 'indiaas', 'anders', 'onduidelijk' of '' (te weinig tekst).
+    Werkt op de originele tekst (dan tellen woorden met een hoofdletter niet mee) en op de opgeslagen
+    tekst (kleine letters; dan in blokjes van 12 woorden)."""
+    text = (text or '')[:30000]
+    letters = len(re.findall(r'[^\W\d_]', text))
+    if letters >= 200:
+        indic = len(INDIC_RE.findall(text))
+        if indic >= .3 * letters:
+            return 'indiaas'
+        if indic >= .1 * letters:
+            return 'onduidelijk'
+    has_case = any(ch.isupper() for ch in text[:3000])
+    if has_case:
+        stukken = re.split(r'[\n.;:!?•|]+', text)
+    else:
+        w = text.split()
+        stukken = [' '.join(w[i:i + 12]) for i in range(0, len(w), 12)]
+    gewicht = collections.Counter()
+    for stuk in stukken:
+        words = re.findall(r"[^\W\d_][^\W\d_'’]*", stuk)
+        if has_case:
+            # Namen, plaatsen, bedrijven en scholen (met hoofdletter) tellen niet voor de taal.
+            words = [w for w in words if not w[0].isupper()]
+        words = [w.lower() for w in words]
+        if len(words) < 4:
+            continue
+        tel = {t: sum(1 for w in words if w in ws) for t, ws in TAAL_WOORDEN.items()}
+        order = sorted(tel.items(), key=lambda kv: kv[1], reverse=True)
+        (best, n1), (_t2, n2) = order[0], order[1]
+        if n1 >= 2 and n1 >= 2 * max(n2, 1) - (1 if n2 == 0 else 0):
+            gewicht[best] += len(words)
+    totaal = sum(gewicht.values())
+    if totaal < (15 if has_case else 25):
+        return ''
+    best, n = gewicht.most_common(1)[0]
+    if n < .6 * totaal:
+        return 'onduidelijk'
+    return {'hi': 'indiaas'}.get(best, best)
 
 
 def cv_taal(text):
-    """'es' / 'nl' / 'en' / '' (onduidelijk). Spaans alleen als dat duidelijk de hoofdtaal is."""
-    words = re.findall(r'[a-záéíóúñü]+', (text or '').lower()[:20000])
-    if len(words) < 40:
-        return ''
-    tel = {t: sum(1 for w in words if w in ws) for t, ws in TAAL_WOORDEN.items()}
-    best = max(tel, key=tel.get)
-    rest = sum(v for t, v in tel.items() if t != best)
-    if best == 'es':
-        # Spaans: minstens 15 typisch Spaanse woorden én ruim meer dan Nederlands + Engels samen.
-        return 'es' if tel['es'] >= 15 and tel['es'] >= 2 * rest else ''
-    return best if tel[best] >= 8 and tel[best] > rest else ''
+    """Oude naam (wordt elders gebruikt): 'es' / 'nl' / 'en' / ''."""
+    t = cv_hoofdtaal(text)
+    return t if t in ('es', 'nl', 'en') else ''
 
 
 # Wens opdrachtgever: kandidaten moeten in Nederland of België wonen. Wie aantoonbaar ergens anders woont,
-# gaat naar 'Niet voor Loxo'. Gebaseerd op woonplaats/telefoon in de kop, nooit op naam, afkomst of cv-taal.
+# telt niet als kandidaat ('niet meegenomen'). Gebaseerd op woonplaats/telefoon in de kop, nooit op naam, afkomst of cv-taal.
 INDIA_PLACES = {'india', 'bangalore', 'bengaluru', 'mumbai', 'bombay', 'delhi', 'new delhi', 'chennai', 'madras', 'pune',
                 'hyderabad', 'kolkata', 'calcutta', 'noida', 'gurgaon', 'gurugram', 'ahmedabad', 'kochi', 'cochin',
                 'coimbatore', 'trivandrum', 'thiruvananthapuram', 'chandigarh', 'jaipur', 'indore', 'nagpur', 'mysore',
@@ -728,6 +767,12 @@ def woonland(snippet, phones):
     Kijkt alleen naar de kop/contactgegevens (begin van het cv) en de telefoonnummers. Nederlands kenmerk wint
     altijd: wie in Nederland woont maar vroeger in India werkte, blijft gewoon kandidaat."""
     head = ' ' + _woorden_en_cijfers((snippet or '')[:450]) + ' '
+    # De kop stopt bij het eerste cv-kopje: plaatsen in werkervaring/opleiding zeggen niets over de woonplaats.
+    m = re.search(r' (?:werkervaring|ervaring|experience|professional experience|work experience|profiel|profile|'
+                  r'samenvatting|summary|opleiding|opleidingen|education|vaardigheden|skills|loopbaan|career|'
+                  r'experiencia|formacion|over mij|about me|opdrachten|projecten|projects) ', head)
+    if m and m.start() > 10:
+        head = head[:m.start()] + ' '
     nl_phone = any(str(p).startswith('+31') for p in phones or [])
     nl_post = re.search(r'(?<![a-z0-9])[1-9]\d{3} ?[a-z]{2}(?![a-z0-9])', head) is not None
     nl_place = any(f' {pl} ' in head for pl in NL_PLACES)
@@ -1923,6 +1968,8 @@ def db_open(out):
         db.execute("ALTER TABLE docs ADD COLUMN websites TEXT NOT NULL DEFAULT '[]'")
     if 'leverancier' not in current:
         db.execute("ALTER TABLE docs ADD COLUMN leverancier TEXT NOT NULL DEFAULT ''")
+    if 'taal' not in current:
+        db.execute("ALTER TABLE docs ADD COLUMN taal TEXT NOT NULL DEFAULT ''")
     db.execute('CREATE INDEX IF NOT EXISTS docs_sha ON docs(sha)')
     # Eigen API-sleutels mogen nooit in de index of Excel staan (oude versies lazen ze soms mee).
     db.execute("DELETE FROM docs WHERE path LIKE '%_sleutel.txt' OR path LIKE '%.cv-scanner-windows%' "
@@ -2355,7 +2402,7 @@ def ingest(args, db, out, roots=None, label=None):
                             tokens=json.dumps(signature(text)), year=year_from(text,p.stem),
                             employer=field_value(text,['werkgever','huidige werkgever','employer','company']) or current_job(text)[1],
                             role=field_value(text,['functie','huidige functie','job title','position']) or current_job(text)[0],
-                            websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text), leverancier=leverancier_from(text),
+                            websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text), leverancier=leverancier_from(text), taal=cv_hoofdtaal(text) or '-',
                             archive=dst, error='', classifier_version=CLASSIFIER_VERSION,
                             name_verified=int(bool(name) and status == 'cv'))
                 write_doc(db, data)
@@ -2558,7 +2605,7 @@ def process_document(real_file, path_str, stem, ext, stat, args, db, archive, la
               tokens=json.dumps(signature(text)), year=year_from(text, stem),
               employer=field_value(text, ['werkgever','huidige werkgever','employer','company']) or current_job(text)[1],
               role=field_value(text, ['functie','huidige functie','job title','position']) or current_job(text)[0],
-              websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text), leverancier=leverancier_from(text),
+              websites=json.dumps(websites_in(text)), stage=stage_from(text), bijbanen=bijbanen_from(text), woonplaats=woonplaats_from(text), werkplaatsen=werkplaatsen_from(text), opleidingen=opleidingen_from(text), werkgevers=werkgevers_from(text), leverancier=leverancier_from(text), taal=cv_hoofdtaal(text) or '-',
               archive=dst, error='', classifier_version=CLASSIFIER_VERSION,
               name_verified=int(bool(name) and status == 'cv')))
     summary[status] += 1
@@ -3221,9 +3268,102 @@ def role_is_specific(role):
     return any(w not in GENERIC_EVIDENCE and len(w) >= 3 for w in words)
 
 
+MIN_JAREN_EIS = 5       # regel opdrachtgever: minimaal 5 jaar in NL/BE; 4 tot 5 jaar = twijfel (AI kijkt mee)
+EXCLUDED = {}           # pad -> reden 'niet meegenomen' (laatste export)
+
+
+def _periodes_met_plaats(snippet):
+    text = ' ' + _woorden_en_cijfers(snippet or '') + ' '
+    plekken = (NL_PLACES | BE_PLACES | FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE
+    n = 0
+    for m in re.finditer(r'(?<!\d)(?:19[5-9]\d|20[0-3]\d)(?!\d)', text):
+        window = text[m.end():m.end() + 120] + ' '
+        if any(f' {p} ' in window for p in plekken):
+            n += 1
+    return n
+
+
+def filter_kandidaat(doc, phones, emails, ai_vraag):
+    """Mag deze kandidaat mee? ('ok', '') / ('weg', reden) / ('controleren', reden).
+    1. Taal van het cv (Spaans of een Indiase taal = niet meenemen).
+    2. Woont nu in Nederland of België.
+    3. Minimaal 5 jaar in NL/BE (4-5 jaar = twijfel).
+    Bij twijfel kijkt de AI mee; pas als het daarna nog onduidelijk is: 'controleren'. Niemand gaat eruit op
+    een aanname: alleen als het cv het duidelijk laat zien (of de AI het bevestigt)."""
+    snippet = doc['snippet'] or ''
+    taal = (doc['taal'] if 'taal' in doc.keys() else '') or ''
+    taal = '' if taal == '-' else taal
+    if not taal:
+        taal = cv_hoofdtaal(snippet)
+    # 1. Taal
+    if taal in ('es', 'indiaas'):
+        return 'weg', 'taal van het cv'
+    if taal == 'onduidelijk':
+        a = ai_vraag('taal')
+        if a in ('spaans', 'indiase_taal'):
+            return 'weg', 'taal van het cv'
+        if a not in ('nederlands', 'engels', 'andere_taal'):
+            return 'controleren', 'taal van het cv onduidelijk'
+    # 2. Woont nu in NL/BE
+    land, _waar = woonland(snippet, phones)
+    if land == 'buitenland':
+        band = bool(nl_be_band(snippet, [doc])) or any(
+            re.search(r'\.(?:nl|be)$', e) and not GENERIC_EMAIL.match(e) for e in emails)
+        a = ai_vraag('woont')
+        if a == 'nee':
+            return 'weg', 'woont niet in Nederland of België'
+        if a != 'ja':
+            if not band:
+                return 'weg', 'woont niet in Nederland of België'   # buitenlands adres/nummer en niets met NL/BE
+            return 'controleren', 'woonplaats onduidelijk'
+    # 3. Minimaal 5 jaar in NL/BE (alleen als het cv een buitenlandse periode laat zien)
+    laatst, _plek = laatst_buitenland(snippet)
+    if laatst:
+        jaren = max(jaren_nl_be(snippet), dt.date.today().year - laatst)
+        if jaren < MIN_JAREN_EIS:
+            a = ai_vraag('verblijf')
+            if a == 'ja':
+                return 'ok', ''
+            if a == 'nee':
+                return 'weg', f'korter dan {MIN_JAREN_EIS} jaar in Nederland of België'
+            if jaren < MIN_JAREN_NL and _periodes_met_plaats(snippet) >= 2:
+                return 'weg', f'korter dan {MIN_JAREN_EIS} jaar in Nederland of België'
+            return 'controleren', 'verblijfsduur in Nederland/België onduidelijk'
+    return 'ok', ''
+
+
 def deduplicate(db, merge_file=None):
     if merge_file:
         apply_decisions(db, Path(merge_file).parent)
+    EXCLUDED.clear()
+    out_dir = Path(merge_file).parent if merge_file else None
+    # Twijfelgevallen in het Spaans of een Indiase taal: niet meenemen (geen handwerk nodig).
+    try:
+        _gekozen = set(json.loads((out_dir / DECISIONS_FILE).read_text(encoding='utf-8'))) if out_dir else set()
+    except (OSError, ValueError):
+        _gekozen = set()
+    for r in db.execute("SELECT path, sha, snippet, taal, status, reason FROM docs WHERE status='review' "
+                        "OR (status='other' AND reason LIKE '%naam: ja%' AND reason LIKE '%contact: ja%')").fetchall():
+        if r['sha'] in _gekozen:
+            continue          # jouw eigen keuze in het twijfel-venster gaat voor
+        taal = (r['taal'] if r['taal'] not in (None, '', '-') else '') or cv_hoofdtaal(r['snippet'] or '')
+        if taal in ('es', 'indiaas'):
+            db.execute("UPDATE docs SET status='other', reason='niet meegenomen: taal van het cv' WHERE path=?", (r['path'],))
+    db.commit()
+    try:
+        decided = json.loads((out_dir / DECISIONS_FILE).read_text(encoding='utf-8')) if out_dir else {}
+    except (OSError, ValueError):
+        decided = {}
+    ai_cache_path = (out_dir / 'ai_filters.json') if out_dir else None
+    try:
+        ai_cache = json.loads(ai_cache_path.read_text(encoding='utf-8')) if ai_cache_path else {}
+    except (OSError, ValueError):
+        ai_cache = {}
+    try:
+        import ai_rechter
+        ai_model = ai_rechter.MODEL_ID
+    except Exception:
+        ai_model = 'geen'
     docs = db.execute("SELECT * FROM docs WHERE status='cv' AND classifier_version=? AND name_verified=1 ORDER BY path", (CLASSIFIER_VERSION,)).fetchall()
     docs = [d for d in docs if in_scope(d['path'], d['sha'])]
     dsu = DSU(len(docs))
@@ -3349,29 +3489,30 @@ def deduplicate(db, merge_file=None):
             fitting = [e for e in all_emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
             if fitting:
                 candidate['email'] = fitting[0]
-        # Niet voor Loxo: Spaanstalig cv of woont niet in Nederland (opdrachtgevers willen kandidaten die hier wonen).
-        why = []
-        if cv_taal(first['snippet'] or '') == 'es':
-            why.append('Spaanstalig cv')
-        land, waar = woonland(first['snippet'] or '', all_phones)
-        candidate['woont'] = ''
-        if land == 'buitenland':
-            band = nl_be_band(first['snippet'] or '', [d for d in group])
-            if band:
-                # Bv. Nederlander die tijdelijk in Londen werkt, of iemand die hier studeerde: gewoon kandidaat.
-                pass
-            else:
-                why.append(f'woont niet in Nederland of België ({waar})')
-        if not why:
-            # Regel opdrachtgever: in totaal minimaal 4 jaar in NL/BE gewoond. Alleen apart als iemand recent in
-            # het buitenland was ÉN het cv minder dan 4 jaar NL/BE laat zien (wie hier opgroeide telt als genoeg).
-            jaar, plek = laatst_buitenland(first['snippet'] or '')
-            if jaar and dt.date.today().year - jaar < MIN_JAREN_NL:
-                nl_jaren = jaren_nl_be(first['snippet'] or '')
-                if nl_jaren < MIN_JAREN_NL:
-                    why.append(f'korter dan {MIN_JAREN_NL} jaar in NL/BE volgens het cv (ca. {nl_jaren} jaar; '
-                               f'laatst in {plek.title()}, {jaar})')
-        candidate['niet_voor_loxo'] = '; '.join(why)
+        # Taal, woonplaats NL/BE en verblijfsduur (wens opdrachtgever). Jouw eigen keuze 'wel cv' gaat voor.
+        if not any(decided.get(d['sha'], {}).get('status') == 'cv' for d in group):
+            def ai_vraag(soort, _d=first):
+                key = f"{ai_model}|{soort}|{_d['sha']}"
+                if key not in ai_cache:
+                    try:
+                        import ai_rechter
+                        ans = ai_rechter.filter_vraag(soort, _d['snippet'] or '')
+                    except Exception:
+                        ans = None
+                    if ans is None:
+                        return None
+                    ai_cache[key] = ans
+                return ai_cache[key]
+            uitkomst, reden = filter_kandidaat(first, all_phones, all_emails, ai_vraag)
+            if uitkomst == 'weg':
+                for d in group:
+                    EXCLUDED[d['path']] = reden
+                continue
+            if uitkomst == 'controleren':
+                for d in group:
+                    db.execute("UPDATE docs SET status='review', name_verified=0, reason=? WHERE path=?",
+                               (f'controleren: {reden}', d['path']))
+                continue
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
     # Een e-mail of nummer dat in de cv's van 3+ verschillende personen staat, is van een bureau of bedrijf
@@ -3398,6 +3539,12 @@ def deduplicate(db, merge_file=None):
         person['bedrijf'], person['bedrijf_soort'] = bedrijf_soort(
             raw, person['naam'], [v for v in person['alle_emails'].split(' | ') if v],
             company_count.get(normalized_name(raw.replace('via:', '')), 1) if raw else 1)
+    db.commit()
+    if ai_cache_path:
+        try:
+            ai_cache_path.write_text(json.dumps(ai_cache), encoding='utf-8')
+        except OSError:
+            pass
     identities.sort(key=lambda r:(normalized_name(r['naam']), r['persoon_id']))
     if id_file:
         try:
@@ -3873,9 +4020,13 @@ def build_exports(db, out):
         pid = docs_to_id.get(d['path'],'')
         legacy = (d['classifier_version'] or 0) < CLASSIFIER_VERSION
         label = 'oude_beoordeling' if legacy and d['status'] in ('cv','review') else d['status']
+        if d['path'] in EXCLUDED or (d['reason'] or '').startswith('niet meegenomen:'):
+            label = 'niet meegenomen'
         files.append(dict(persoon_id=pid, cv_id=cv_id_of(d['sha']), naam=d['name'] if not legacy else '',status=label,cv_score=d['score'] if not legacy else 0,
              oorspronkelijk_bestand=d['path'],archiefkopie=d['archive'],sha256=d['sha'],
-             jaar=d['year'],toelichting=(d['note'] or d['reason']),fout=d['error']))
+             jaar=d['year'],toelichting=(EXCLUDED[d['path']] if d['path'] in EXCLUDED else
+                 (d['reason'] or '').replace('niet meegenomen: ', '') if (d['reason'] or '').startswith('niet meegenomen:')
+                 else (d['note'] or d['reason'])),fout=d['error']))
         if (legacy and d['status'] in ('cv','review')):
             legacy_count += 1
         if d['status'] in ('review','error','deferred') and not (legacy and d['status']=='review'):
@@ -3909,17 +4060,13 @@ def build_exports(db, out):
     checks = build_checks(reviews, people, doubt, legacy_count, unread_count, len(scanned))
     ccols = ['soort','advies','naam_1','naam_2','zelfde','verschillend','persoon_id_1','persoon_id_2',
              'bestand_1','bestand_2','aantal_bestanden','toelichting']
-    view_all, vcols = personen_overzicht(people)
-    weg = {p['persoon_id']: p['niet_voor_loxo'] for p in people if p.get('niet_voor_loxo')}
-    view = [r for r in view_all if r.get('persoon_id') not in weg]
-    apart = [dict(r, reden_niet_voor_loxo=weg[r['persoon_id']]) for r in view_all if r.get('persoon_id') in weg]
-    acols = ['reden_niet_voor_loxo'] + vcols
+    view, vcols = personen_overzicht(people)
     save_csv(out/'unieke_personen.csv',view,vcols)
-    save_csv(out/'niet_voor_loxo.csv',apart,acols)
-    if apart:
-        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv, woont niet in NL/België of '
-              f'korter dan {MIN_JAREN_NL} jaar hier); '
-              'zie tabblad ‘Niet voor Loxo’.', flush=True)
+    weg_personen = len({d['sha'] or d['path'] for d in all_docs if d['path'] in EXCLUDED
+                        or (d['reason'] or '').startswith('niet meegenomen:')})
+    if weg_personen:
+        print(f'NIET MEEGENOMEN: {weg_personen} cv(\'s) (taal, woonplaats of verblijfsduur); '
+              'zie ‘Bestanden en status’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
     error_cols = ['categorie','bestand','extensie','status','omschrijving']
@@ -3964,7 +4111,7 @@ def build_exports(db, out):
                 new_cols.insert(new_cols.index('cv_id') + 1, 'open_cv')
             return new_cols, new_rows
         xlsx_export(temporary, [
-            ('Unieke personen',vcols,view),('Niet voor Loxo',acols,apart),('Bestanden en status',*as_kid(fcols,files))])
+            ('Unieke personen',vcols,view),('Bestanden en status',*as_kid(fcols,files))])
         # Controle nodig, leesfouten en online-details staan alleen nog in de CSV-bestanden in de exportmap.
         with zipfile.ZipFile(temporary) as z:
             if z.testzip() is not None or 'xl/workbook.xml' not in z.namelist():
@@ -5302,7 +5449,8 @@ def ai_twijfel(db, out):
         cache = {}
     rows = db.execute("SELECT path, sha, name, snippet, reason, emails, phones, links, leverancier FROM docs "
                       "WHERE status='review' AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
-    todo = [r for r in rows if r['sha'] not in decided and (r['snippet'] or '').strip()]
+    todo = [r for r in rows if r['sha'] not in decided and (r['snippet'] or '').strip()
+            and not (r['reason'] or '').startswith('controleren:')]
     if not todo:
         return
     print(f'AI-TWIJFEL: {len(todo)} twijfelgevallen laten beoordelen door de lokale AI (stoppen mag, '
