@@ -471,8 +471,64 @@ def email_owner_mismatch(name, email):
     return not hit
 
 
+BESTANDSNAAM_RUIS = {'cv', 'resume', 'curriculum', 'vitae', 'nl', 'en', 'eng', 'uk', 'final', 'versie', 'def',
+                     'definitief', 'nieuw', 'new', 'updated', 'update', 'latest', 'kopie', 'copy', 'u', 'pdf', 'docx',
+                     'doc', 'nederlands', 'engels', 'english', 'dutch', 'concept', 'v', 'vs', 'van', 'de', 'der', 'den',
+                     'het', 'ter', 'ten', 'la', 'le', 'el', 'da', 'di', 'du', 'del', 'von', 'mei', 'jan', 'feb'}
+
+
+def naam_uit_bestandsnaam(path_or_stem, snippet):
+    """Naam uit de bestandsnaam, ALLEEN als die naam ook in het cv zelf staat.
+    'denBulck Tom HQ00000869 (U).txt' -> 'Tom den Bulck'; '20250325_CV_Rick_van_der_Kraan_NL (1)' -> 'Rick van der Kraan'.
+    Geeft '' als de bestandsnaam geen (bevestigde) persoonsnaam bevat."""
+    stem = Path(str(path_or_stem).split(ZIP_SEP)[-1]).stem if ('/' in str(path_or_stem) or '\\' in str(path_or_stem)
+                                                              or ZIP_SEP in str(path_or_stem)) else str(path_or_stem)
+    stem = re.sub(r'\([^)]*\)', ' ', stem)
+    stem = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', stem)              # denBulck -> den Bulck
+    stem = re.sub(r'\b[A-Za-z]{0,4}\d+[A-Za-z0-9]*\b', ' ', stem)        # HQ00000869, v2, 2024
+    woorden = [w for w in re.split(r'[^A-Za-zÀ-ÿ]+', stem) if w]
+    woorden = [w for w in woorden if not (w.isupper() and len(w) <= 3) or normalized_name(w) in NAME_FILLERS]
+    kern = [w for w in woorden if normalized_name(w) not in BESTANDSNAAM_RUIS]
+    if not (2 <= len(kern) <= 4):
+        return ''
+    naam_w = [w for w in woorden if normalized_name(w) not in BESTANDSNAAM_RUIS or normalized_name(w) in NAME_FILLERS]
+    # tussenvoegsels alleen houden als ze vlak voor een kernwoord staan
+    while naam_w and normalized_name(naam_w[-1]) in NAME_FILLERS:
+        naam_w.pop()
+    kandidaat = ' '.join(naam_w)
+    if not reasonable_name(' '.join(w[:1].upper() + w[1:] for w in kern)) or any(asciifold(w).lower() in COMPANY_WORDS for w in kern):
+        return ''
+    tekst = ' ' + (snippet or '')[:4000] + ' '
+    if not all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2):
+        return ''
+    # Volgorde zoals in het cv ('Tom den Bulck'), anders de bestandsnaam ('Bulck Tom' -> achternaam eerst).
+    n = normalized_name(kandidaat).split()
+    for k in range(1, len(n)):
+        omgedraaid = n[k:] + n[:k]
+        if ' ' + ' '.join(omgedraaid) + ' ' in tekst and ' ' + ' '.join(n) + ' ' not in tekst:
+            ws = kandidaat.split()
+            kandidaat = ' '.join(ws[k:] + ws[:k])
+            break
+    return tidy_name(' '.join(w if normalized_name(w) in NAME_FILLERS else w[:1].upper() + w[1:] for w in kandidaat.split()))
+
+
+def naam_botst_met_bestand(name, path_or_stem, snippet):
+    """Geeft de naam uit de bestandsnaam als die in het cv staat én niets gemeen heeft met de gevonden naam
+    (bv. de naam van een recruiter bovenaan een bureau-cv), anders ''."""
+    fn = naam_uit_bestandsnaam(path_or_stem, snippet)
+    if not fn or not name:
+        return ''
+    a = {w for w in normalized_name(name).split() if w not in NAME_FILLERS}
+    b = {w for w in normalized_name(fn).split() if w not in NAME_FILLERS}
+    return fn if a and b and not (a & b) else ''
+
+
 def guess_name(text, filename, emails, links=()):
-    return name_with_email(tidy_name(clean_person_name(_guess_name(text, filename, emails, links))), emails)
+    name = name_with_email(tidy_name(clean_person_name(_guess_name(text, filename, emails, links))), emails)
+    beter = naam_botst_met_bestand(name, filename, normalized_snippet(text))
+    if beter and not any(email_matches_name(name, e) for e in emails if not GENERIC_EMAIL.match(e)):
+        return beter          # bureau-cv: bovenaan staat de recruiter, de kandidaat staat in de bestandsnaam
+    return name
 
 
 def _guess_name(text, filename, emails, links=()):
@@ -2872,6 +2928,14 @@ def safe_pair(a, b):
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
+    # Bestandsnamen met (in het cv bevestigde) namen van verschillende personen: nooit samen, ook niet bij
+    # gedeelde contactgegevens (bureau-cv's met het telefoonnummer en de LinkedIn van de recruiter).
+    if 'path' in a.keys() and 'path' in b.keys():
+        fa, fb = naam_uit_bestandsnaam(a['path'], a['snippet']), naam_uit_bestandsnaam(b['path'], b['snippet'])
+        wa = {w for w in normalized_name(fa).split() if w not in NAME_FILLERS}
+        wb = {w for w in normalized_name(fb).split() if w not in NAME_FILLERS}
+        if wa and wb and not (wa & wb):
+            return False, False, ''
     # Eén cv zonder bruikbare naam ('Persoonlijke Gegevens'), het andere met naam: samen als e-mail ÉN telefoon
     # gelijk zijn en het mailadres bij die naam past (frank.jansen@ bij Frank Jansen). Niet bij info@/bureau-adressen.
     if bool(an) != bool(bn) and (ap & bp):
@@ -3781,6 +3845,17 @@ def deduplicate(db, merge_file=None):
         taal = (r['taal'] if r['taal'] not in (None, '', '-') else '') or cv_hoofdtaal(r['snippet'] or '')
         if taal in ('es', 'indiaas'):
             db.execute("UPDATE docs SET status='other', reason='niet meegenomen: taal van het cv' WHERE path=?", (r['path'],))
+    # Bureau-cv's: bovenaan staat de recruiter ('Elmer van den Heuvel'), de kandidaat staat in de bestandsnaam
+    # ('denBulck Tom HQ… .txt') én in het cv. Dan geldt de naam uit de bestandsnaam (ook voor al gelezen cv's).
+    for r in db.execute("SELECT path, name, snippet, emails FROM docs WHERE status IN ('cv','review') AND name!=''").fetchall():
+        beter = naam_botst_met_bestand(r['name'], r['path'], r['snippet'])
+        if beter:
+            try:
+                eigen = [e for e in json.loads(r['emails'] or '[]') if not GENERIC_EMAIL.match(e)]
+            except ValueError:
+                eigen = []
+            if not any(email_matches_name(r['name'], e) for e in eigen):
+                db.execute("UPDATE docs SET name=? WHERE path=?", (beter, r['path']))
     db.commit()
     try:
         decided = json.loads((out_dir / DECISIONS_FILE).read_text(encoding='utf-8')) if out_dir else {}
@@ -3963,6 +4038,16 @@ def deduplicate(db, merge_file=None):
                     person[field] = own[0]
                 else:
                     person[field + '_bureau'] = shared_count[person[field]]
+    # Zelfde LinkedIn bij 3+ verschillende personen (bv. linkedin.com/in/jrecruit): van het bureau, niet van de
+    # kandidaat. Niet als eigen LinkedIn gebruiken; dan zoekt de online stap het echte profiel.
+    li_count = collections.Counter()
+    for person in identities:
+        for v in set(filter(None, (person.get('alle_linkedin') or '').split(' | '))):
+            li_count[v] += 1
+    for person in identities:
+        eigen_li = [v for v in (person.get('alle_linkedin') or '').split(' | ') if v and li_count[v] < 3]
+        if person.get('linkedin') and li_count[person['linkedin']] >= 3:
+            person['linkedin'] = eigen_li[0] if eigen_li else ''
     company_count = collections.Counter(normalized_name(p['bedrijf_raw'].replace('via:', '')) for p in identities
                                         if p.get('bedrijf_raw'))
     for person in identities:

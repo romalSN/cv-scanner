@@ -706,6 +706,22 @@ for a, b, m, ta, tb, verwacht in C:
     _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
     check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
+# --- Bureau-cv's: naam in bestandsnaam vs recruiter bovenaan ---
+_sn = c.normalized_snippet('Elmer van den Heuvel\nJRecruit\naplitrakmail@broadbean.net\nCurriculum Vitae\nTom den Bulck\nWerkervaring')
+check('bestandsnaam: denBulck Tom HQ… -> Tom den Bulck', c.naam_uit_bestandsnaam('/u/JR/D/denBulck Tom HQ00000869 (U).txt', _sn) == 'Tom den Bulck')
+check('bestandsnaam: recruiter bovenaan wordt kandidaat uit bestandsnaam', c.naam_botst_met_bestand('Elmer van den Heuvel', '/u/JR/D/denBulck Tom HQ00000869 (U).txt', _sn) == 'Tom den Bulck')
+check('bestandsnaam: naam niet in cv = niet gebruiken', c.naam_uit_bestandsnaam('/u/Piet Klaassen.pdf', _sn) == '')
+check('bestandsnaam: "CV Java Developer" = geen naam', c.naam_uit_bestandsnaam('/u/CV Java Developer.pdf', c.normalized_snippet('Java Developer')) == '')
+check('bestandsnaam: 20250325_CV_Rick_van_der_Kraan_NL (1)', c.naam_uit_bestandsnaam('/u/20250325_CV_Rick_van_der_Kraan_NL (1).pdf', c.normalized_snippet('Rick van der Kraan')) == 'Rick van der Kraan')
+check('bestandsnaam: gelijk aan gevonden naam = geen wijziging', c.naam_botst_met_bestand('Rick van der Kraan', '/u/CV_Rick_van_der_Kraan.pdf', c.normalized_snippet('Rick van der Kraan')) == '')
+import json as _jj
+def _dp(name, path, text, emails, phones):
+    return {'name': name, 'path': path, 'snippet': c.normalized_snippet(text), 'emails': _jj.dumps(emails),
+            'phones': _jj.dumps(phones), 'links': _jj.dumps(['https://linkedin.com/in/jrecruit']), 'sha': path, 'tokens': '[]'}
+_a = _dp('Elmer van den Heuvel', '/u/JR/denBulck Tom HQ1 (U).txt', 'Elmer van den Heuvel Tom den Bulck', ['aplitrakmail@broadbean.net'], ['+31224227904'])
+_b = _dp('Elmer van den Heuvel', '/u/JR/Enyedi Robert HQ2 (U).txt', 'Elmer van den Heuvel Robert Enyedi', ['aplitrakmail@broadbean.net'], ['+31224227904'])
+check('dubbel: bureau-cv\'s met zelfde recruiter-naam/contact maar andere kandidaat in bestandsnaam = apart', not c.safe_pair(_a, _b)[0])
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
