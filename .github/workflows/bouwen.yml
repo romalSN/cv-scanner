@@ -18,8 +18,6 @@ jobs:
         include:
           - os: windows-latest
             naam: Windows
-          - os: macos-14          # Apple Silicon (M1/M2/M3...), zoals de MacBook M2
-            naam: Mac
           - os: macos-15          # zelfde M-versie op een tweede soort machine (GitHub heeft vaak te weinig M-Macs)
             naam: Mac-15
           - os: macos-26          # nieuwste M-machines bij GitHub: vaak wél vrij als macos-14/15 vol zitten
