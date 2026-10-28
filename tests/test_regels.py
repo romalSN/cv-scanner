@@ -610,10 +610,26 @@ check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = samen', c.safe_pair(
 check('dubbel: Piet Jansen + Marie Jansen, zelfde gezinsmail = NIET samen', not c.safe_pair(_d('Piet Jansen', ['jansen@ziggo.nl']), _d('Marie Jansen', ['jansen@ziggo.nl']))[0])
 check('dubbel: bureaumail jan@bureau met Jan Bakker + Jan de Vries = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan@itbureau.nl']), _d('Jan de Vries', ['jan@itbureau.nl']))[0])
 check('dubbel: recruiter jan.bakker@bureau.nl bij Jan Bakker + Jan Smit = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan.bakker@itbureau.nl']), _d('Jan Smit', ['jan.bakker@itbureau.nl']))[0])
+check('dubbel: "bureau"-achtig woord telt niet als achternaam', not c.safe_pair(_d('Jan Consultancy', ['jan.consultancy@gmail.com']), _d('Jan Smit', ['jan.consultancy@gmail.com']))[0])
+check('dubbel: Jan van Dijk + Jan Dijk, jandijk@hotmail = samen', c.safe_pair(_d('Jan van Dijk', ['jandijk@hotmail.com']), _d('Jan van Dijk Pietersen', ['jandijk@hotmail.com']))[0])
+check('dubbel: achternaam middenin het adres telt niet', not c.safe_pair(_d('Jan Bos', ['jan.bosmans@gmail.com']), _d('Jan Mans', ['jan.bosmans@gmail.com']))[0])
 check('dubbel: recruitermail bij 2 kandidaten = NIET samen', not c.safe_pair(_d('Bobby van den Berg', ['erik.mertz@salves.nl']), _d('Kevin Lok', ['erik.mertz@salves.nl']))[0])
 for _ruw, _goed in (('Engels Nederlands Duits', ''), ('Mergeformattom Coenraad', 'Tom Coenraad'), ('Ray Hyde Fe Bd', 'Ray Hyde'), ('Kees van der Be', 'Kees van der Be')):
     _x = c.clean_person_name(_ruw); _x = c.tidy_name(_x) if _x else _x
     check(f'naam "{_ruw}" -> "{_goed}"', _x == _goed, _x)
+
+# LinkedIn: eerst zoeken op naam + specifiek bedrijf; groot bedrijf -> naam + functie
+_vragen = []
+def _tav_rec(query, *a, **k):
+    _vragen.append(query); return []
+for _wg, _fn, _verwacht in (('Datafabriek B.V.', 'Backend developer', 'Datafabriek'), ('Albert Heijn', 'Backend developer', 'Backend developer')):
+    _vragen.clear()
+    _out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
+    c.tavily_search = _tav_rec; c.google_search = lambda q: ([], 'Serper')
+    c.online_suggestions([dict(naam='Pieter Zoekman', persoon_id='pz', email='', telefoon='', linkedin='',
+                               huidige_functie=_fn, laatst_bekende_werkgever=_wg)], _out, db=_db, delay=0)
+    shutil.rmtree(_out, ignore_errors=True)
+    check(f'linkedin-zoekvraag bij werkgever "{_wg}" bevat "{_verwacht}"', any(_verwacht in q for q in _vragen), _vragen)
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))

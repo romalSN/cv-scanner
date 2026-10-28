@@ -2879,11 +2879,33 @@ def safe_pair(a, b):
         if GENERIC_EMAIL.match(e) or not an or not bn:
             continue
         local = re.sub(r'[^a-z]', '', e.split('@')[0].lower())
+        stukken = [x for x in re.split(r'[._\-0-9]+', e.split('@')[0].lower()) if x]
         aw1, bw1 = an.split(), bn.split()
+        def achternaam(ws):
+            # Achternaam = laatste woord van de naam (na 'van', 'de' …), geen bedrijfs-, vak- of functiewoord.
+            echte = [w for w in ws[1:] if w not in NAME_FILLERS]
+            w = echte[-1] if echte else ''
+            if len(w) < 3 or w in COMPANY_WORDS or w in NAME_BLOCKLIST or w.endswith(JOB_ENDINGS) or w in NAAM_STAART:
+                return ''
+            return w
+        def staat_in_adres(w):
+            # Als los stuk (jan.bakker / jan_bakker) of als voornaam/voorletter + achternaam (janbakker / jbakker /
+            # jvandijk), niet ergens middenin ('it' in 'itbureau', 'mans' in 'janbosmans').
+            if not w:
+                return False
+            if w in stukken:
+                return True
+            for st in stukken:
+                if st.endswith(w):
+                    voor = st[:-len(w)]
+                    voor = re.sub(r'(?:van|de|der|den|vd|v|ter|ten|het|t)+$', '', voor)
+                    if voor in ('', aw1[0], aw1[0][:1]):
+                        return True
+            return False
         # Alleen een privé-adres (gmail, hotmail, ziggo …): een bureau of recruiter mailt vanaf een bedrijfsdomein.
         # En de achternaam van minstens één van beide namen moet in het adres staan (niet alleen 'jan@').
         prive = e.split('@')[-1].lower() in PRIVE_MAILDOMEINEN
-        achternaam_in = any(len(w) >= 3 and w in local and w != aw1[0] for w in aw1[1:] + bw1[1:])
+        achternaam_in = staat_in_adres(achternaam(aw1)) or staat_in_adres(achternaam(bw1))
         if prive and achternaam_in and aw1[0] == bw1[0] and len(aw1[0]) >= 3 and aw1[0] in local:
             return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
     aw0, bw0 = set(an.split()), set(bn.split())
@@ -5307,7 +5329,13 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         queries = []
         search_failed = False      # netwerk-/certificaatfout: dan NIET 'niet gevonden' noteren
         if not have['linkedin']:
-            queries.append(('linkedin', f'"{full}" {role}'.strip(), ['linkedin.com'], None))
+            # Eerst op naam + werkgever (een specifiek bedrijf geeft echt bewijs op het profiel); bij een groot of
+            # vaag bedrijf (Albert Heijn, gemeente, eigen bedrijf) op naam + functie. Lukt het niet, dan zoekt de
+            # stap hieronder (orgcheck) nog via Google op werkgever/school.
+            specifiek_bedrijf = (len(emp) >= 3 and emp not in NL_PLACES and not VAGUE_EMPLOYERS.match(emp)
+                                 and not BIG_EMPLOYERS.match(emp) and employer_core)
+            zoekterm = f'"{employer_raw.replace(chr(34), "").strip()[:45]}"' if specifiek_bedrijf and employer_raw.strip() else role
+            queries.append(('linkedin', f'"{full}" {zoekterm}'.strip(), ['linkedin.com'], None))
         # Tavily alleen voor LinkedIn. Mail/telefoon gaan via Google (Serper/SerpApi) op het zekere profiel.
         # De oude 'contact website zzp'-zoekopdracht (kostte Tavily-credits, leverde weinig op) alleen als je die aanzet.
         if (not have['email'] or not have['telefoon']) and os.environ.get('CV_ONLINE_CONTACT') == '1':
