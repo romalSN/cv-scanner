@@ -606,7 +606,7 @@ def _d(name, emails, phones=()):
     import json as _j
     return {'name': name, 'emails': _j.dumps(emails), 'phones': _j.dumps(list(phones)), 'links': '[]', 'sha': name,
             'snippet': '', 'tokens': '[]'}
-check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = samen', c.safe_pair(_d('Botwin Wytze', ['botwin.sijtsma@gmail.com']), _d('Botwin Sijtsma', ['botwin.sijtsma@gmail.com']))[0])
+check('dubbel: Botwin Wytze + Botwin Sijtsma, zelfde mail = samen', c.safe_pair(_d('Botwin Wytze', ['botwin.sijtsma@gmail.com'], ['+31638189335']), _d('Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], ['+31638189335']))[0])
 check('dubbel: Piet Jansen + Marie Jansen, zelfde gezinsmail = NIET samen', not c.safe_pair(_d('Piet Jansen', ['jansen@ziggo.nl']), _d('Marie Jansen', ['jansen@ziggo.nl']))[0])
 check('dubbel: bureaumail jan@bureau met Jan Bakker + Jan de Vries = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan@itbureau.nl']), _d('Jan de Vries', ['jan@itbureau.nl']))[0])
 check('dubbel: recruiter jan.bakker@bureau.nl bij Jan Bakker + Jan Smit = NIET samen', not c.safe_pair(_d('Jan Bakker', ['jan.bakker@itbureau.nl']), _d('Jan Smit', ['jan.bakker@itbureau.nl']))[0])
@@ -630,6 +630,81 @@ for _wg, _fn, _verwacht in (('Datafabriek B.V.', 'Backend developer', 'Datafabri
                                huidige_functie=_fn, laatst_bekende_werkgever=_wg)], _out, db=_db, delay=0)
     shutil.rmtree(_out, ignore_errors=True)
     check(f'linkedin-zoekvraag bij werkgever "{_wg}" bevat "{_verwacht}"', any(_verwacht in q for q in _vragen), _vragen)
+
+# --- Dubbelen: grote set (zelfde persoon / bureau / gezin / referentie) ---
+T = '+31612345678'; T2 = '+31687654321'
+C = [  # (naam a, naam b, mails, tel a, tel b, verwacht samen?)
+ # zelfde persoon
+ ('Botwin Wytze', 'Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], [T], [T], True),
+ ('Jan van Dijk', 'Jan van Dijk Pietersen', ['jandijk@hotmail.com'], [], [], True),
+ ('Jan Bakker', 'Jan Bakker', ['jan.bakker@gmail.com'], [], [], True),
+ ('Jan Bakker', 'J. Bakker', ['jan.bakker@gmail.com'], [], [], True),
+ ('Jan Bakker', 'Jan Bakker Developer', ['jbakker@ziggo.nl'], [], [], True),
+ ('Kees de Boer', 'Kees Boer', ['kees.deboer@gmail.com'], [], [], True),
+ ('Kees de Boer', 'Kees de Boer', ['kdeboer@hotmail.com'], [T], [], True),
+ ('Mohamed El Amrani', 'Mohamed Amrani', ['mohamed.elamrani@gmail.com'], [T], [T], True),
+ ('Anna Smit-Jansen', 'Anna Smit', ['anna.smit@outlook.com'], [], [], True),
+ ('Pieter Jan de Vries', 'Pieter de Vries', ['pj.devries@gmail.com'], [T], [T], True),
+ ('Wouter Van Pelt', 'Wouter Vanpelt', ['wouter.vanpelt@ziggo.nl'], [T], [T], True),
+ ('Sanne Visser', 'Sanne Visser', ['sanne_visser85@hotmail.com'], [], [], True),
+ # verschillende personen
+ ('Jan Bakker', 'Jan de Vries', ['jan@itbureau.nl'], [], [], False),
+ ('Jan Bakker', 'Jan Smit', ['jan.bakker@itbureau.nl'], [T], [T], False),
+ ('Jan Consultancy', 'Jan Smit', ['jan.consultancy@gmail.com'], [], [], False),
+ ('Jan Bos', 'Jan Mans', ['jan.bosmans@gmail.com'], [], [], False),
+ ('Piet Jansen', 'Marie Jansen', ['jansen@ziggo.nl'], [T], [T], False),
+ ('Piet Jansen', 'Piet Jansen', ['info@jansenit.nl'], [], [], None),  # generiek adres: geen oordeel via mail
+ ('Bobby van den Berg', 'Kevin Lok', ['erik.mertz@salves.nl'], [T], [T], False),
+ ('Jan Bakker', 'Jan de Vries', ['jan.bakker@gmail.com'], [T], [T2], False),   # referentie in cv van ander
+ ('Mark Visser', 'Mark de Groot', ['mark.visser@gmail.com'], [], [], False),
+ ('Mark Visser', 'Mark Groot', ['mark@gmail.com'], [], [], False),
+ ('Mark Visser', 'Marco Visser', ['m.visser@gmail.com'], [], [], False),
+ ('Tom Recruiter', 'Tom Hendriks', ['tom.recruiter@gmail.com'], [], [], False),
+ ('Ali Yilmaz', 'Ali Kaya', ['ali.yilmaz@hotmail.com'], [T], [T2], False),
+ ('Ahmed Hassan', 'Ahmed Ali', ['ahmed.hassan@gmail.com'], [], [], False),
+ ('Jeroen IT', 'Jeroen Smit', ['jeroen.it@gmail.com'], [], [], False),
+ ('Lisa de Jong', 'Lisa Jongbloed', ['lisa.dejong@gmail.com'], [], [], False),
+ ('Eva Bos', 'Eva Bosch', ['eva.bosch@gmail.com'], [], [], False),
+ ('Daan Willems', 'Daan Willemsen', ['daan.willemsen@gmail.com'], [], [], False),
+ ('Sara Cohen', 'Sara Levi', ['sara@cohen-levi.nl'], [], [], False),
+ ('Rob Bast', 'Roos Flooren', ['projects@competa.com'], [T], [T], False),
+ ('Johan Smit', 'Johan Smits', ['johansmit@gmail.com'], [], [], False),
+ # extra: telefoon, OCR, tussenvoegsels, bureaus
+ ('Johan Smit', 'Johan Smits', ['johansmit@gmail.com'], [T], [T], True),       # typfout, ook zelfde nummer
+ ('Botwin Wytze', 'Botwin Sijtsma', ['botwin.sijtsma@gmail.com'], [], [], False), # zonder zelfde nummer: niet zeker
+ ('Fatima Bouzid', 'Fatima Bouzid', [], [T], [T], True),
+ ('Fatima Bouzid', 'Fatima El Bouzid', [], [T], [T], True),
+ ('Fatima Bouzid', 'Samira Bouzid', [], [T], [T], False),                       # zussen, zelfde huisnummer
+ ('Henk de Vries', 'Henk Vries', ['h.devries@xs4all.nl'], [], [], True),
+ ('Henk de Vries', 'Henk van der Vries', ['h.devries@xs4all.nl'], [], [], False),
+ ('Lars Mennen', 'Lars Mennen', ['lars.mennen@online.nl'], [T], [T2], True),
+ ('Thomas van den Berg', 'Thomas Berg', ['thomas.vandenberg@gmail.com'], [], [], True),
+ ('Thomas van den Berg', 'Thomas van der Berg', ['thomas.vandenberg@gmail.com'], [T], [T], True),
+ ('Jan-Willem Menkveld', 'Jan Willem Menkveld', ['jw.menkveld@gmail.com'], [], [], True),
+ ('Erik Mertz', 'Kevin Lok', ['erik.mertz@salves.nl'], [T], [T], False),
+ ('Kevin Lok', 'Kevin Lok', ['kevin.lok@gmail.com', 'erik.mertz@salves.nl'], [], [], True),
+ ('Peter Lorent', 'Ron de Kuijer', ['michael@jrecruit.com'], ['+31346550764'], ['+31346550764'], False),
+ ('Saddaf Ahmad', 'Mwa Choudry', ['mwa.choudry@gmail.com'], [T], [T], False),
+ ('Tom Coenraad', 'Tom Coenraad', ['tom.coenraad@synergy-ict.nl'], [T], [T], True),
+ ('Ray Hyde', 'Ray Hyde', ['ray@rayhyde.nl'], [], [], True),
+ ('Marcel Hilboezen', 'Marcel Hilboezen Linkit', ['hilboezen@hotmail.com'], [T], [T], True),
+ ('Marcel Hilboezen', 'Wesley Oerlemans', [], [T], [T], False),
+ ('Nina Kok', 'Nina Kok', ['nina@kokdesign.nl'], [], [], True),
+ ('Bram de Wit', 'Bram Wit', ['b.dewit@hetnet.nl'], [], [], True),
+ ('Bram de Wit', 'Bram Witte', ['b.dewit@hetnet.nl'], [], [], False),
+ ('Yusuf Demir', 'Yusuf Demirel', ['yusuf.demir@gmail.com'], [], [], False),
+ ('Chris Pahlmann', 'Christopher Pahlmann', ['chris.pahlmann@gmail.com'], [T], [T], None),  # wordt 'mogelijk dubbel' (liever missen)
+ ('Sophie Jansen', 'Sophie Janssen', [], [T], [T2], False),
+ ('', 'Frank Jansen', ['frank.jansen@gmail.com'], [T], [T], True),        # cv zonder naam, zelfde mail+tel
+ ('', 'Frank Jansen', ['frank.jansen@gmail.com'], [], [], False),        # alleen mail: niet zeker
+ ('', 'Kevin Lok', ['erik.mertz@salves.nl'], [T], [T], False),           # recruitermail past niet bij naam
+ ('', 'Frank Jansen', ['info@jansen.nl'], [T], [T], False),              # algemeen adres
+]
+for a, b, m, ta, tb, verwacht in C:
+    if verwacht is None:
+        continue
+    _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
+    check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))

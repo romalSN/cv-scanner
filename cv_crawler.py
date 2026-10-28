@@ -2872,6 +2872,12 @@ def safe_pair(a, b):
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
+    # Eén cv zonder bruikbare naam ('Persoonlijke Gegevens'), het andere met naam: samen als e-mail ÉN telefoon
+    # gelijk zijn en het mailadres bij die naam past (frank.jansen@ bij Frank Jansen). Niet bij info@/bureau-adressen.
+    if bool(an) != bool(bn) and (ap & bp):
+        naam = an or bn
+        if any(not GENERIC_EMAIL.match(e) and email_matches_name(naam, e) for e in ae & be):
+            return True, False, 'zelfde e-mail en telefoon; mailadres past bij de naam'
     # Zelfde persoonlijk e-mailadres + zelfde voornaam, en het adres past bij beide namen:
     # 'Botwin Wytze' en 'Botwin Sijtsma' met botwin.sijtsma@ = één persoon. Niet bij gezinsleden
     # ('Piet Jansen' / 'Marie Jansen' met jansen@): de voornaam moet gelijk zijn.
@@ -2905,15 +2911,31 @@ def safe_pair(a, b):
         # Alleen een privé-adres (gmail, hotmail, ziggo …): een bureau of recruiter mailt vanaf een bedrijfsdomein.
         # En de achternaam van minstens één van beide namen moet in het adres staan (niet alleen 'jan@').
         prive = e.split('@')[-1].lower() in PRIVE_MAILDOMEINEN
-        achternaam_in = staat_in_adres(achternaam(aw1)) or staat_in_adres(achternaam(bw1))
-        if prive and achternaam_in and aw1[0] == bw1[0] and len(aw1[0]) >= 3 and aw1[0] in local:
-            return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
+        a_in, b_in = staat_in_adres(achternaam(aw1)), staat_in_adres(achternaam(bw1))
+        zelfde_voornaam = aw1[0] == bw1[0] and len(aw1[0]) >= 3 and aw1[0] in local
+        # 'Jan Bakker' en 'J. Bakker': voorletter past bij de voornaam en de achternaam is gelijk.
+        voorletter = (min(len(aw1[0]), len(bw1[0])) == 1 and aw1[0][0] == bw1[0][0]
+                      and achternaam(aw1) and achternaam(aw1) == achternaam(bw1))
+        if prive and (zelfde_voornaam or voorletter) and (a_in or b_in):
+            # Beide achternamen passen bij het adres -> zeker dezelfde persoon. Past er maar één ('Jan de Vries'
+            # met jan.bakker@ – bv. een referentie), dan alleen samen als ook het telefoonnummer gelijk is.
+            if (a_in and b_in) or (ap & bp):
+                return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
     aw0, bw0 = set(an.split()), set(bn.split())
     if conflict and strong and not (min(len(aw0), len(bw0)) >= 2 and (aw0 <= bw0 or bw0 <= aw0)):
         return False, True, 'gedeelde contactgegevens maar afwijkende namen'
     # 'Marcel Hilboezen' en 'Marcel Hilboezen Linkit': de kortste naam zit helemaal in de langste.
     aw, bw = set(an.split()), set(bn.split())
     contained = bool(an and bn) and min(len(aw), len(bw)) >= 2 and (aw <= bw or bw <= aw)
+    if strong and an and bn and not contained and len(an.split()) >= 2 and len(bn.split()) >= 2:
+        # 'Jeroen It' en 'Jeroen Smit' lijken als tekst op elkaar, maar de achternaam verschilt echt.
+        la, lb = an.split()[-1], bn.split()[-1]
+        if la != lb and difflib.SequenceMatcher(None, la, lb).ratio() < .75:
+            return False, True, 'gedeelde contactgegevens maar andere achternaam'
+        if la != lb and not (ap & bp) and not (al & bl):
+            # 'Johan Smit' / 'Johan Smits' met één gedeeld mailadres: misschien een typfout, misschien niet.
+            # Alleen samen als ook telefoon of LinkedIn gelijk is; anders als mogelijk dubbel laten zien.
+            return False, True, 'zelfde e-mail, achternaam net anders'
     if strong:
         return (True, False, 'zelfde e-mail, telefoon of LinkedIn én naam') if (an and bn and (name_sim >= .89 or contained)) \
             else (False, True, 'gedeelde contactgegevens; namen niet bevestigd')
