@@ -32,4 +32,7 @@ jobs:
         if: false
         run: python ai_test/evalueer.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -40
       - name: Twijfelgevallen beoordelen (cv of niet)
+        if: false
         run: CV_AI_MODEL=model.gguf python ai_test/evalueer_twijfel.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -30
+      - name: Woonplaats (woont nu in NL/BE?)
+        run: python ai_test/evalueer_woont.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -20

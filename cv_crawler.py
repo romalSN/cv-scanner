@@ -762,29 +762,214 @@ BUITENLAND_IGNORE = {'nederland', 'netherlands', 'holland', 'the netherlands', '
                      'benelux', 'europe', 'europa', 'us'}
 
 
-def woonland(snippet, phones):
-    """Waar woont de kandidaat? 'nl', ('buitenland', 'India') of '' (onduidelijk).
-    Kijkt alleen naar de kop/contactgegevens (begin van het cv) en de telefoonnummers. Nederlands kenmerk wint
-    altijd: wie in Nederland woont maar vroeger in India werkte, blijft gewoon kandidaat."""
+# Woorden waarna een plaats NIET de huidige woonplaats is: geboorteplaats, nationaliteit, oude woonplaats,
+# verhuiswens, werkgever ('at Infosys Bangalore') of school. Die plaatsen tellen niet mee voor de woonplaats.
+_NIET_WOON_MARK = (r'born in|born at|born|place of birth|birthplace|date and place of birth|geboren te|geboren in|geboren|'
+    r'geboorteplaats|geboortedatum en plaats|geboortedatum|date of birth|nationality|nationaliteit|nationalite|'
+    r'citizenship|citizen of|staatsburgerschap|previously lived in|previously based in|formerly|voorheen|vroeger|'
+    r'eerder woonachtig|willing to relocate to|relocating to|relocate to|open to relocation to|moving to|'
+    r'verhuist naar|verhuis naar|verhuizen naar|visa for|werkvergunning|work permit for|at|bij|for|voor|'
+    r'university of|universiteit van|college of|institute of|school of')
+# Na deze woorden is een plaats NIET de huidige woonplaats (geboorteplaats, nationaliteit, verhuiswens, werkgever,
+# school). Maximaal 3 woorden worden overgeslagen, maar nooit over een volgend kenmerk heen.
+NIET_WOONPLAATS_RE = re.compile(r' (?:' + _NIET_WOON_MARK + r') ((?:(?!(?:' + _NIET_WOON_MARK + r'|adres|address|'
+                                r'woonplaats|location|residence) )[a-z]+ ){1,3})')
+# Werk- of studieperiode in de kop ('2014 2019 Infosys Pune'): die plaats is werk/school, geen woonplaats.
+PERIODE_IN_KOP_RE = re.compile(r' (?:19|20)\d\d (?:(?:19|20)\d\d|heden|present|now|nu|today|current) (?:[a-z]+ ){1,6}')
+FOREIGN_LANDEN = {'afghanistan', 'africa', 'andhra pradesh', 'argentina', 'aruba', 'asia', 'australia', 'australie',
+                  'austria', 'azie', 'bangladesh', 'brazil', 'brazilie', 'bulgaria', 'bulgarije', 'canada', 'china',
+                  'croatia', 'curacao', 'czech republic', 'denemarken', 'denmark', 'duitsland', 'egypt', 'egypte',
+                  'engeland', 'england', 'filipijnen', 'finland', 'france', 'frankrijk', 'germany', 'ghana', 'greece',
+                  'griekenland', 'gujarat', 'haryana', 'hongarije', 'hungary', 'ierland', 'india', 'indonesia',
+                  'indonesie', 'irak', 'iran', 'iraq', 'ireland', 'israel', 'italie', 'italy', 'japan', 'karnataka',
+                  'kenya', 'kerala', 'kroatie', 'maharashtra', 'malaysia', 'maleisie', 'marokko', 'mexico', 'morocco',
+                  'nepal', 'new york', 'nigeria', 'noorwegen', 'norway', 'odisha', 'oekraine', 'oostenrijk', 'pakistan',
+                  'philippines', 'poland', 'polen', 'portugal', 'punjab', 'rajasthan', 'roemenie', 'romania', 'rusland',
+                  'russia', 'saudi arabia', 'scotland', 'serbia', 'servie', 'south africa', 'spain', 'spanje',
+                  'sri lanka', 'suriname', 'sweden', 'switzerland', 'syria', 'syrie', 'tamil nadu', 'telangana',
+                  'turkey', 'turkije', 'uae', 'uk', 'ukraine', 'united kingdom', 'united states', 'usa', 'uttar pradesh',
+                  'vietnam', 'west bengal', 'zweden', 'zwitserland', 'norge', 'deutschland', 'espana', 'ny',
+                  'new jersey', 'california', 'texas', 'ontario', 'gauteng', 'hordaland', 'vestland'}
+
+
+# Adreslabels. 'huidig' / 'oud' zegt welk adres actueel is; zonder aanduiding = neutraal.
+ADRES_LABEL_RE = re.compile(
+    r' (?:(?P<huidig>huidig adres|huidige adres|huidige woonplaats|current address|present address|current location|'
+    r'current residence|correspondentieadres|woonadres)|'
+    r'(?P<oud>vorig adres|vorige adres|oud adres|oude adres|previous address|former address|old address|'
+    r'vorige woonplaats|previous residence)|'
+    r'(?P<neutraal>adres|address|woonplaats|woonachtig te|woonachtig in|wonende te|residence|residing in|resides in|'
+    r'lives in|living in|based in|location|locatie|plaats|domicilio|residencia|permanent address)) ')
+NL_LAND = {'nederland', 'netherlands', 'the netherlands', 'holland', 'pays bas', 'niederlande'}
+BE_LAND = {'belgie', 'belgium', 'belgique', 'belgien'}
+# Plaatsnamen die ook buiten NL/BE bestaan (Bergen in Noorwegen, Amsterdam NY, Utrecht in Zuid-Afrika ...).
+DUBBELE_PLAATSEN = {'bergen', 'limburg', 'amsterdam', 'rotterdam', 'utrecht', 'groningen', 'middelburg', 'hoorn',
+                    'zwolle', 'leiden', 'holland', 'namen', 'luik', 'gent', 'hasselt', 'geel', 'lier', 'mons'}
+NU_RE = r'(?:heden|present|nu|now|current|today|huidig)'
+
+
+def _kop(snippet):
+    """Begin van het cv (tot het eerste cv-kopje), zonder plaatsen die niet de woonplaats zijn."""
     head = ' ' + _woorden_en_cijfers((snippet or '')[:450]) + ' '
-    # De kop stopt bij het eerste cv-kopje: plaatsen in werkervaring/opleiding zeggen niets over de woonplaats.
     m = re.search(r' (?:werkervaring|ervaring|experience|professional experience|work experience|profiel|profile|'
                   r'samenvatting|summary|opleiding|opleidingen|education|vaardigheden|skills|loopbaan|career|'
                   r'experiencia|formacion|over mij|about me|opdrachten|projecten|projects) ', head)
     if m and m.start() > 10:
         head = head[:m.start()] + ' '
-    nl_phone = any(str(p).startswith('+31') for p in phones or [])
-    nl_post = re.search(r'(?<![a-z0-9])[1-9]\d{3} ?[a-z]{2}(?![a-z0-9])', head) is not None
-    nl_place = any(f' {pl} ' in head for pl in NL_PLACES)
-    be = any(str(p).startswith('+32') for p in phones or []) or any(f' {pl} ' in head for pl in BE_PLACES)
-    if nl_phone or nl_place or nl_post or be:
-        return 'nl', ''                                   # Nederland of België: blijft erin
-    foreign_phone = [p for p in phones or [] if str(p).startswith('+') and not str(p).startswith(('+31', '+32'))]
-    places = (FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE - BE_PLACES
-    foreign_place = next((pl for pl in sorted(places, key=len, reverse=True) if f' {pl} ' in head), '')
-    if foreign_phone or foreign_place:
-        return 'buitenland', (foreign_place.title() if foreign_place else 'telefoon ' + foreign_phone[0][:4])
+    head = PERIODE_IN_KOP_RE.sub(' ', head)
+    return NIET_WOONPLAATS_RE.sub(' ', NIET_WOONPLAATS_RE.sub(' ', head))
+
+
+def _plaats_in(text, places):
+    return next((pl for pl in sorted(places, key=len, reverse=True) if f' {pl} ' in text), '')
+
+
+def _ocr_cijfers(tok):
+    """Duidelijke OCR-fouten in een postcode: o->0, l/i->1. Alleen als minstens 2 tekens al echte cijfers zijn."""
+    if sum(ch.isdigit() for ch in tok) < 2:
+        return ''
+    t = tok.translate(str.maketrans({'o': '0', 'l': '1', 'i': '1'}))
+    return t if re.fullmatch(r'[1-9]\d{3}', t) else ''
+
+
+def _landen_in(seg):
+    """Welke landen noemt dit stukje adres? Geeft (lijst van ('nl'|'be'|'buiten', plaats, sterk)).
+    Een plaats gevolgd door een land/regio (Bergen Norway, Amsterdam New York) hoort bij dat land.
+    Postcode + plaats moeten bij elkaar passen; een postcode alleen is maar een aanwijzing."""
+    nl_be = NL_PLACES | BE_PLACES
+    buiten = (FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE - BE_PLACES
+    alle = sorted(nl_be | buiten | NL_LAND | BE_LAND | FOREIGN_LANDEN, key=len, reverse=True)
+    words = seg.split()
+    hits, i = [], 0
+    while i < len(words):
+        for pl in alle:
+            n = pl.count(' ') + 1
+            if ' '.join(words[i:i + n]) == pl:
+                hits.append((i, i + n, pl))
+                i += n - 1
+                break
+        i += 1
+    uit = []
+    gebruikt = set()
+    for k, (a, b, pl) in enumerate(hits):
+        if k in gebruikt:
+            continue
+        # land/regio direct erna (max 4 woorden verder)?
+        volg = next(((k2, h) for k2, h in enumerate(hits) if k2 > k and 0 <= h[0] - b <= 4), None)
+        if pl in NL_LAND or pl in BE_LAND:
+            uit.append(('nl' if pl in NL_LAND else 'be', pl, True))
+            continue
+        land = 'nl' if pl in NL_PLACES else 'be' if pl in BE_PLACES else 'buiten'
+        if volg:
+            q = volg[1][2]
+            qland = 'nl' if q in NL_LAND or q in NL_PLACES else 'be' if q in BE_LAND or q in BE_PLACES else 'buiten'
+            if qland == 'buiten' and land in ('nl', 'be') and q in FOREIGN_LANDEN:
+                # 'Bergen, Norway' / 'Amsterdam, NY': het land erachter beslist. Bij een gewone NL-plaats met een
+                # buitenlands land erachter is het onduidelijk -> AI.
+                land = 'buiten' if pl in DUBBELE_PLAATSEN else 'onzeker'
+                gebruikt.add(volg[0])
+            elif q in NL_LAND | BE_LAND and qland == land:
+                gebruikt.add(volg[0])
+        # postcode vlak ervoor?
+        voor = words[max(0, a - 2):a]
+        pc = ''
+        if len(voor) == 2 and re.fullmatch(r'[a-z]{2}', voor[1]) and _ocr_cijfers(voor[0]):
+            pc = 'nl'                                    # 1234 AB Plaats
+        elif voor and re.fullmatch(r'\d{4}[a-z]{2}', voor[-1]) and _ocr_cijfers(voor[-1][:4]):
+            pc = 'nl'                                    # 1234AB Plaats
+        elif voor and _ocr_cijfers(voor[-1]):
+            pc = '4'                                     # 2000 Antwerpen / 8001 Zurich
+        sterk = bool(pc) and ((pc == 'nl' and land == 'nl') or (pc == '4' and land in ('be', 'nl', 'buiten')))
+        uit.append((land, pl, sterk or land == 'buiten' or pl not in DUBBELE_PLAATSEN))
+    # Losse NL-postcode die niet bij een NL-plaats staat: aanwijzing, geen bewijs (en botst met een buitenlandse plaats).
+    for m in re.finditer(r'(?<![a-z0-9])([1-9]\d{3}) ?(?!(?:to|en|tm|in|at|nu|on|of|tl|ft|pt|bv)(?![a-z]))[a-z]{2}(?![a-z0-9])', seg):
+        if not any(h[2] in NL_PLACES and 0 <= len(seg[:m.start()].split()) <= h[0] <= len(seg[:m.end()].split()) + 1
+                   for h in hits):
+            uit.append(('nl', 'postcode', False))
+            break
+    return uit
+
+
+def _adres_segmenten(head):
+    """Kop opgeknipt in stukjes per adreslabel: [(soort, tekst)], soort = huidig/oud/neutraal.
+    Datums in het stukje tellen mee: 'sinds 2022'/'heden' = huidig, 'tot 2019' = oud."""
+    marks = list(ADRES_LABEL_RE.finditer(head))
+    segs = [('neutraal', head[:marks[0].start() + 1] if marks else head)]
+    for k, m in enumerate(marks):
+        stop = marks[k + 1].start() + 1 if k + 1 < len(marks) else len(head)
+        tekst = ' ' + head[m.end():min(stop, m.end() + 90)] + ' '
+        soort = 'huidig' if m.group('huidig') else 'oud' if m.group('oud') else 'neutraal'
+        if soort == 'neutraal':
+            if re.search(r' (?:sinds|since|vanaf|from) (?:19|20)\d\d | ' + NU_RE + ' ', tekst):
+                soort = 'huidig'
+            else:
+                t = re.search(r' (?:tot|until|till|to|t m) ((?:19|20)\d\d) ', tekst)
+                if t and int(t.group(1)) < dt.date.today().year:
+                    soort = 'oud'
+        segs.append((soort, tekst))
+    return segs
+
+
+def woonplaats_bepalen(snippet, phones=(), emails=(), doc=None):
+    """Huidige woonplaats: ('nl'|'buitenland'|'tegenstrijdig'|'aanwijzing_buitenland'|'', uitleg). 'nl' = NL of BE.
+    - Meerdere adressen: 'huidig adres' / 'sinds 2022' wint; 'vorig adres' telt niet mee. Is niet duidelijk welk
+      adres actueel is (NL/BE en buitenland door elkaar): 'tegenstrijdig' -> AI, blijft het onzeker dan door.
+    - Alleen de woonplaats telt; werkplek (ook grensarbeid NL<->BE), school, geboorteplaats en nationaliteit niet.
+    - Gelijknamige plaatsen (Bergen, Norway): het land erachter beslist; twijfel -> AI -> anders door.
+    - Postcode moet bij de plaats passen; een postcode alleen is geen bewijs.
+    - 'buitenland' alleen als het buitenlandse adres duidelijk is en NIETS op NL/BE wijst.
+    Nooit op naam, afkomst of nationaliteit. Ontbrekende informatie is nooit bewijs."""
+    head = _kop(snippet)
+    text = ' ' + _woorden_en_cijfers(snippet or '') + ' '
+    nl_be = NL_PLACES | BE_PLACES
+    buiten = (FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE - BE_PLACES
+    per_soort = {'huidig': [], 'neutraal': [], 'oud': []}
+    for soort, seg in _adres_segmenten(head):
+        per_soort[soort] += _landen_in(seg)
+    lijst = per_soort['huidig'] or per_soort['neutraal']
+    if not per_soort['huidig'] and doc is not None and 'woonplaats' in doc.keys() and doc['woonplaats']:
+        lijst = lijst + [('nl', doc['woonplaats'], False)]   # adresregel uit de originele tekst
+    nl_hits = [h for h in lijst if h[0] in ('nl', 'be')]
+    buiten_hits = [h for h in lijst if h[0] == 'buiten']
+    onzeker = [h for h in lijst if h[0] == 'onzeker']
+    tel_nl = any(str(p).startswith(('+31', '+32')) for p in phones or [])
+    tel_buiten = [str(p) for p in phones or [] if str(p).startswith('+') and not str(p).startswith(('+31', '+32'))]
+    nu = [text[m.end():m.end() + 160] + ' ' for m in re.finditer(r'(?<!\d)20[0-3]\d ' + NU_RE + r' ', text)]
+    nu_nl = any(_plaats_in(w, nl_be) for w in nu)
+    nu_buiten = next((_plaats_in(w, buiten) for w in nu if _plaats_in(w, buiten) and not _plaats_in(w, nl_be)), '')
+    sterk_nl = [h for h in nl_hits if h[2]]
+    if nl_hits and not buiten_hits and not onzeker:
+        if sterk_nl or not tel_buiten:
+            return 'nl', nl_hits[0][1]
+        return 'tegenstrijdig', f'{nl_hits[0][1]}; buitenlands nummer'   # bv. alleen 'Bergen' + nummer +47
+    if onzeker or (nl_hits and buiten_hits):
+        return 'tegenstrijdig', ', '.join(h[1] for h in (nl_hits + buiten_hits + onzeker)[:3])
+    if buiten_hits:
+        plek = buiten_hits[0][1]
+        band = []
+        if tel_nl:
+            band.append('NL/BE-nummer')
+        if nu_nl:
+            band.append('huidige baan in NL/BE')
+        if any(re.search(r'\.(?:nl|be)$', str(e)) and not GENERIC_EMAIL.match(str(e)) for e in emails or []):
+            band.append('.nl/.be-mail')
+        rest = nl_be_band(snippet, [doc] if doc is not None else [])
+        if rest:
+            band.append(rest)
+        if band:
+            return 'tegenstrijdig', f'{plek.title()}; ' + '; '.join(band)
+        return 'buitenland', plek.title()
+    if tel_nl:
+        return 'nl', 'telefoon'
+    if tel_buiten or nu_buiten:
+        return 'aanwijzing_buitenland', (nu_buiten.title() if nu_buiten else 'telefoon ' + tel_buiten[0][:4])
     return '', ''
+
+
+def woonland(snippet, phones):
+    """Oude vorm: 'nl' / 'buitenland' / '' (tegenstrijdig en losse aanwijzingen tellen niet als buitenland)."""
+    uit, waar = woonplaats_bepalen(snippet, phones)
+    return (uit, waar) if uit in ('nl', 'buitenland') else ('', '')
 
 
 NL_BE_SCHOOL = re.compile(r'(?i)\b(?:hogeschool|universiteit|tu delft|tu eindhoven|tu/e|vrije universiteit|uva|hva|'
@@ -3304,18 +3489,14 @@ def filter_kandidaat(doc, phones, emails, ai_vraag):
             return 'weg', 'taal van het cv'
         if a not in ('nederlands', 'engels', 'andere_taal'):
             return 'controleren', 'taal van het cv onduidelijk'
-    # 2. Woont nu in NL/BE
-    land, _waar = woonland(snippet, phones)
+    # 2. Woont nu in NL/BE. Alleen uitsluiten bij betrouwbaar bewijs; onzeker of onbekend = gewoon door.
+    land, _waar = woonplaats_bepalen(snippet, phones, emails, doc)
     if land == 'buitenland':
-        band = bool(nl_be_band(snippet, [doc])) or any(
-            re.search(r'\.(?:nl|be)$', e) and not GENERIC_EMAIL.match(e) for e in emails)
-        a = ai_vraag('woont')
-        if a == 'nee':
+        if ai_vraag('woont') != 'ja':
             return 'weg', 'woont niet in Nederland of België'
-        if a != 'ja':
-            if not band:
-                return 'weg', 'woont niet in Nederland of België'   # buitenlands adres/nummer en niets met NL/BE
-            return 'controleren', 'woonplaats onduidelijk'
+    elif land in ('tegenstrijdig', 'aanwijzing_buitenland'):
+        if ai_vraag('woont') == 'nee':
+            return 'weg', 'woont niet in Nederland of België'
     # 3. Minimaal 5 jaar in NL/BE (alleen als het cv een buitenlandse periode laat zien)
     laatst, _plek = laatst_buitenland(snippet)
     if laatst:
@@ -3570,6 +3751,8 @@ def deduplicate(db, merge_file=None):
             print('WAARSCHUWING: kandidaatnummers niet opgeslagen:', exc, flush=True)
     distinct_review = []
     for a,b,reason in reviews:
+        if docs[a]['path'] not in doc_to_person or docs[b]['path'] not in doc_to_person:
+            continue          # een van beide is niet meegenomen of moet nog gecontroleerd worden
         if doc_to_person[docs[a]['path']] != doc_to_person[docs[b]['path']]:
             distinct_review.append(dict(soort='Mogelijk dezelfde persoon',
                 persoon_id_1=doc_to_person[docs[a]['path']], persoon_id_2=doc_to_person[docs[b]['path']],

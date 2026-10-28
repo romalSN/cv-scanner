@@ -233,9 +233,11 @@ FILTER_VRAGEN = {
              "Negeer namen, plaatsnamen, bedrijfsnamen en schoolnamen: een Spaanse of Indiase naam of een stad als "
              "Madrid zegt niets over de taal van het cv.",
              ["nederlands", "engels", "spaans", "indiase_taal", "andere_taal", "onduidelijk"]),
-    'woont': ("Woont deze persoon NU in Nederland of België? Kijk naar het adres of de woonplaats bovenaan, het "
-              "telefoonnummer en de huidige baan. Eerder werk in het buitenland zegt niets over waar iemand nu woont. "
-              "Antwoord 'onduidelijk' als het cv het niet laat zien.",
+    'woont': ("Waar WOONT deze persoon NU: in Nederland of België? Kijk naar het huidige adres of de woonplaats "
+              "bovenaan, het telefoonnummer en de huidige baan. Tellen NIET mee: geboorteplaats, nationaliteit, "
+              "naam, afkomst, een oude woonplaats, een verhuiswens, eerder werk of een opleiding in het buitenland. "
+              "Zeg alleen 'nee' als het cv duidelijk laat zien dat de persoon nu buiten Nederland en België woont. "
+              "Antwoord 'onduidelijk' als het cv het niet duidelijk laat zien.",
               ["ja", "nee", "onduidelijk"]),
     'verblijf': ("Heeft deze persoon in totaal minstens 5 jaar in Nederland of België gewoond (huidige en eerdere "
                  "jaren samen, werk en opleiding tellen mee)? Antwoord 'onduidelijk' als het cv het niet laat zien.",

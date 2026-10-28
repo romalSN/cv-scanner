@@ -457,7 +457,11 @@ check('filter: 4 jaar in NL, AI zegt nee = niet meegenomen', fk[0] == 'weg', fk)
 fk = _filter(f"Jan de Vries\nLondon, United Kingdom\n+44 7700 900123\nWerkervaring\n{_Y-2} - heden Developer bij Monzo. "
              f"Verantwoordelijk voor de ontwikkeling van het platform.\n{_Y-10} - {_Y-2} Developer bij Datafabriek, Utrecht. "
              "Ik heb daar veel ervaring opgedaan met het team.", ['+447700900123'], werk='utrecht')
-check('filter: Nederlander nu in Londen, band met NL, zonder AI = controleren (niet weg)', fk[0] == 'controleren', fk)
+check('filter: Nederlander nu in Londen, band met NL, zonder AI = door (tegenstrijdig, geen handwerk)', fk[0] == 'ok', fk)
+fk2 = _filter(f"Jan de Vries\nLondon, United Kingdom\n+44 7700 900123\nWerkervaring\n{_Y-2} - heden Developer bij Monzo. "
+             f"Verantwoordelijk voor de ontwikkeling van het platform.\n{_Y-10} - {_Y-2} Developer bij Datafabriek, Utrecht. "
+             "Ik heb daar veel ervaring opgedaan met het team.", ['+447700900123'], werk='utrecht', ai={'woont': 'nee'})
+check('filter: tegenstrijdig, AI zegt woont niet in NL/BE = niet meegenomen', fk2 == ('weg', 'woont niet in Nederland of België'), fk2)
 fk = _filter("Kees Mol\nkees@x.nl\nWerkervaring\nDeveloper bij Codewerk. Ik werk graag met het team aan de ontwikkeling van "
              "de systemen en heb veel ervaring met Java.", [])
 check('filter: geen woon- of verblijfsinfo = mee (geen aanname)', fk[0] == 'ok', fk)
@@ -469,6 +473,68 @@ fk = _filter(f"Rajesh Kumar\nAmsterdam\n06-00000708\nExperience\n{_Y-9} - presen
              "development of payment services and worked with the team.\nEducation\nB.Tech Computer Science, Anna University, Chennai",
              ['+31600000708'])
 check('filter: woont lang in NL, opleiding in India = mee (geen uitsluiting op opleidingsland)', fk[0] == 'ok', fk)
+
+# --- Stap 2: huidige woonplaats ---
+_ENK = ("Experience\nDeveloper. Responsible for the development of the platform and worked with the team on the migration. "
+        "I have experience with agile teams and I enjoy working with colleagues.")
+def _w(text, phones=(), emails=(), werk=''):
+    return c.woonplaats_bepalen(c.normalized_snippet(text), list(phones), list(emails), _doc(text, werk=werk))[0]
+check('woon: geen adres, geen nummer = onbekend', _w("Kees Mol\n" + _ENK) == '')
+check('woon: alleen NL-nummer = nl', _w("Kees Mol\n06-00000801\n" + _ENK, ['+31600000801']) == 'nl')
+check('woon: postcode + plaats = nl', _w("Kees Mol\nKerkstraat 1\n2011 AB Haarlem\n" + _ENK) == 'nl')
+check('woon: Belgisch adres = nl/be', _w("Lies Peeters\nMeir 10, 2000 Antwerpen\n" + _ENK, ['+32470000000']) == 'nl')
+check('woon: buitenlands adres + nummer, niets NL = buitenland', _w("Rahul\nAddress: MG Road, Bangalore, India\n+91 98450 12345\n" + _ENK, ['+919845012345']) == 'buitenland')
+check('woon: geboren in India, woont in Utrecht = nl', _w("Arjun\nUtrecht\nBorn in Delhi\nNationality: Indian\n" + _ENK) == 'nl')
+check('woon: alleen geboorteplaats buitenland = onbekend (niet buitenland)', _w("Arjun\nPlace of birth: Mumbai\n" + _ENK) == '')
+check('woon: werkgever in de kop (at Infosys Pune) = geen woonplaats', _w("Arjun\nDeveloper at Infosys Pune\n" + _ENK) == '')
+check('woon: verhuiswens naar NL telt niet als NL', _w("Rahul\nBangalore, India\nWilling to relocate to Amsterdam\n+91 98450 12345\n" + _ENK, ['+919845012345']) == 'buitenland')
+check('woon: buitenlandse plaats + NL-nummer = tegenstrijdig', _w("Rahul\nBangalore, India\n06-00000802\n" + _ENK, ['+31600000802']) == 'tegenstrijdig')
+check('woon: alleen buitenlands nummer = aanwijzing (geen bewijs)', _w("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345']) == 'aanwijzing_buitenland')
+check('woon: jaartal in de kop is geen postcode', _w(f"Rahul\n{_Y-2} to {_Y} Bangalore, India\n" + _ENK) != 'nl')
+fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'])
+check('filter: alleen buitenlands nummer, zonder AI = door', fk[0] == 'ok', fk)
+fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'onduidelijk'})
+check('filter: alleen buitenlands nummer, AI onzeker = door', fk[0] == 'ok', fk)
+fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee'})
+check('filter: alleen buitenlands nummer, AI zeker buitenland = niet meegenomen', fk[0] == 'weg', fk)
+fk = _filter("Rahul\nBangalore, India\n06-00000803\n" + _ENK, ['+31600000803'], ai={'woont': 'onduidelijk'})
+check('filter: tegenstrijdig, AI onzeker = door', fk[0] == 'ok', fk)
+fk = _filter("Rahul\nAddress: MG Road, Bangalore, India\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'ja'})
+check('filter: buitenlands adres maar AI ziet NL = door', fk[0] == 'ok', fk)
+fk = _filter("Kees Mol\nDeveloper\n", [])
+check('filter: onvolledig cv zonder woonplaats = door', fk[0] == 'ok', fk)
+fk = _filter(f"Jan Bakker\nZwolle\n06-00000804\nWerkervaring\n{_Y-12} - {_Y-10} Developer bij Infosys, Pune, India. Ik werkte daar "
+             f"met het team aan de ontwikkeling.\n{_Y-10} - heden Developer bij Datafabriek, Zwolle. Ik ontwikkel systemen.", ['+31600000804'])
+check('filter: alleen vroeger buitenlandse werkervaring = door', fk[0] == 'ok', fk)
+fk = _filter("Arjun Mehta\nUtrecht\nNationality: Indian\nBorn in Delhi\n" + _ENK, [])
+check('filter: nationaliteit/geboorteplaats telt niet = door', fk[0] == 'ok', fk)
+
+# --- Stap 2b: meerdere adressen, grensarbeid, gelijknamige plaatsen, postcodes ---
+check('adres: huidig NL, vorig buitenland = nl', _w("Arjun\nHuidig adres: Kerkstraat 1, 2011 AB Haarlem\nVorig adres: MG Road, Pune, India\n" + _ENK) == 'nl')
+check('adres: current buitenland, previous NL = buitenland', _w("Arjun\nCurrent address: MG Road, Bangalore, India\nPrevious address: Amsterdam\n" + _ENK, ['+919845012345']) == 'buitenland')
+check('adres: datum beslist (tot 2020 Pune, sinds 2021 Amsterdam) = nl', _w(f"Arjun\nAddress: Pune, India until 2020\nAddress: Damrak 1, Amsterdam since 2021\n" + _ENK) == 'nl')
+check('adres: twee adressen zonder aanduiding = tegenstrijdig (AI)', _w("Arjun\nAdres: Pune, India\nAdres: Damrak 1, Amsterdam\n" + _ENK) == 'tegenstrijdig')
+fk = _filter("Arjun\nAdres: Pune, India\nAdres: Damrak 1, Amsterdam\n" + _ENK, [])
+check('filter: twee adressen, onduidelijk welk actueel, geen AI = door', fk[0] == 'ok', fk)
+check('grens: woont Antwerpen, werkt Rotterdam = nl/be', _w(f"Lies Peeters\nAntwerpen\n+32 470 00 00 00\nWerkervaring\n{_Y-6} - heden Developer bij Havenbouw, Rotterdam. Ik ontwikkel systemen.", ['+32470000000']) == 'nl')
+fk = _filter(f"Lies Peeters\nAntwerpen\n+32 470 00 00 00\nWerkervaring\n{_Y-6} - heden Developer bij Havenbouw, Rotterdam. Ik ontwikkel "
+             f"systemen en werk graag met het team aan de ontwikkeling.", ['+32470000000'])
+check('filter: grensarbeider BE->NL = door', fk[0] == 'ok', fk)
+fk = _filter(f"Bram Dekker\nBreda\n06-00000805\nWerkervaring\n{_Y-6} - heden Developer bij Haventech, Antwerpen. Ik ontwikkel "
+             f"systemen en werk graag met het team aan de ontwikkeling.", ['+31600000805'])
+check('filter: grensarbeider NL->BE = door', fk[0] == 'ok', fk)
+check('plaats: Bergen, Norway + nummer = buitenland', _w("Ola\nBergen, Norway\n+47 400 00 000\n" + _ENK, ['+4740000000']) == 'buitenland')
+check('plaats: 1861 AB Bergen = nl', _w("Ola\nDorpsstraat 1, 1861 AB Bergen\n" + _ENK) == 'nl')
+check('plaats: alleen Bergen + Noors nummer = tegenstrijdig (AI)', _w("Ola\nBergen\n+47 400 00 000\n" + _ENK, ['+4740000000']) == 'tegenstrijdig')
+check('plaats: alleen Bergen = nl (door)', _w("Ola\nBergen\n" + _ENK) == 'nl')
+check('plaats: Utrecht, Nederland = nl', _w("Jan\nUtrecht, Nederland\n" + _ENK) == 'nl')
+check('postcode: 1234AB aaneen = nl', _w("Jan\nKerkstraat 1, 2011AB Haarlem\n" + _ENK) == 'nl')
+check('postcode: 2000 Antwerpen = be', _w("Lies\nMeir 10, 2000 Antwerpen\n" + _ENK) == 'nl')
+check('postcode: OCR 2O11 AB Haarlem = nl', _w("Jan\nKerkstraat 1, 2O11 AB Haarlem\n" + _ENK) == 'nl')
+check('postcode: NL-postcode + buitenlandse plaats = tegenstrijdig', _w("Jan\n1012 AB, Bangalore, India\n" + _ENK) == 'tegenstrijdig')
+check('postcode: 8001 Zurich = buitenland', _w("Jan\nBahnhofstrasse 1, 8001 Zurich, Switzerland\n+41 44 000 00 00\n" + _ENK, ['+41440000000']) == 'buitenland')
+check('postcode: alleen postcode = nl-aanwijzing (door)', _w("Jan\n2011 AB\n" + _ENK) == 'nl')
+check('postcode: onleesbaar = door', _filter("Jan\n2?1l A8\n" + _ENK, [])[0] == 'ok')
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
