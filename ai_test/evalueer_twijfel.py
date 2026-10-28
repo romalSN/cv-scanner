@@ -62,7 +62,16 @@ def cvar(doc):
     return {'cv': 'cv', 'geen_cv': 'geen_cv'}.get(a['antwoord'], 'onzeker'), a
 
 
-for label, fn in (('B', b), ('C', cvar), ('A', lambda d: (ai_rechter.classify(d) or {}).get('soort', 'onzeker'))):
+def combo(doc):
+    c1, a1 = cvar(doc)
+    if c1 != 'cv':
+        return c1, a1
+    c2, a2 = b(doc)
+    return ('cv' if a2['ander_document'] == 'geen_van_deze' else 'onzeker'), (a1, a2)
+
+
+notices = []
+for label, fn in (('B', b), ('C', cvar), ('C+B', combo)):
     fout_cv, gemist, goed, ant, tijden = [], [], [], {}, []
     for g in gevallen:
         t = time.time()
@@ -78,5 +87,8 @@ for label, fn in (('B', b), ('C', cvar), ('A', lambda d: (ai_rechter.classify(d)
                 (g['waar'] == 'onzeker' and soort != 'cv'):
             goed.append(g['id'])
         print(naam_model, label, g['id'], g['waar'], soort, r)
-    print(f"::notice::{naam_model} | TWIJFEL {label}: {len(goed)}/{len(gevallen)} goed, FOUT 'cv' {fout_cv}, "
+    notices.append(f"::notice::{naam_model} | TWIJFEL {label}: {len(goed)}/{len(gevallen)} goed, FOUT 'cv' {fout_cv}, "
           f"cv weggegooid {gemist}, {sum(tijden)/len(tijden):.1f}s | " + ' '.join(f'{k}:{v}' for k, v in ant.items()))
+
+for n in notices:
+    print(n)
