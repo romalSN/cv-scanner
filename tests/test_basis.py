@@ -5,6 +5,8 @@ from pathlib import Path
 here = Path(__file__).resolve().parent
 root = here.parent
 sys.path.insert(0, str(root))
+import os
+os.environ['CV_AI'] = '0'
 import cv_crawler as c
 
 text, note, _ = c.read_document(here / 'voorbeeld' / 'CV Lotte Verbeek.txt')

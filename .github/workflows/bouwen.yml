@@ -7,6 +7,9 @@ on:
       - '.github/workflows/ai_test.yml'
   workflow_dispatch:
 
+env:
+  CV_AI: '0'      # tests en bouwtest: geen echt AI-model (2,4 GB) ophalen; de AI-test gebruikt een eigen testmodel
+
 jobs:
   bouwen:
     strategy:

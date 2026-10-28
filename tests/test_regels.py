@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ['TAVILY_API_KEY'] = 'test'
 os.environ['SERPER_API_KEY'] = 'test'
+os.environ['CV_AI'] = '0'          # zonder echt AI-model testen; AI-gedrag wordt hieronder nagebootst
 import cv_crawler as c  # noqa: E402
 import traceback
 def _hook(t, v, tb):

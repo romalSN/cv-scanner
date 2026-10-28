@@ -231,6 +231,7 @@ def classify(text: str) -> dict | None:
 def self_test(model: str) -> int:
     """Voor de bouwmachine: laad een (klein) model en beoordeel 2 gevallen. Print 'AI OK'."""
     os.environ['CV_AI_MODEL'] = model
+    os.environ['CV_AI'] = '1'
     if not engine_ok():
         print('AI-TEST FOUT: llama_cpp ontbreekt'); return 1
     if not model_ok():
