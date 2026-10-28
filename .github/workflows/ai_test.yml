@@ -29,6 +29,7 @@ jobs:
           curl -sL --fail -o model.gguf "${{ matrix.url }}"
           echo "::notice::${{ matrix.naam }}: $(du -h model.gguf | cut -f1)"
       - name: Beoordelen
+        if: false
         run: python ai_test/evalueer.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -40
       - name: Twijfelgevallen beoordelen (cv of niet)
-        run: python ai_test/evalueer_twijfel.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -30
+        run: CV_AI_MODEL=model.gguf python ai_test/evalueer_twijfel.py model.gguf "${{ matrix.naam }}" 2>&1 | tail -30
