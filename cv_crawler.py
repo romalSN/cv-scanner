@@ -667,6 +667,40 @@ def bedrijf_soort(bedrijf_raw, name, emails, shared=1):
     return bedrijf, 'onbekend'
 
 
+# Taal herkennen met woorden die ALLEEN in die taal voorkomen. Gedeelde woorden ('de', 'en', 'al', 'no', 'la',
+# 'me', 'a', 'o', 'van', 'op') tellen bewust niet: die staan ook in Nederlandse of Engelse cv's.
+TAAL_WOORDEN = {
+    'es': {'y', 'el', 'los', 'las', 'del', 'con', 'para', 'por', 'una', 'que', 'como', 'sus', 'experiencia',
+           'educación', 'educacion', 'formación', 'formacion', 'años', 'anos', 'trabajo', 'empresa', 'desarrollo',
+           'gestión', 'gestion', 'idiomas', 'español', 'espanol', 'inglés', 'ingles', 'actualidad', 'habilidades',
+           'conocimientos', 'responsable', 'proyectos', 'también', 'tambien', 'más', 'sobre', 'desde', 'hasta',
+           'nivel', 'datos', 'personales', 'teléfono', 'telefono', 'correo', 'dirección', 'direccion', 'licenciatura',
+           'grado', 'universidad', 'estudios', 'cursos', 'laboral', 'puesto', 'funciones', 'cliente', 'clientes',
+           'equipo', 'sistemas', 'redes', 'informática', 'informatica', 'ingeniero', 'ingeniería', 'ingenieria'},
+    'nl': {'het', 'een', 'met', 'voor', 'naar', 'bij', 'werkervaring', 'opleiding', 'opleidingen', 'vaardigheden',
+           'heden', 'jaar', 'werkzaamheden', 'verantwoordelijk', 'ontwikkeling', 'kennis', 'ervaring', 'talen',
+           'nederlands', 'engels', 'rijbewijs', 'woonplaats', 'geboortedatum', 'ik', 'wij', 'zijn', 'wordt', 'ook',
+           'binnen', 'tussen', 'onder', 'door', 'als', 'niet', 'deze', 'die', 'dat', 'waar'},
+    'en': {'the', 'and', 'with', 'for', 'experience', 'education', 'skills', 'present', 'responsible', 'years',
+           'development', 'team', 'languages', 'english', 'dutch', 'which', 'this', 'that', 'from', 'was', 'were',
+           'have', 'has', 'within', 'between', 'including', 'worked', 'working', 'management'},
+}
+
+
+def cv_taal(text):
+    """'es' / 'nl' / 'en' / '' (onduidelijk). Spaans alleen als dat duidelijk de hoofdtaal is."""
+    words = re.findall(r'[a-záéíóúñü]+', (text or '').lower()[:20000])
+    if len(words) < 40:
+        return ''
+    tel = {t: sum(1 for w in words if w in ws) for t, ws in TAAL_WOORDEN.items()}
+    best = max(tel, key=tel.get)
+    rest = sum(v for t, v in tel.items() if t != best)
+    if best == 'es':
+        # Spaans: minstens 15 typisch Spaanse woorden én ruim meer dan Nederlands + Engels samen.
+        return 'es' if tel['es'] >= 15 and tel['es'] >= 2 * rest else ''
+    return best if tel[best] >= 8 and tel[best] > rest else ''
+
+
 def woonplaats_from(text):
     """Woonplaats = plaats in de kop of op een contactregel (naast adres, postcode, mail of telefoon).
     Een plaats bij een baan of stage ('Projectmanager, Den Haag') is de WERKplek, niet de woonplaats."""

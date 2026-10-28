@@ -373,6 +373,18 @@ check('geen persoonsnaam: bedrijfsnaam wordt de naam (AI zegt cv)', rw[0] == 'cv
 check('bedrijfsnaam-cv wordt niet elke scan opnieuw gelezen', c.keep_cv_name(rw[1], rw[2]) == 'Jansen IT Consultancy BV')
 _ar.available, _ar.classify = _o
 
+_es = ("Juan Garcia\nDatos personales: telefono, correo\nExperiencia laboral\n2018 - actualidad Desarrollador de software en Empresa "
+       "Ejemplo. Responsable del desarrollo de aplicaciones web con Java para los clientes del sector bancario.\n2014 - 2018 Tecnico "
+       "de sistemas en Redes y Datos. Gestion de redes, soporte y mantenimiento de los servidores.\nFormacion\nGrado en Ingenieria "
+       "Informatica, Universidad de Barcelona\nIdiomas: espanol nativo, ingles nivel alto\nConocimientos: Java, SQL, tambien Python.")
+_nl = ("Jan de Vries\nWerkervaring\n2018 - heden Developer bij Codewerk. Verantwoordelijk voor de ontwikkeling van webapplicaties "
+       "met Java voor klanten in de financiele sector.\n2014 - 2018 Systeembeheerder bij Datafabriek. Beheer van het netwerk en "
+       "onderhoud van de servers.\nOpleiding\nMaster Informatica, Universidad de Barcelona (uitwisseling) en Universiteit van Amsterdam\n"
+       "Talen: Nederlands, Engels, Spaans\nKennis: Java, SQL, ook Python. Ik werk graag in een team en zoek een uitdaging binnen de IT.")
+check('taal: Spaans cv = es', c.cv_taal(_es) == 'es', c.cv_taal(_es))
+check('taal: Nederlands cv met Spaanse universiteit = nl', c.cv_taal(_nl) == 'nl', c.cv_taal(_nl))
+check('taal: werkt ook op opgeslagen tekst (zonder accenten)', c.cv_taal(c.normalized_snippet(_es)) == 'es')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
