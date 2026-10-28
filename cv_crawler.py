@@ -5008,6 +5008,79 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     return True
 
 
+def ai_twijfel(db, out):
+    """Lokale AI helpt bij twijfelgevallen: cv of geen cv (en welke naam). Jouw eigen keuzes in het
+    twijfel-venster gaan altijd voor. Resultaten worden bewaard, dus stoppen en later verder kan."""
+    try:
+        import ai_rechter
+    except Exception:
+        return
+    if not ai_rechter.available():
+        return
+    try:
+        decided = set(json.loads((out / DECISIONS_FILE).read_text(encoding='utf-8')))
+    except (OSError, ValueError):
+        decided = set()
+    cache_path = out / 'ai_twijfel.json'
+    try:
+        cache = json.loads(cache_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        cache = {}
+    rows = db.execute("SELECT path, sha, name, snippet, reason, emails, phones, links FROM docs "
+                      "WHERE status='review' AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
+    todo = [r for r in rows if r['sha'] not in decided and (r['snippet'] or '').strip()]
+    if not todo:
+        return
+    print(f'AI-TWIJFEL: {len(todo)} twijfelgevallen laten beoordelen door de lokale AI (stoppen mag, '
+          'de volgende keer gaat hij verder waar hij was)…', flush=True)
+    counts = collections.Counter()
+    seen = {}
+    for i, r in enumerate(todo, 1):
+        key = f"{ai_rechter.MODEL_ID}|{r['sha']}"
+        res = cache.get(key) or seen.get(r['sha'])
+        if res is None:
+            res = ai_rechter.classify(r['snippet'])
+            if res is None:
+                break
+            if not res.get('fout'):
+                cache[key] = res
+        seen[r['sha']] = res
+        reden = (res.get('reden') or '')[:100]
+        contact = bool(json.loads(r['emails'] or '[]') or json.loads(r['phones'] or '[]') or json.loads(r['links'] or '[]'))
+        if res['soort'] == 'cv':
+            name = r['name'] or ''
+            if not name and res.get('naam'):
+                cand = tidy_name(clean_person_name(res['naam'].title()))
+                # De naam moet echt in het document staan (geen verzonnen naam).
+                if cand and all(w in (r['snippet'] or '') for w in normalized_name(cand).split()):
+                    name = cand
+            if name and contact:
+                db.execute("UPDATE docs SET status='cv', name_verified=1, name=?, reason=? WHERE path=?",
+                           (name, (r['reason'] or '') + f'; AI: cv ({reden})', r['path']))
+                counts['cv'] += 1
+            else:
+                db.execute("UPDATE docs SET reason=? WHERE path=?",
+                           ((r['reason'] or '') + '; AI: lijkt een cv, maar ' +
+                            ('naam onbekend' if not name else 'geen contactgegevens') + ' – zelf kijken', r['path']))
+                counts['onzeker'] += 1
+        elif res['soort'] == 'geen_cv':
+            db.execute("UPDATE docs SET status='other', reason=? WHERE path=?",
+                       ((r['reason'] or '') + f'; AI: geen cv ({reden})', r['path']))
+            counts['geen'] += 1
+        else:
+            db.execute("UPDATE docs SET reason=? WHERE path=?", ((r['reason'] or '') + '; AI: twijfelt ook', r['path']))
+            counts['onzeker'] += 1
+        if i % 20 == 0 or i == len(todo):
+            db.commit()
+            try:
+                cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+            except OSError:
+                pass
+            print(f"AI-TWIJFEL: {i}/{len(todo)} – {counts['cv']} cv, {counts['geen']} geen cv, "
+                  f"{counts['onzeker']} blijft twijfel", flush=True)
+    db.commit()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='CV Crawler voor Windows/macOS: lokaal scannen + dedupliceren + Excel.')
     parser.add_argument('--root',action='append',help='Scan deze map (meerdere --root mogelijk); standaard gebruikersmap + iCloud')
@@ -5064,7 +5137,7 @@ def main(argv=None):
     except OSError:
         pass
     scan_error = None
-    if args.online and os.environ.get('TAVILY_API_KEY', '').strip():
+    if not (args.opschonen or args.opschonen_plan or args.terugzetten):
         try:
             import ai_rechter
             ai_rechter.start_download(log=lambda m: print(m, flush=True))
@@ -5100,14 +5173,21 @@ def main(argv=None):
             except Exception as exc:
                 db.commit()
                 print('WAARSCHUWING: bijwerken mislukt:', type(exc).__name__, str(exc)[:300], flush=True)
+        try:
+            import ai_rechter
+            if ai_rechter._download_thread and ai_rechter._download_thread.is_alive():
+                print('AI-MODEL: nog bezig met ophalen; maximaal 15 minuten wachten…', flush=True)
+                ai_rechter.wait_download(15 * 60)
+            ai_twijfel(db, out)
+        except KeyboardInterrupt:
+            db.commit()
+        except Exception as exc:
+            db.commit()
+            print('AI-TWIJFEL: overgeslagen (' + type(exc).__name__ + ': ' + str(exc)[:120] + ')', flush=True)
         people = build_exports(db,out)
         if args.online:
             try:
                 import ai_rechter
-                if ai_rechter._download_thread and ai_rechter._download_thread.is_alive():
-                    print('AI-MODEL: nog bezig met ophalen; maximaal 15 minuten wachten voor het online zoeken…', flush=True)
-                    if not ai_rechter.wait_download(15 * 60):
-                        print('AI-MODEL: nog niet klaar; online zoeken gaat nu zonder AI-controle.', flush=True)
                 print('AI-CONTROLE: ' + ('aan (lokaal, gratis, er gaat geen cv-tekst naar internet)' if ai_rechter.available()
                                          else 'uit (model of onderdelen ontbreken); alleen de regels beslissen'), flush=True)
             except Exception:

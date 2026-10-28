@@ -312,6 +312,27 @@ b = _online_tav_op('Ruben Hofstede', 'Developer bij Topicus Deventer', 'Topicus'
 check('Tavily op -> Google gebruikt en profiel gevonden', any('site:linkedin.com/in' in q for q in vragen) and 'ruben-hofstede' in b.get('gevonden_waarde', ''), (vragen, b))
 c.tavily_search = _old_online_tav
 
+# --- AI bij twijfelgevallen (nagebootst) ---
+import ai_rechter as _ar, json as _js
+_o = (_ar.available, _ar.classify)
+_ar.available = lambda: True
+_ar.classify = lambda t: ({'soort': 'geen_cv', 'naam': '', 'reden': 'sollicitatiebrief'} if 'geachte' in t else
+                          {'soort': 'cv', 'naam': 'henk winters', 'reden': 'loopbaan'})
+_out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
+for pth, name, snip, em in [('a.docx', '', 'henk winters henk winters voorbeeldmail nl werkervaring 2010 heden', ['henk.winters@voorbeeldmail.nl']),
+                            ('b.docx', 'Lieke Dam', 'lieke dam geachte heer mevrouw met vriendelijke groet', ['lieke@x.nl']),
+                            ('c.docx', '', 'iemand zonder contact werkervaring', [])]:
+    _db.execute("insert into docs(path,name,status,snippet,sha,emails,phones,links,reason,classifier_version) values(?,?,?,?,?,?,?,?,?,?)",
+                (str(_out / pth), name, 'review', snip, pth, _js.dumps(em), '[]', '[]', 'kopjes: x', c.CLASSIFIER_VERSION))
+_db.commit()
+(_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
+c.ai_twijfel(_db, _out)
+st = {r['path'].rsplit('/', 1)[-1].rsplit('\\', 1)[-1]: (r['status'], r['name']) for r in _db.execute('select path,status,name from docs')}
+check('AI twijfel: cv + naam uit tekst + contact = cv', st['a.docx'] == ('cv', 'Henk Winters'), st)
+check('AI twijfel: brief = geen cv', st['b.docx'][0] == 'other', st)
+check('AI twijfel: cv zonder contact blijft twijfel', st['c.docx'][0] == 'review', st)
+_ar.available, _ar.classify = _o
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
