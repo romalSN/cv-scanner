@@ -1,0 +1,25 @@
+name: Test zelf-bouwen-script (Mac)
+on:
+  push:
+    paths:
+      - 'MAC_ZELF_BOUWEN.command'
+      - '.github/workflows/mac_script_test.yml'
+  workflow_dispatch:
+jobs:
+  script:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Script draaien zoals Marcel het dubbelklikt
+        run: |
+          bash MAC_ZELF_BOUWEN.command < /dev/null || true
+          tail -30 "$HOME/CV-Scanner-bouwen/bouwlog.txt"
+          grep -q "KLAAR. Getest en gebouwd" "$HOME/CV-Scanner-bouwen/bouwlog.txt" || { echo "::error::script niet geslaagd"; exit 1; }
+          echo "::notice::$(grep 'KLAAR' $HOME/CV-Scanner-bouwen/bouwlog.txt)"
