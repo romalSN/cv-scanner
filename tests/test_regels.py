@@ -460,7 +460,7 @@ fk = _filter(f"Jan de Vries\nLondon, United Kingdom\n+44 7700 900123\nWerkervari
 check('filter: Nederlander nu in Londen, band met NL, zonder AI = door (tegenstrijdig, geen handwerk)', fk[0] == 'ok', fk)
 fk2 = _filter(f"Jan de Vries\nLondon, United Kingdom\n+44 7700 900123\nWerkervaring\n{_Y-2} - heden Developer bij Monzo. "
              f"Verantwoordelijk voor de ontwikkeling van het platform.\n{_Y-10} - {_Y-2} Developer bij Datafabriek, Utrecht. "
-             "Ik heb daar veel ervaring opgedaan met het team.", ['+447700900123'], werk='utrecht', ai={'woont': 'nee'})
+             "Ik heb daar veel ervaring opgedaan met het team.", ['+447700900123'], werk='utrecht', ai={'woont': 'nee', 'woont_buiten': 'ja'})
 check('filter: tegenstrijdig, AI zegt woont niet in NL/BE = niet meegenomen', fk2 == ('weg', 'woont niet in Nederland of België'), fk2)
 fk = _filter("Kees Mol\nkees@x.nl\nWerkervaring\nDeveloper bij Codewerk. Ik werk graag met het team aan de ontwikkeling van "
              "de systemen en heb veel ervaring met Java.", [])
@@ -495,7 +495,7 @@ fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'])
 check('filter: alleen buitenlands nummer, zonder AI = door', fk[0] == 'ok', fk)
 fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'onduidelijk'})
 check('filter: alleen buitenlands nummer, AI onzeker = door', fk[0] == 'ok', fk)
-fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee'})
+fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee', 'woont_buiten': 'ja'})
 check('filter: alleen buitenlands nummer, AI zeker buitenland = niet meegenomen', fk[0] == 'weg', fk)
 fk = _filter("Rahul\nBangalore, India\n06-00000803\n" + _ENK, ['+31600000803'], ai={'woont': 'onduidelijk'})
 check('filter: tegenstrijdig, AI onzeker = door', fk[0] == 'ok', fk)
@@ -535,6 +535,9 @@ check('postcode: NL-postcode + buitenlandse plaats = tegenstrijdig', _w("Jan\n10
 check('postcode: 8001 Zurich = buitenland', _w("Jan\nBahnhofstrasse 1, 8001 Zurich, Switzerland\n+41 44 000 00 00\n" + _ENK, ['+41440000000']) == 'buitenland')
 check('postcode: alleen postcode = nl-aanwijzing (door)', _w("Jan\n2011 AB\n" + _ENK) == 'nl')
 check('postcode: onleesbaar = door', _filter("Jan\n2?1l A8\n" + _ENK, [])[0] == 'ok')
+
+fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee', 'woont_buiten': 'nee'})
+check('filter: AI-vragen oneens = door (geen onterechte uitsluiting)', fk[0] == 'ok', fk)
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
