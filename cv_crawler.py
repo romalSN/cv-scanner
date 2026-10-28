@@ -701,6 +701,14 @@ def cv_taal(text):
     return best if tel[best] >= 8 and tel[best] > rest else ''
 
 
+# Alleen wie in INDIA woont gaat naar 'Niet voor Loxo' (wens opdrachtgever: kandidaten moeten hier wonen;
+# andere landen, zoals België, blijven erin). Gebaseerd op woonplaats/telefoon, nooit op naam of afkomst.
+INDIA_PLACES = {'india', 'bangalore', 'bengaluru', 'mumbai', 'bombay', 'delhi', 'new delhi', 'chennai', 'madras', 'pune',
+                'hyderabad', 'kolkata', 'calcutta', 'noida', 'gurgaon', 'gurugram', 'ahmedabad', 'kochi', 'cochin',
+                'coimbatore', 'trivandrum', 'thiruvananthapuram', 'chandigarh', 'jaipur', 'indore', 'nagpur', 'mysore',
+                'mysuru', 'visakhapatnam', 'vizag', 'bhubaneswar', 'lucknow', 'mangalore', 'karnataka', 'maharashtra',
+                'tamil nadu', 'telangana', 'kerala', 'andhra pradesh', 'uttar pradesh', 'west bengal', 'gujarat',
+                'haryana', 'rajasthan', 'punjab', 'odisha'}
 BUITENLAND_IGNORE = {'nederland', 'netherlands', 'holland', 'the netherlands', 'remote', 'worldwide', 'emea',
                      'benelux', 'europe', 'europa', 'us'}
 
@@ -715,9 +723,8 @@ def woonland(snippet, phones):
     nl_place = any(f' {pl} ' in head for pl in NL_PLACES)
     if nl_phone or (nl_post and nl_place) or nl_place and (' nederland ' in head or ' netherlands ' in head):
         return 'nl', ''
-    foreign_phone = [p for p in phones or [] if str(p).startswith('+') and not str(p).startswith('+31')]
-    foreign_place = next((pl for pl in sorted(FOREIGN_PLACES, key=len, reverse=True)
-                          if pl not in BUITENLAND_IGNORE and f' {pl} ' in head), '')
+    foreign_phone = [p for p in phones or [] if str(p).startswith('+91')]
+    foreign_place = next((pl for pl in sorted(INDIA_PLACES, key=len, reverse=True) if f' {pl} ' in head), '')
     if nl_place or nl_post:
         return 'nl', ''
     if foreign_phone or foreign_place:
@@ -3258,7 +3265,7 @@ def deduplicate(db, merge_file=None):
             why.append('Spaanstalig cv')
         land, waar = woonland(first['snippet'] or '', all_phones)
         if land == 'buitenland':
-            why.append(f'woont buiten Nederland ({waar})')
+            why.append(f'woont in India ({waar})')
         candidate['niet_voor_loxo'] = '; '.join(why)
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
@@ -3805,7 +3812,7 @@ def build_exports(db, out):
     save_csv(out/'unieke_personen.csv',view,vcols)
     save_csv(out/'niet_voor_loxo.csv',apart,acols)
     if apart:
-        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv of woont buiten Nederland); '
+        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv of woont in India); '
               'zie tabblad ‘Niet voor Loxo’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
