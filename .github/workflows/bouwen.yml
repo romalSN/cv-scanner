@@ -57,6 +57,9 @@ jobs:
       - name: Test - venster Kandidaten (tabel in de scanner)
         run: python tests/test_kandidaten.py
 
+      - name: Test - sleutelbestand wordt automatisch op de juiste plek gezet
+        run: python tests/test_sleutels.py
+
       - name: Test - alle afgesproken regels (matching, plaatsen, typfouten, cloud, sleutels, Pages)
         run: python tests/test_regels.py
 

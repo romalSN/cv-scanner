@@ -124,6 +124,61 @@ def save_key(key):
         pass
 
 
+SLEUTELBESTAND = 'cv-scanner-sleutels.txt'
+SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE}
+
+
+def _sleutelbestand_plekken():
+    """Waar kan het sleutelbestand staan? Naast de app (in de uitgepakte map), in Downloads of op het Bureaublad
+    (ook één map dieper, bv. de uitgepakte zip-map)."""
+    plekken = []
+    exe = Path(sys.executable).resolve()
+    for p in [exe.parent, *exe.parents[:4]]:
+        plekken.append(p)
+    for basis in (HOME / 'Downloads', HOME / 'Desktop', HOME / 'Bureaublad'):
+        plekken.append(basis)
+        try:
+            plekken += [d for d in basis.iterdir() if d.is_dir() and 'scanner' in d.name.lower()]
+        except OSError:
+            pass
+    return plekken
+
+
+def sleutels_importeren():
+    """Staat er een 'cv-scanner-sleutels.txt' (tavily=…, serper=…, serpapi=…)? Dan de sleutels op de vaste plek
+    zetten (dezelfde map als wanneer je ze zelf invult) en het bestand weghalen. Geeft de namen van de
+    geïnstalleerde sleutels terug (nooit de sleutels zelf)."""
+    for map_ in _sleutelbestand_plekken():
+        f = map_ / SLEUTELBESTAND
+        try:
+            if not f.is_file():
+                continue
+            regels = f.read_text(encoding='utf-8-sig', errors='replace').splitlines()
+        except OSError:
+            continue
+        gezet = []
+        for r in regels:
+            if '=' not in r:
+                continue
+            soort, waarde = (x.strip() for x in r.split('=', 1))
+            soort = soort.lower()
+            if soort in SLEUTEL_SOORTEN and waarde:
+                RUNTIME.mkdir(parents=True, exist_ok=True)
+                SLEUTEL_SOORTEN[soort].write_text(waarde, encoding='utf-8')
+                try:
+                    os.chmod(SLEUTEL_SOORTEN[soort], 0o600)
+                except OSError:
+                    pass
+                gezet.append(soort)
+        if gezet:
+            try:
+                f.unlink()          # niet laten slingeren in Downloads
+            except OSError:
+                pass
+            return gezet
+    return []
+
+
 class Tooltip:
     """Uitlegvakje dat verschijnt als je met de muis over een element gaat."""
     def __init__(self, widget, text):
@@ -1596,7 +1651,16 @@ def main():
     if sys.version_info < (3,10):
         raise RuntimeError('Python 3.10 of nieuwer vereist.')
     root = tk.Tk()
+    try:
+        gezet = sleutels_importeren()
+    except Exception:
+        gezet = []
     ScannerApp(root)
+    if gezet:
+        namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi'}
+        root.after(800, lambda: messagebox.showinfo(
+            'Sleutels geïnstalleerd', 'Zoeksleutels geïnstalleerd: ' + ', '.join(namen[g] for g in gezet) +
+            '.\nJe hoeft ze niet meer in te vullen.', parent=root))
     root.mainloop()
 
 

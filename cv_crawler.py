@@ -2303,7 +2303,7 @@ def db_open(out):
         db.execute("ALTER TABLE docs ADD COLUMN taal TEXT NOT NULL DEFAULT ''")
     db.execute('CREATE INDEX IF NOT EXISTS docs_sha ON docs(sha)')
     # Eigen API-sleutels mogen nooit in de index of Excel staan (oude versies lazen ze soms mee).
-    db.execute("DELETE FROM docs WHERE path LIKE '%_sleutel.txt' OR path LIKE '%.cv-scanner-windows%' "
+    db.execute("DELETE FROM docs WHERE path LIKE '%_sleutel.txt' OR path LIKE '%cv-scanner-sleutels%' OR path LIKE '%.cv-scanner-windows%' "
                "OR path LIKE '%CV_Crawler_Resultaten%.pdf'")
     db.commit()
     return db
@@ -2541,7 +2541,7 @@ def iter_files(roots, out, deep=False):
                     else:
                         SKIPPED_SPECIAL['icloud'].append(str(real))
                     continue
-                if fname.lower().endswith('_sleutel.txt'):
+                if fname.lower().endswith('_sleutel.txt') or fname.lower() == 'cv-scanner-sleutels.txt':
                     continue                  # API-sleutel van de scanner zelf
                 if fname.lower().startswith(('cv_crawler_resultaten', 'cv-scanner-')):
                     continue                  # eigen resultaat (Excel/pdf-export) of download van de scanner zelf
