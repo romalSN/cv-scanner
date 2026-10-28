@@ -50,9 +50,11 @@ def maybe_cv(reason):
     return bool(m and m.group(1).strip() != 'geen') or 'cv-kop: ja' in r or 'contact: ja' in r
 
 
-def keep_cv_name(name):
+def keep_cv_name(name, reason=''):
     """Al gevonden cv: mag het blijven staan zonder opnieuw lezen? Alleen als de naam (opgeschoond) klopt.
     Geeft de opgeschoonde naam terug, of '' = opnieuw lezen."""
+    if 'naam = bedrijfsnaam' in (reason or ''):
+        return name or ''                          # bewust de bedrijfsnaam (geen persoonsnaam te vinden)
     return tidy_name(clean_person_name(name or ''))
 SUPPORTED = {'.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.pages'}
 # Zip-archieven worden alleen gelezen, nooit uitgepakt in de map of gewijzigd.
@@ -2125,14 +2127,14 @@ def ingest(args, db, out, roots=None, label=None):
                 summary['hergebruikt'] += 1
                 continue
             if (not retry_ocr and saved and saved['mtime_ns'] == stat.st_mtime_ns and saved['size'] == stat.st_size
-                    and ((saved['status'] == 'cv' and keep_cv_name(saved['name']))
+                    and ((saved['status'] == 'cv' and keep_cv_name(saved['name'], saved['reason']))
                          or (saved['status'] == 'other' and not maybe_cv(saved['reason'])))
                     and (saved['classifier_version'] or 0) >= KEEP_FROM_VERSION
                     and not args.force):
                 # Nieuwere herkenning, maar dit document was al zeker cv of zeker geen cv: niet opnieuw lezen.
                 # (Een cv-naam wordt wel opgeschoond: 'Naam Jan de Vries' -> 'Jan de Vries'.)
                 db.execute('UPDATE docs SET classifier_version=?, name=? WHERE path=?',
-                           (CLASSIFIER_VERSION, keep_cv_name(saved['name']) if saved['status'] == 'cv' else saved['name'], str(p)))
+                           (CLASSIFIER_VERSION, keep_cv_name(saved['name'], saved['reason']) if saved['status'] == 'cv' else saved['name'], str(p)))
                 summary['hergebruikt'] += 1
                 continue
             deferred_reason = ''
@@ -2283,12 +2285,12 @@ def ingest_zip(zpath, zstat, args, db, archive, lang, summary, seen_paths):
     if (old and not args.force and all(r['mtime_ns'] == zstat.st_mtime_ns and r['size'] == zstat.st_size
             and (r['classifier_version'] == CLASSIFIER_VERSION and r['status'] not in ('error', 'deferred')
                  or (r['classifier_version'] or 0) >= KEEP_FROM_VERSION
-                 and ((r['status'] == 'cv' and keep_cv_name(r['name'])) or (r['status'] == 'other' and not maybe_cv(r['reason']))))
+                 and ((r['status'] == 'cv' and keep_cv_name(r['name'], r['reason'])) or (r['status'] == 'other' and not maybe_cv(r['reason']))))
             for r in old)):
         for r in old:
             seen_paths.add(r['path'])
             db.execute('UPDATE docs SET classifier_version=?, name=? WHERE path=?',
-                       (CLASSIFIER_VERSION, keep_cv_name(r['name']) if r['status'] == 'cv' else r['name'], r['path']))
+                       (CLASSIFIER_VERSION, keep_cv_name(r['name'], r['reason']) if r['status'] == 'cv' else r['name'], r['path']))
         summary['hergebruikt'] += len(old)
         return
     for r in old:   # zip is veranderd: oude regels van deze zip vervangen
@@ -3214,6 +3216,7 @@ def deduplicate(db, merge_file=None):
                                         if p.get('bedrijf_raw'))
     for person in identities:
         raw = person.pop('bedrijf_raw', '')
+        person['naam_is_bedrijf'] = bool(raw) and normalized_name(person['naam']) == normalized_name(raw.replace('via:', ''))
         person['bedrijf'], person['bedrijf_soort'] = bedrijf_soort(
             raw, person['naam'], [v for v in person['alle_emails'].split(' | ') if v],
             company_count.get(normalized_name(raw.replace('via:', '')), 1) if raw else 1)
@@ -4423,7 +4426,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     google_used = 0
     google_via = {}
     tavily_out = False          # Tavily-tegoed op: verder via Google (Serper/SerpApi)
-    todo = [p for p in people if p['naam'] and not all(p[k] for k in ('email','telefoon','linkedin'))]
+    todo = [p for p in people if p['naam'] and not p.get('naam_is_bedrijf') and not all(p[k] for k in ('email','telefoon','linkedin'))]
     name_count = collections.Counter(normalized_name(p['naam']) for p in people if p['naam'])
     print(f'ONLINE: {len(todo)} van {len(people)} personen missen LinkedIn, e-mail of telefoon.', flush=True)
     for person in todo:
@@ -5110,7 +5113,7 @@ def ai_twijfel(db, out):
         cache = json.loads(cache_path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         cache = {}
-    rows = db.execute("SELECT path, sha, name, snippet, reason, emails, phones, links FROM docs "
+    rows = db.execute("SELECT path, sha, name, snippet, reason, emails, phones, links, leverancier FROM docs "
                       "WHERE status='review' AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
     todo = [r for r in rows if r['sha'] not in decided and (r['snippet'] or '').strip()]
     if not todo:
@@ -5145,9 +5148,14 @@ def ai_twijfel(db, out):
                 # De naam moet echt in het document staan (geen verzonnen naam).
                 if cand and all(w in (r['snippet'] or '') for w in normalized_name(cand).split()):
                     name = cand
+            extra = ''
+            if not name and contact and (r['leverancier'] or '') and not r['leverancier'].startswith('via:'):
+                # Echt geen persoonsnaam te vinden (niet in de tekst, e-mail, LinkedIn of via de AI):
+                # dan de eigen bedrijfsnaam als naam, zodat de kandidaat niet verdwijnt.
+                name, extra = r['leverancier'], '; naam = bedrijfsnaam (geen persoonsnaam gevonden)'
             if name and contact:
                 db.execute("UPDATE docs SET status='cv', name_verified=1, name=?, reason=? WHERE path=?",
-                           (name, (r['reason'] or '') + f'; AI: cv ({reden})', r['path']))
+                           (name, (r['reason'] or '') + f'; AI: cv ({reden})' + extra, r['path']))
                 counts['cv'] += 1
             else:
                 db.execute("UPDATE docs SET reason=? WHERE path=?",

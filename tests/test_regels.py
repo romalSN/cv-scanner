@@ -358,6 +358,21 @@ check('zelfde bedrijf bij 3 kandidaten = bureau', c.bedrijf_soort('Voorbeeld Exp
 check('onduidelijk = onbekend', c.bedrijf_soort('Voorbeeld Experts BV', 'Lisa Groen', ['lisa@gmail.com'])[1] == 'onbekend')
 check('werkgever in werkervaring is geen leverancier', c.leverancier_from("Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == '')
 
+# --- Geen persoonsnaam te vinden: AI zegt cv -> eigen bedrijfsnaam als naam ---
+_ar.available = lambda: True; _ar.TWIJFEL_AAN = True
+_ar.classify = lambda t: {'soort': 'cv', 'naam': '', 'reden': 'lijkt een cv'}
+_out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
+_db.execute("insert into docs(path,name,status,snippet,sha,emails,phones,links,reason,leverancier,classifier_version) values(?,?,?,?,?,?,?,?,?,?,?)",
+            (str(_out / 'bv.docx'), '', 'review', 'jansen it consultancy bv werkervaring 2015 heden consultant', 'bv',
+             _js.dumps(['contact@jansen-it.nl']), _js.dumps(['+31600000501']), '[]', 'kopjes: werkervaring; naam: nee; werkperiodes: 1',
+             'Jansen IT Consultancy BV', c.CLASSIFIER_VERSION))
+_db.commit(); (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
+c.ai_twijfel(_db, _out)
+rw = _db.execute('select status,name,reason from docs').fetchone()
+check('geen persoonsnaam: bedrijfsnaam wordt de naam (AI zegt cv)', rw[0] == 'cv' and rw[1] == 'Jansen IT Consultancy BV', tuple(rw))
+check('bedrijfsnaam-cv wordt niet elke scan opnieuw gelezen', c.keep_cv_name(rw[1], rw[2]) == 'Jansen IT Consultancy BV')
+_ar.available, _ar.classify = _o
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
