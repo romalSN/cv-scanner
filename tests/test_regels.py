@@ -350,7 +350,12 @@ _ar.available, _ar.classify = _o
 check('bedrijfsregel bovenaan: naam die bij e-mail past', c.guess_name("Jak Verhuur\nLisa Groen\nWerkervaring", 'document', ['lisa.groen@voorbeeldmail.nl']) == 'Lisa Groen')
 
 check('leverancier bovenaan (BV)', c.leverancier_from("Voorbeeld Experts BV\nCV van Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == 'Voorbeeld Experts BV')
-check('leverancier via-regel', c.leverancier_from("Anna Visser\nVia: Detachering Voorbeeld\nWerkervaring") == 'Detachering Voorbeeld')
+check('leverancier via-regel', c.leverancier_from("Anna Visser\nVia: Detachering Voorbeeld\nWerkervaring") == 'via:Detachering Voorbeeld')
+check('zzp: eigen BV met achternaam', c.bedrijf_soort('Jansen IT Consultancy BV', 'Jan Jansen', ['jan@gmail.com'])[1] == 'eigen bedrijf (zzp)')
+check('zzp: eigen domein', c.bedrijf_soort('Codebloem BV', 'Jan Jansen', ['jan.jansen@codebloem.nl'])[1] == 'eigen bedrijf (zzp)')
+check('via = bureau', c.bedrijf_soort('via:Detachering Voorbeeld', 'Anna Visser', [])[1] == 'bureau / leverancier')
+check('zelfde bedrijf bij 3 kandidaten = bureau', c.bedrijf_soort('Voorbeeld Experts BV', 'Lisa Groen', [], shared=3)[1] == 'bureau / leverancier')
+check('onduidelijk = onbekend', c.bedrijf_soort('Voorbeeld Experts BV', 'Lisa Groen', ['lisa@gmail.com'])[1] == 'onbekend')
 check('werkgever in werkervaring is geen leverancier', c.leverancier_from("Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == '')
 
 print()

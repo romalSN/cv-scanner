@@ -624,13 +624,45 @@ def leverancier_from(text):
             continue
         m = LEVERANCIER_LABEL.match(clean)
         if m:
-            return m.group(1).strip(' .,')
+            return 'via:' + m.group(1).strip(' .,')      # 'Via: …' = bureau/leverancier
         words = clean.split()
         if 1 <= len(words) <= 6 and (LEGAL_SUFFIX.search(clean) or any(
                 asciifold(w).lower().strip('.,') in COMPANY_WORDS for w in words)):
             if not re.search(r'(?i)\b(?:cv|curriculum|vitae|profiel|resume)\b', clean):
                 return clean.strip(' .,')
     return ''
+
+
+def bedrijf_soort(bedrijf_raw, name, emails, shared=1):
+    """('Jansen IT BV', 'eigen bedrijf (zzp)') / ('Detachering X', 'bureau / leverancier') / (…, 'onbekend')."""
+    if not bedrijf_raw:
+        return '', ''
+    via = bedrijf_raw.startswith('via:')
+    bedrijf = bedrijf_raw[4:] if via else bedrijf_raw
+    if via or shared >= 3:
+        return bedrijf, 'bureau / leverancier'
+    nb = re.sub(r'[^a-z]', '', asciifold(bedrijf).lower())
+    nwords = [w for w in normalized_name(name).split() if len(w) >= 3 and w not in NAME_FILLERS]
+    if any(w in nb for w in nwords):
+        return bedrijf, 'eigen bedrijf (zzp)'           # 'Jansen IT BV' bij Jan Jansen
+    core = [w for w in re.findall(r'[a-z]{3,}', asciifold(bedrijf).lower())
+            if w not in COMPANY_WORDS and w not in ('bv', 'nv', 'vof', 'the')]
+    freemail = ('gmail', 'hotmail', 'outlook', 'live', 'icloud', 'yahoo', 'kpnmail', 'ziggo', 'planet', 'xs4all',
+                'casema', 'home', 'msn', 'me', 'mail', 'online', 'chello', 'hetnet', 'zonnet', 'tele2', 'upcmail')
+    for e in emails or []:
+        local, _, dom = e.partition('@')
+        base = dom.rsplit('.', 1)[0].split('.')[-1]
+        if base in freemail or any(base.startswith(f) for f in ('gmail', 'hotmail', 'outlook', 'yahoo')):
+            continue
+        dom = re.sub(r'[^a-z]', '', base)
+        # Domein = de bedrijfsnaam zelf ('codebloem.nl' bij Codebloem BV, 'jansen-it.nl' bij Jansen IT BV).
+        joined = ''.join(w for w in re.findall(r'[a-z]+', asciifold(bedrijf).lower())
+                         if w not in ('bv', 'b', 'v', 'nv', 'vof', 'bvba', 'ltd', 'gmbh', 'holding'))
+        same = len(dom) >= 4 and (dom == joined or (dom in joined and len(dom) >= len(joined) * .5)
+                                  or (joined in dom and len(joined) >= len(dom) * .7))
+        if core and same and (email_matches_name(name, e) or len(local) <= 4):
+            return bedrijf, 'eigen bedrijf (zzp)'       # jan@jansen-it.nl bij 'Jansen IT BV'
+    return bedrijf, 'onbekend'
 
 
 def woonplaats_from(text):
@@ -3146,7 +3178,7 @@ def deduplicate(db, merge_file=None):
                     return values[0]
             return ''
         levs = collections.Counter(d['leverancier'] for d in group if 'leverancier' in d.keys() and d['leverancier'])
-        candidate = dict(persoon_id=ident, naam=name, leverancier=levs.most_common(1)[0][0] if levs else '',
+        candidate = dict(persoon_id=ident, naam=name, bedrijf_raw=levs.most_common(1)[0][0] if levs else '',
            email=latest('emails'),
            telefoon=latest('phones'), linkedin=latest('links'),
            alle_emails=' | '.join(all_emails), alle_telefoons=' | '.join(all_phones),
@@ -3178,6 +3210,13 @@ def deduplicate(db, merge_file=None):
                     person[field] = own[0]
                 else:
                     person[field + '_bureau'] = shared_count[person[field]]
+    company_count = collections.Counter(normalized_name(p['bedrijf_raw'].replace('via:', '')) for p in identities
+                                        if p.get('bedrijf_raw'))
+    for person in identities:
+        raw = person.pop('bedrijf_raw', '')
+        person['bedrijf'], person['bedrijf_soort'] = bedrijf_soort(
+            raw, person['naam'], [v for v in person['alle_emails'].split(' | ') if v],
+            company_count.get(normalized_name(raw.replace('via:', '')), 1) if raw else 1)
     identities.sort(key=lambda r:(normalized_name(r['naam']), r['persoon_id']))
     if id_file:
         try:
@@ -3458,7 +3497,7 @@ def only_ticks(text):
 def personen_overzicht(people):
     """Eerste tabblad: per gegeven 'uit cv' naast 'gezocht' (online), plus zekerheid en waarom."""
     cols = ['naam', 'kandidaat_id', 'cv_id', 'open_cv', 'email', 'email_bron', 'telefoon', 'telefoon_bron',
-            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'leverancier',
+            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'bedrijf', 'bedrijf_soort',
             ]
     rows = []
     for p in people:
@@ -3523,7 +3562,8 @@ def personen_overzicht(people):
                          email=email, email_bron=email_bron, telefoon=tel, telefoon_bron=tel_bron,
                          linkedin=li, linkedin_bron=li_bron,
                          gezocht_zekerheid='\n'.join(labels), gezocht_waarom=pretty_waarom(only_ticks(p.get('online_waarom', ''))),
-                         huidige_functie=role, laatst_bekende_werkgever=employer, leverancier=p.get('leverancier', ''),
+                         huidige_functie=role, laatst_bekende_werkgever=employer,
+                         bedrijf=p.get('bedrijf', ''), bedrijf_soort=p.get('bedrijf_soort', ''),
                          zelf_zoeken_google=google_xray_link(p['naam'], not p['email'] and not found('email', ''),
                                                              not p['telefoon'] and not found('telefoon', '')),
                          persoon_id=p['persoon_id']))
