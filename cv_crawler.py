@@ -714,6 +714,11 @@ BE_PLACES = {'belgie', 'belgium', 'belgique', 'belgien', 'antwerpen', 'antwerp',
              'namur', 'charleroi', 'kortrijk', 'aalst', 'oostende', 'ostend', 'sint niklaas', 'turnhout', 'roeselare',
              'mons', 'bergen', 'lier', 'zaventem', 'vilvoorde', 'dendermonde', 'beveren', 'geel', 'vlaanderen',
              'flanders', 'wallonie', 'limburg'}
+def _woorden_en_cijfers(t):
+    """Kleine letters zonder accenten, cijfers BLIJVEN (jaartallen, postcodes)."""
+    return ' '.join(re.findall(r'[a-z0-9]+', asciifold((t or '').lower())))
+
+
 BUITENLAND_IGNORE = {'nederland', 'netherlands', 'holland', 'the netherlands', 'remote', 'worldwide', 'emea',
                      'benelux', 'europe', 'europa', 'us'}
 
@@ -722,7 +727,7 @@ def woonland(snippet, phones):
     """Waar woont de kandidaat? 'nl', ('buitenland', 'India') of '' (onduidelijk).
     Kijkt alleen naar de kop/contactgegevens (begin van het cv) en de telefoonnummers. Nederlands kenmerk wint
     altijd: wie in Nederland woont maar vroeger in India werkte, blijft gewoon kandidaat."""
-    head = ' ' + normalized_name((snippet or '')[:450]) + ' '
+    head = ' ' + _woorden_en_cijfers((snippet or '')[:450]) + ' '
     nl_phone = any(str(p).startswith('+31') for p in phones or [])
     nl_post = re.search(r'(?<![a-z0-9])[1-9]\d{3} ?[a-z]{2}(?![a-z0-9])', head) is not None
     nl_place = any(f' {pl} ' in head for pl in NL_PLACES)
@@ -759,6 +764,37 @@ def nl_be_band(snippet, docs=()):
     if NL_BE_SCHOOL.search(opl) or NL_BE_SCHOOL.search(body):
         redenen.append('studeerde in NL/BE')
     return ' en '.join(redenen[:2])
+
+
+MIN_JAREN_NL = 4    # opdrachtgevers vragen vaak 5 jaar in NL/BE wonen (screening); cv is nooit exact, dus 4 als grens
+
+
+def laatst_buitenland(snippet):
+    """Laatste jaar waarin het cv iemand in het buitenland plaatst (werk of opleiding met jaartallen en een
+    buitenlandse plaats). Geeft (jaar, plaats) of (0, ''). Geldt voor iedereen gelijk, ook Nederlanders."""
+    text = ' ' + _woorden_en_cijfers(snippet or '') + ' '
+    this_year = dt.date.today().year
+    places = sorted((FOREIGN_PLACES | INDIA_PLACES) - BUITENLAND_IGNORE - BE_PLACES, key=len, reverse=True)
+    best = (0, '')
+    marks = list(re.finditer(r'(?<!\d)(19[5-9]\d|20[0-3]\d)(?!\d)', text))
+    i = 0
+    while i < len(marks):
+        start = marks[i]
+        # Een periode: '2019 2022' of '2019 heden'; anders een los jaartal.
+        j = i + 1 if i + 1 < len(marks) and marks[i + 1].start() - start.end() <= 12 else i
+        end_year = int(marks[j].group(1))
+        tail_start = marks[j].end()
+        if j == i and re.match(r'\s*(?:heden|present|nu|now|current|today|actualidad|dd)\b', text[tail_start:]):
+            end_year = this_year
+        nxt = marks[j + 1].start() if j + 1 < len(marks) else len(text)
+        window = text[tail_start:min(nxt, tail_start + 160)]
+        if re.match(r'\s*(?:heden|present|nu|now|current|today|actualidad)\b', window):
+            end_year = this_year
+        pl = next((p for p in places if f' {p} ' in window + ' '), '')
+        if pl and not any(f' {n} ' in window + ' ' for n in NL_PLACES | BE_PLACES) and end_year > best[0]:
+            best = (min(end_year, this_year), pl)
+        i = j + 1
+    return best
 
 
 def woonplaats_from(text):
@@ -3301,6 +3337,10 @@ def deduplicate(db, merge_file=None):
                 pass
             else:
                 why.append(f'woont niet in Nederland of België ({waar})')
+        if not why:
+            jaar, plek = laatst_buitenland(first['snippet'] or '')
+            if jaar and dt.date.today().year - jaar < MIN_JAREN_NL:
+                why.append(f'korter dan {MIN_JAREN_NL} jaar in NL/BE (laatst in {plek.title()}, {jaar})')
         candidate['niet_voor_loxo'] = '; '.join(why)
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
@@ -3847,7 +3887,8 @@ def build_exports(db, out):
     save_csv(out/'unieke_personen.csv',view,vcols)
     save_csv(out/'niet_voor_loxo.csv',apart,acols)
     if apart:
-        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv of woont niet in NL/België); '
+        print(f'NIET VOOR LOXO: {len(apart)} kandidaten apart gezet (Spaanstalig cv, woont niet in NL/België of '
+              f'korter dan {MIN_JAREN_NL} jaar hier); '
               'zie tabblad ‘Niet voor Loxo’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)

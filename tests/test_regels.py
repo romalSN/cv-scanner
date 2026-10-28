@@ -400,6 +400,16 @@ check('woont buitenland, werkte/studeerde in NL = band (blijft erin)',
 check('woont in India, geen band met NL/BE = geen band',
       c.nl_be_band(c.normalized_snippet("Rahul\nBangalore, India\n+91 98450 12345" + _pad + "\nExperience\nDeveloper at Infosys, Pune\nEducation\nB.Tech, Anna University"), []) == '')
 
+import datetime as _dt
+_jr = _dt.date.today().year
+_j, _ = c.laatst_buitenland(c.normalized_snippet(f"Arjun\nAmsterdam\nExperience\n{_jr-1} - Present Developer, Adyen, Amsterdam\n{_jr-6} - {_jr-1} Developer, Infosys, Pune, India"))
+check('laatst in India 1 jaar geleden = korter dan 4 jaar', _j == _jr - 1, _j)
+_j, _ = c.laatst_buitenland(c.normalized_snippet(f"Arjun\nAmsterdam\nExperience\n{_jr-7} - Present Developer, Adyen, Amsterdam\n{_jr-12} - {_jr-7} Developer, Infosys, Pune, India"))
+check('laatst in India 7 jaar geleden = lang genoeg hier', _jr - _j >= c.MIN_JAREN_NL, _j)
+_j, _ = c.laatst_buitenland(c.normalized_snippet("Jan\nUtrecht\nWerkervaring\n2015 - heden Developer, Codewerk, Utrecht"))
+check('altijd in NL = geen buitenlandperiode', _j == 0, _j)
+check('postcode telt als NL', c.woonland(c.normalized_snippet("Jan\n1012 AB Amsterdam\njan@x.nl"), [])[0] == 'nl')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
