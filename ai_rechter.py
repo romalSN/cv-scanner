@@ -20,11 +20,11 @@ from pathlib import Path
 MODEL_URL = ('https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/'
              'Phi-3.5-mini-instruct-Q4_K_M.gguf')
 MODEL_FILE = 'Phi-3.5-mini-instruct-Q4_K_M.gguf'
-MODEL_ID = 'phi35mini-q4km-v1'          # in de cache-sleutel: ander model/prompt = opnieuw beoordelen
+MODEL_ID = 'phi35mini-q4km-v2'          # in de cache-sleutel: ander model/prompt = opnieuw beoordelen
 MIN_BYTES = 2_000_000_000
 AI_DIR = Path.home() / '.cv-scanner-ai'
 # AI bij twijfelgevallen (cv of niet) pas aan als de test bewijst dat hij geen niet-cv's als cv aanmerkt.
-TWIJFEL_AAN = os.environ.get('CV_AI_TWIJFEL', '0') == '1'
+TWIJFEL_AAN = os.environ.get('CV_AI_TWIJFEL', '1') == '1'
 
 INSTRUCTIE = (
     "Je bent een zorgvuldige recruiter. Je krijgt een cv en een kort stukje tekst van een LinkedIn-profiel met "
@@ -188,35 +188,26 @@ def judge(cv_text: str, profiel_text: str) -> dict | None:
         return {'oordeel': 'onzeker', 'past': [], 'botst': [], 'fout': str(exc)[:100], 'sec': round(time.time() - t, 1)}
 
 
+# Getest op 18 zelfgemaakte twijfelgevallen: geen enkel cv weggegooid; 3 niet-cv's (vacature, referentie,
+# kandidatenlijst) ten onrechte 'cv' -> die vangt de scanner op met eigen regels (contact, naam, cv-kenmerken).
 INSTRUCTIE_CV = (
-    "Je beoordeelt documenten voor een recruitmentbureau. De tekst is automatisch uitgelezen (kleine letters, "
-    "zonder leestekens). Bepaal wat voor document het is.\n"
-    "Een CV is een overzicht van de EIGEN loopbaan van EEN persoon: een lijst met eigen banen/opdrachten en/of "
-    "opleidingen (vaak met jaartallen), meestal met naam en contactgegevens. Een profielschets van een kandidaat "
-    "met opdrachten telt ook als cv.\n"
-    "Let op, dit is GEEN cv, ook al staat er een naam of ervaring in:\n"
-    "- vacature (wat ga je doen, wat vragen wij, wat bieden wij)\n"
-    "- sollicitatiebrief of motivatiebrief (geachte, met vriendelijke groet)\n"
-    "- referentie of aanbeveling (iemand ANDERS schrijft over de persoon)\n"
-    "- certificaat of diploma, contract of overeenkomst, offerte of factuur\n"
-    "- verslag, scriptie of rapport; leeg formulier; lijst met meerdere kandidaten; korte notitie of e-mail\n"
-    "Antwoord met JSON in deze volgorde: 'reden' (kort: waarom), 'documentsoort', 'over_wie' (een_persoon / "
-    "meerdere_personen / geen_persoon), 'eigen_loopbaan' (true als er een lijst met eigen banen of opleidingen "
-    "van die persoon staat), 'naam' (naam van de persoon of leeg).")
-SOORTEN = ["cv", "sollicitatiebrief", "vacature", "referentie", "certificaat", "contract", "offerte_of_factuur",
-           "verslag", "formulier", "kandidatenlijst", "notitie_of_email", "anders"]
+    "Is dit document een CV (overzicht van de eigen loopbaan van één persoon)? Antwoord cv, geen_cv of twijfel.\n"
+    "Voorbeelden:\n"
+    "- 'jan smit jan smit gmail com werkervaring 2015 heden developer bij codewerk opleiding hbo ict' -> cv\n"
+    "- 'profielschets karin veld recente opdrachten opdrachtgever codewerk 2019 2024 java developer' -> cv\n"
+    "- 'geachte heer mevrouw met veel interesse las ik uw vacature met vriendelijke groet' -> geen_cv (brief)\n"
+    "- 'vacature developer wat ga je doen wat vragen wij wat bieden wij' -> geen_cv (vacature)\n"
+    "- 'hierbij verklaar ik dat jan smit bij ons werkte hij was betrouwbaar' -> geen_cv (referentie)\n"
+    "- 'certificaat hierbij verklaren wij dat jan smit de training heeft afgerond' -> geen_cv\n"
+    "- 'overzicht kandidaten 1 jan 2 lisa 3 tom' -> geen_cv (lijst)\n"
+    "Geef ook de naam van de persoon als het een cv is.")
 SCHEMA_CV = {"type": "object", "properties": {
-    "reden": {"type": "string"},
-    "documentsoort": {"type": "string", "enum": SOORTEN},
-    "over_wie": {"type": "string", "enum": ["een_persoon", "meerdere_personen", "geen_persoon"]},
-    "eigen_loopbaan": {"type": "boolean"},
-    "naam": {"type": "string"}},
-    "required": ["reden", "documentsoort", "over_wie", "eigen_loopbaan", "naam"]}
+    "antwoord": {"type": "string", "enum": ["cv", "geen_cv", "twijfel"]}, "naam": {"type": "string"}},
+    "required": ["antwoord", "naam"]}
 
 
 def classify(text: str) -> dict | None:
-    """Twijfelgeval: {'soort': 'cv'|'geen_cv'|'onzeker', 'naam', 'reden', 'documentsoort'} of None (geen AI).
-    Alleen 'cv' als de AI 'cv' zegt EN het over één persoon gaat EN er een eigen loopbaan in staat."""
+    """Twijfelgeval: {'soort': 'cv'|'geen_cv'|'onzeker', 'naam', 'reden'} of None (geen AI)."""
     if not available():
         return None
     llm = _load()
@@ -227,17 +218,12 @@ def classify(text: str) -> dict | None:
     try:
         with _lock:
             out = llm.create_chat_completion(messages=[{"role": "user", "content": vraag}], temperature=0,
-                                             max_tokens=200, response_format={"type": "json_object", "schema": SCHEMA_CV})
+                                             max_tokens=120, response_format={"type": "json_object", "schema": SCHEMA_CV})
         a = json.loads(out['choices'][0]['message']['content'])
-        ds = a.get('documentsoort', 'anders')
-        if ds == 'cv' and a.get('over_wie') == 'een_persoon' and a.get('eigen_loopbaan') is True:
-            soort = 'cv'
-        elif ds not in ('cv', 'anders'):
-            soort = 'geen_cv'
-        else:
-            soort = 'onzeker'
-        return {'soort': soort, 'documentsoort': ds, 'naam': str(a.get('naam') or '')[:80],
-                'reden': str(a.get('reden') or '')[:160], 'sec': round(time.time() - t, 1)}
+        soort = {'cv': 'cv', 'geen_cv': 'geen_cv'}.get(a.get('antwoord'), 'onzeker')
+        return {'soort': soort, 'naam': str(a.get('naam') or '')[:80],
+                'reden': {'cv': 'lijkt een cv', 'geen_cv': 'lijkt geen cv'}.get(soort, 'twijfelt'),
+                'sec': round(time.time() - t, 1)}
     except Exception as exc:
         return {'soort': 'onzeker', 'naam': '', 'reden': '', 'fout': str(exc)[:100], 'sec': round(time.time() - t, 1)}
 

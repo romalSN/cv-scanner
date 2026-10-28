@@ -324,7 +324,7 @@ for pth, name, snip, em in [('a.docx', '', 'henk winters henk winters voorbeeldm
                             ('b.docx', 'Lieke Dam', 'lieke dam geachte heer mevrouw met vriendelijke groet', ['lieke@x.nl']),
                             ('c.docx', '', 'iemand zonder contact werkervaring', [])]:
     _db.execute("insert into docs(path,name,status,snippet,sha,emails,phones,links,reason,classifier_version) values(?,?,?,?,?,?,?,?,?,?)",
-                (str(_out / pth), name, 'review', snip, pth, _js.dumps(em), '[]', '[]', 'kopjes: x', c.CLASSIFIER_VERSION))
+                (str(_out / pth), name, 'review', snip, pth, _js.dumps(em), '[]', '[]', 'kopjes: werkervaring; werkperiodes: 1', c.CLASSIFIER_VERSION))
 _db.commit()
 (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
 c.ai_twijfel(_db, _out)
@@ -332,6 +332,18 @@ st = {r['path'].rsplit('/', 1)[-1].rsplit('\\', 1)[-1]: (r['status'], r['name'])
 check('AI twijfel: cv + naam uit tekst + contact = cv', st['a.docx'] == ('cv', 'Henk Winters'), st)
 check('AI twijfel: brief = geen cv', st['b.docx'][0] == 'other', st)
 check('AI twijfel: cv zonder contact blijft twijfel', st['c.docx'][0] == 'review', st)
+_ar.available, _ar.classify = _o
+
+_ar.available = lambda: True; _ar.TWIJFEL_AAN = True
+_ar.classify = lambda t: {'soort': 'cv', 'naam': 'anton bakker', 'reden': 'lijkt een cv'}
+_out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
+_db.execute("insert into docs(path,name,status,snippet,sha,emails,phones,links,reason,classifier_version) values(?,?,?,?,?,?,?,?,?,?)",
+            (str(_out / 'ref.docx'), '', 'review', 'hierbij verklaar ik dat bas bij ons werkte anton bakker', 'ref',
+             _js.dumps(['anton.bakker@voorbeeld.nl']), '[]', '[]', 'kopjes: geen; naam: nee; contact: ja; CV-kop: nee; werkperiodes: 0', c.CLASSIFIER_VERSION))
+_db.commit(); (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
+c.ai_twijfel(_db, _out)
+check('AI zegt cv bij referentiebrief zonder cv-kenmerken: blijft twijfel',
+      _db.execute('select status from docs').fetchone()[0] == 'review')
 _ar.available, _ar.classify = _o
 
 print()

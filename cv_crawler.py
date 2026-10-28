@@ -5046,7 +5046,14 @@ def ai_twijfel(db, out):
                 cache[key] = res
         seen[r['sha']] = res
         reden = (res.get('reden') or '')[:100]
-        contact = bool(json.loads(r['emails'] or '[]') or json.loads(r['phones'] or '[]') or json.loads(r['links'] or '[]'))
+        emails = [e for e in json.loads(r['emails'] or '[]') if not GENERIC_EMAIL.match(e)]
+        contact = bool(emails or json.loads(r['phones'] or '[]') or json.loads(r['links'] or '[]'))
+        rs = (r['reason'] or '').lower()
+        m = re.search(r'werkperiodes: (\d+)', rs)
+        cv_kenmerk = ('werkervaring' in rs.split(';')[0] or 'opleiding' in rs.split(';')[0]
+                      or 'cv-kop: ja' in rs or (m and int(m.group(1)) > 0))
+        if res['soort'] == 'cv' and not cv_kenmerk:
+            res = dict(res, soort='onzeker')          # geen kopje Werkervaring/Opleiding, cv-kop of werkperiodes
         if res['soort'] == 'cv':
             name = r['name'] or ''
             if not name and res.get('naam'):
