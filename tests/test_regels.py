@@ -410,6 +410,12 @@ _j, _ = c.laatst_buitenland(c.normalized_snippet("Jan\nUtrecht\nWerkervaring\n20
 check('altijd in NL = geen buitenlandperiode', _j == 0, _j)
 check('postcode telt als NL', c.woonland(c.normalized_snippet("Jan\n1012 AB Amsterdam\njan@x.nl"), [])[0] == 'nl')
 
+check('NL-er, nu 3 jaar Londen, daarvoor jaren NL = genoeg jaren',
+      c.jaren_nl_be(c.normalized_snippet(f"Jan\nWerkervaring\n{_jr-3} - heden Developer, Monzo, London\n{_jr-10} - {_jr-3} Developer, Datafabriek, Utrecht")) >= c.MIN_JAREN_NL)
+check('havo in NL = hier opgegroeid', c.jaren_nl_be(c.normalized_snippet("Jan\nOpleiding\nHavo, Utrecht")) >= c.MIN_JAREN_NL)
+check('pas 1 jaar in NL = te weinig jaren',
+      c.jaren_nl_be(c.normalized_snippet(f"Arjun\nExperience\n{_jr-1} - Present Developer, Adyen, Amsterdam\n{_jr-6} - {_jr-1} Developer, Infosys, Pune, India")) < c.MIN_JAREN_NL)
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

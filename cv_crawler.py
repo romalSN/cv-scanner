@@ -769,6 +769,31 @@ def nl_be_band(snippet, docs=()):
 MIN_JAREN_NL = 4    # opdrachtgevers vragen vaak 5 jaar in NL/BE wonen (screening); cv is nooit exact, dus 4 als grens
 
 
+def jaren_nl_be(snippet):
+    """Hoeveel jaar staat iemand volgens het cv in NL/BE (werk of opleiding met jaartallen en een NL/BE-plaats of
+    -school)? Overlap telt één keer. Middelbare school/mbo in NL = hier opgegroeid (telt als 10 jaar)."""
+    text = ' ' + _woorden_en_cijfers(snippet or '') + ' '
+    if re.search(r' (?:havo|vwo|vmbo|mavo|mbo|roc|atheneum|gymnasium|lyceum|basisschool) ', text):
+        return 10
+    this_year = dt.date.today().year
+    nl = sorted(NL_PLACES | BE_PLACES, key=len, reverse=True)
+    jaren = set()
+    marks = list(re.finditer(r'(?<!\d)(19[5-9]\d|20[0-3]\d)(?!\d)', text))
+    i = 0
+    while i < len(marks):
+        j = i + 1 if i + 1 < len(marks) and marks[i + 1].start() - marks[i].end() <= 12 else i
+        begin, end = int(marks[i].group(1)), int(marks[j].group(1))
+        tail = marks[j].end()
+        if re.match(r'\s*(?:heden|present|nu|now|current|today|dd)\b', text[tail:]):
+            end = this_year
+        nxt = marks[j + 1].start() if j + 1 < len(marks) else len(text)
+        window = text[tail:min(nxt, tail + 160)] + ' '
+        if any(f' {p} ' in window for p in nl) or NL_BE_SCHOOL.search(window):
+            jaren |= set(range(min(begin, end), max(begin, end) + (0 if end > begin else 1)))
+        i = j + 1
+    return len(jaren)
+
+
 def laatst_buitenland(snippet):
     """Laatste jaar waarin het cv iemand in het buitenland plaatst (werk of opleiding met jaartallen en een
     buitenlandse plaats). Geeft (jaar, plaats) of (0, ''). Geldt voor iedereen gelijk, ook Nederlanders."""
@@ -3338,9 +3363,14 @@ def deduplicate(db, merge_file=None):
             else:
                 why.append(f'woont niet in Nederland of België ({waar})')
         if not why:
+            # Regel opdrachtgever: in totaal minimaal 4 jaar in NL/BE gewoond. Alleen apart als iemand recent in
+            # het buitenland was ÉN het cv minder dan 4 jaar NL/BE laat zien (wie hier opgroeide telt als genoeg).
             jaar, plek = laatst_buitenland(first['snippet'] or '')
             if jaar and dt.date.today().year - jaar < MIN_JAREN_NL:
-                why.append(f'korter dan {MIN_JAREN_NL} jaar in NL/BE (laatst in {plek.title()}, {jaar})')
+                nl_jaren = jaren_nl_be(first['snippet'] or '')
+                if nl_jaren < MIN_JAREN_NL:
+                    why.append(f'korter dan {MIN_JAREN_NL} jaar in NL/BE volgens het cv (ca. {nl_jaren} jaar; '
+                               f'laatst in {plek.title()}, {jaar})')
         candidate['niet_voor_loxo'] = '; '.join(why)
         identities.append(candidate)
         for d in group: doc_to_person[d['path']] = ident
