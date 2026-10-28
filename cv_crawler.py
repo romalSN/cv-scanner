@@ -180,7 +180,13 @@ NAME_BLOCKLIST = {
 }
 # Een bedrijfsnaam is nooit een persoon: dan de hele 'naam' afkeuren (niet alleen dat woord weghalen).
 COMPANY_WORDS = {'bv', 'bvba', 'nv', 'vof', 'ltd', 'inc', 'gmbh', 'llc', 'holding', 'group', 'groep',
-                 'consultancy', 'services', 'service', 'solutions', 'experts', 'united', 'company', 'stichting'}
+                 'consultancy', 'services', 'service', 'solutions', 'experts', 'united', 'company', 'stichting',
+                 'verhuur', 'techniek', 'installatietechniek', 'installaties', 'transport', 'logistiek', 'advies',
+                 'adviesbureau', 'makelaardij', 'onderhoud', 'schoonmaak', 'beveiliging', 'accountancy',
+                 'accountants', 'diensten', 'dienstverlening', 'media', 'partners', 'detachering', 'uitzendbureau',
+                 'recruitment', 'interim', 'automatisering', 'software', 'webdesign', 'reclame', 'vastgoed',
+                 'kinderopvang', 'thuiszorg', 'tandartspraktijk', 'praktijk', 'kliniek', 'apotheek', 'garage',
+                 'autobedrijf', 'bakkerij', 'restaurant', 'cafe', 'hotel', 'winkel', 'webshop'}
 JOB_ENDINGS = ('owner', 'manager', 'developer', 'engineer', 'beheerder', 'consultant', 'adviseur', 'architect', 'analist',
                'ontwikkelaar', 'specialist', 'coordinator', 'programmeur', 'tester', 'designer', 'medewerker')
 NAME_FILLERS = {'de','den','der','van','von','ten','ter','te','het','el','al','bin','di', 'da'}
@@ -441,13 +447,21 @@ def _guess_name(text, filename, emails, links=()):
     if explicit:
         return explicit
     # Een naam in de CV-kop is mogelijk; een willekeurig later kopje niet.
+    # Meerdere kandidaten (bv. 'Jak Verhuur' en 'Lisa Groen')? Dan de regel die bij het eigen e-mailadres past.
+    top = []
     for line in lines[:7]:
         line = clean_person_name(line)
         if not line:
             continue
         core = [w for w in line.split() if normalized_name(w) not in NAME_FILLERS]
         if len(core) >= 2 and all(w[0].isupper() for w in core if w):
-            return line
+            top.append(line)
+    if top:
+        own = [e for e in emails if not GENERIC_EMAIL.match(e)]
+        for line in top:
+            if any(email_matches_name(line, e) for e in own):
+                return line
+        return top[0]
     # LinkedIn-adres is betrouwbaarder dan de bestandsnaam.
     for link in links:
         from_link = name_from_linkedin(link)

@@ -347,6 +347,8 @@ check('AI zegt cv bij referentiebrief zonder cv-kenmerken: blijft twijfel',
       _db.execute('select status from docs').fetchone()[0] == 'review')
 _ar.available, _ar.classify = _o
 
+check('bedrijfsregel bovenaan: naam die bij e-mail past', c.guess_name("Jak Verhuur\nLisa Groen\nWerkervaring", 'document', ['lisa.groen@voorbeeldmail.nl']) == 'Lisa Groen')
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
