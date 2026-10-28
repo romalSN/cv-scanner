@@ -3297,8 +3297,8 @@ def deduplicate(db, merge_file=None):
         if land == 'buitenland':
             band = nl_be_band(first['snippet'] or '', [d for d in group])
             if band:
-                # Bv. Nederlander die tijdelijk in Londen werkt, of iemand die hier studeerde: blijft kandidaat.
-                candidate['woont'] = f'buitenland ({waar}), maar {band} – zelf checken'
+                # Bv. Nederlander die tijdelijk in Londen werkt, of iemand die hier studeerde: gewoon kandidaat.
+                pass
             else:
                 why.append(f'woont niet in Nederland of België ({waar})')
         candidate['niet_voor_loxo'] = '; '.join(why)
@@ -3608,7 +3608,7 @@ def only_ticks(text):
 def personen_overzicht(people):
     """Eerste tabblad: per gegeven 'uit cv' naast 'gezocht' (online), plus zekerheid en waarom."""
     cols = ['naam', 'kandidaat_id', 'cv_id', 'open_cv', 'email', 'email_bron', 'telefoon', 'telefoon_bron',
-            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'bedrijf', 'bedrijf_soort', 'woont',
+            'linkedin', 'linkedin_bron', 'gezocht_zekerheid', 'gezocht_waarom', 'bedrijf', 'bedrijf_soort',
             ]
     rows = []
     for p in people:
@@ -3674,7 +3674,7 @@ def personen_overzicht(people):
                          linkedin=li, linkedin_bron=li_bron,
                          gezocht_zekerheid='\n'.join(labels), gezocht_waarom=pretty_waarom(only_ticks(p.get('online_waarom', ''))),
                          huidige_functie=role, laatst_bekende_werkgever=employer,
-                         bedrijf=p.get('bedrijf', ''), bedrijf_soort=p.get('bedrijf_soort', ''), woont=p.get('woont', ''),
+                         bedrijf=p.get('bedrijf', ''), bedrijf_soort=p.get('bedrijf_soort', ''),
                          zelf_zoeken_google=google_xray_link(p['naam'], not p['email'] and not found('email', ''),
                                                              not p['telefoon'] and not found('telefoon', '')),
                          persoon_id=p['persoon_id']))
