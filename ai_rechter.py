@@ -188,22 +188,33 @@ def judge(cv_text: str, profiel_text: str) -> dict | None:
 
 INSTRUCTIE_CV = (
     "Je beoordeelt documenten voor een recruitmentbureau. De tekst is automatisch uitgelezen (kleine letters, "
-    "zonder leestekens). Beslis of het document een CV is: een overzicht van de loopbaan van EEN persoon "
-    "(werkervaring en/of opleiding, vaak met contactgegevens). Een profielschets of kandidaatprofiel van een "
-    "persoon met opdrachten/werkervaring telt ook als cv.\n"
-    "GEEN cv: sollicitatiebrief of motivatiebrief, vacature, referentie of aanbevelingsbrief, certificaat of "
-    "diploma, contract of overeenkomst, offerte, factuur, verslag of scriptie, leeg formulier, lijst met meerdere "
-    "kandidaten, e-mail of notitie.\n"
-    "Is het een cv, geef dan de volledige naam van de persoon zoals die in de tekst staat.\n"
-    "Antwoord met JSON: 'soort' (cv / geen_cv / onzeker), 'naam' (of leeg), 'reden' (kort).")
+    "zonder leestekens). Bepaal wat voor document het is.\n"
+    "Een CV is een overzicht van de EIGEN loopbaan van EEN persoon: een lijst met eigen banen/opdrachten en/of "
+    "opleidingen (vaak met jaartallen), meestal met naam en contactgegevens. Een profielschets van een kandidaat "
+    "met opdrachten telt ook als cv.\n"
+    "Let op, dit is GEEN cv, ook al staat er een naam of ervaring in:\n"
+    "- vacature (wat ga je doen, wat vragen wij, wat bieden wij)\n"
+    "- sollicitatiebrief of motivatiebrief (geachte, met vriendelijke groet)\n"
+    "- referentie of aanbeveling (iemand ANDERS schrijft over de persoon)\n"
+    "- certificaat of diploma, contract of overeenkomst, offerte of factuur\n"
+    "- verslag, scriptie of rapport; leeg formulier; lijst met meerdere kandidaten; korte notitie of e-mail\n"
+    "Antwoord met JSON in deze volgorde: 'reden' (kort: waarom), 'documentsoort', 'over_wie' (een_persoon / "
+    "meerdere_personen / geen_persoon), 'eigen_loopbaan' (true als er een lijst met eigen banen of opleidingen "
+    "van die persoon staat), 'naam' (naam van de persoon of leeg).")
+SOORTEN = ["cv", "sollicitatiebrief", "vacature", "referentie", "certificaat", "contract", "offerte_of_factuur",
+           "verslag", "formulier", "kandidatenlijst", "notitie_of_email", "anders"]
 SCHEMA_CV = {"type": "object", "properties": {
-    "soort": {"type": "string", "enum": ["cv", "geen_cv", "onzeker"]},
-    "naam": {"type": "string"}, "reden": {"type": "string"}},
-    "required": ["soort", "naam", "reden"]}
+    "reden": {"type": "string"},
+    "documentsoort": {"type": "string", "enum": SOORTEN},
+    "over_wie": {"type": "string", "enum": ["een_persoon", "meerdere_personen", "geen_persoon"]},
+    "eigen_loopbaan": {"type": "boolean"},
+    "naam": {"type": "string"}},
+    "required": ["reden", "documentsoort", "over_wie", "eigen_loopbaan", "naam"]}
 
 
 def classify(text: str) -> dict | None:
-    """Twijfelgeval: {'soort': 'cv'|'geen_cv'|'onzeker', 'naam': str, 'reden': str} of None (geen AI)."""
+    """Twijfelgeval: {'soort': 'cv'|'geen_cv'|'onzeker', 'naam', 'reden', 'documentsoort'} of None (geen AI).
+    Alleen 'cv' als de AI 'cv' zegt EN het over één persoon gaat EN er een eigen loopbaan in staat."""
     if not available():
         return None
     llm = _load()
@@ -214,11 +225,17 @@ def classify(text: str) -> dict | None:
     try:
         with _lock:
             out = llm.create_chat_completion(messages=[{"role": "user", "content": vraag}], temperature=0,
-                                             max_tokens=160, response_format={"type": "json_object", "schema": SCHEMA_CV})
+                                             max_tokens=200, response_format={"type": "json_object", "schema": SCHEMA_CV})
         a = json.loads(out['choices'][0]['message']['content'])
-        soort = a.get('soort') if a.get('soort') in ('cv', 'geen_cv', 'onzeker') else 'onzeker'
-        return {'soort': soort, 'naam': str(a.get('naam') or '')[:80], 'reden': str(a.get('reden') or '')[:160],
-                'sec': round(time.time() - t, 1)}
+        ds = a.get('documentsoort', 'anders')
+        if ds == 'cv' and a.get('over_wie') == 'een_persoon' and a.get('eigen_loopbaan') is True:
+            soort = 'cv'
+        elif ds not in ('cv', 'anders'):
+            soort = 'geen_cv'
+        else:
+            soort = 'onzeker'
+        return {'soort': soort, 'documentsoort': ds, 'naam': str(a.get('naam') or '')[:80],
+                'reden': str(a.get('reden') or '')[:160], 'sec': round(time.time() - t, 1)}
     except Exception as exc:
         return {'soort': 'onzeker', 'naam': '', 'reden': '', 'fout': str(exc)[:100], 'sec': round(time.time() - t, 1)}
 

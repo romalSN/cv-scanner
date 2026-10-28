@@ -14,7 +14,7 @@ for g in gevallen:
     r = ai_rechter.classify(g['tekst'])
     tijden.append(r['sec'])
     soort = r['soort']
-    ant[g['id']] = soort[:3]
+    ant[g['id']] = soort[:3] + '(' + r.get('documentsoort', '')[:6] + ')'
     if soort == 'cv' and g['waar'] != 'cv':
         fout_cv.append(g['id'])
     elif g['waar'] == 'cv' and soort != 'cv':
