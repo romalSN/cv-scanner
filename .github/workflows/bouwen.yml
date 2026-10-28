@@ -34,10 +34,13 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "macOS" ] && [ "$(uname -m)" = "arm64" ]; then IDX=metal; else IDX=cpu; fi
-          python -m pip install llama-cpp-python --prefer-binary \
+          # 1. kant-en-klaar pakket; 2. lukt dat niet: zelf bouwen uit de broncode (duurt langer)
+          python -m pip install llama-cpp-python --prefer-binary --no-cache-dir \
             --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/$IDX > pip_ai.txt 2>&1 \
-            || { echo "::error::llama-cpp-python installeren mislukt: $(tail -5 pip_ai.txt | tr '\n' ' ')"; exit 1; }
-          python -c "import llama_cpp; print('::notice::llama-cpp-python', llama_cpp.__version__, '($IDX)')"
+          || { echo "::notice::kant-en-klaar ($IDX) lukte niet, nu zelf bouwen"; \
+               python -m pip install llama-cpp-python --no-binary llama-cpp-python --no-cache-dir > pip_ai2.txt 2>&1 \
+               || { echo "::error::llama-cpp-python bouwen mislukt: $(tail -5 pip_ai2.txt | tr '\n' ' ')"; exit 1; }; }
+          python -c "import llama_cpp; print('::notice::llama-cpp-python', llama_cpp.__version__)"
 
       - name: Klein testmodel ophalen (alleen voor de test, zit niet in de app)
         shell: bash
