@@ -1060,6 +1060,30 @@ _N = ('CV – Randy Vaessen\nLoopbaan\nmrt 2019 – heden\nTulpnet – Servicede
       'jan 2012 – mrt 2019\nDijkstra Systems – Beheerder\nWerkzaamheden: beheer.')
 check('dubbel: naamgenoot met 1 zelfde werkgever+jaar = niet samen', not c.safe_pair(_cvdoc(_A, 300), _cvdoc(_N, 301))[0])
 
+# --- Zelfde naam + eigen e-mail: nieuwe cv-versie vs. aantoonbaar andere loopbaan ---
+_daan_a = ('Curriculum Vitae\nDaan Vijverman\nE-mail: daan.vijverman@example.com\n'
+           'Werkervaring\n2022 - 2025 Java ontwikkelaar bij Netwerkhof\n'
+           'Opleiding\n2013 - 2017 WO Informatica Universiteit Westberg')
+_daan_b = ('Curriculum Vitae\nDaan Vijverman\nE-mail: daan.vijverman@example.com\n'
+           'Werkervaring\n2022 - 2025 Arts bij Fictief Medisch Centrum\n'
+           'Opleiding\n2013 - 2017 WO Geneeskunde Universiteit Zuidzicht')
+_da, _db = _cvdoc(_daan_a, 6801), _cvdoc(_daan_b, 6802)
+check('Daan: zelfde naam/mail maar tegenstrijdige studie in dezelfde jaren',
+      c.opleiding_botst(_da, _db), (c.opleiding_periodes(_da), c.opleiding_periodes(_db)))
+check('Daan: niet stilzwijgend onder hetzelfde kandidaatnummer samenvoegen',
+      not c.safe_pair(_da, _db)[0], c.safe_pair(_da, _db))
+# Een echte nieuwe versie met dezelfde naam, hetzelfde e-mailadres en
+# aanvullend werk: één kandidaat. De oudste versie blijft wel beschikbaar.
+_versie_oud = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
+               'Werkervaring\n2018 - 2022 Data-analist bij Tuinnet\n'
+               'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
+_versie_nieuw = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
+                 'Werkervaring\n2023 - heden Data engineer bij Tuinnet\n'
+                 '2018 - 2022 Data-analist bij Tuinnet\n'
+                 'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
+check('zelfde naam + persoonlijke e-mail; echte nieuwe cv-versie wordt gekoppeld',
+      c.safe_pair(_cvdoc(_versie_oud, 6811), _cvdoc(_versie_nieuw, 6812))[0])
+
 # --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
 W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"
 L=[
