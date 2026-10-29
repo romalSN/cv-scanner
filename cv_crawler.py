@@ -665,6 +665,10 @@ def norm_phone(raw):
 def phones_in(text):
     out = []
     for line in text.splitlines():
+        # '0031 (0)6 …' / '31 06 …' / '316…' zonder plus: eerst netjes als '+31 6 …', dan pas herkennen.
+        line = re.sub(r'(?<![\d+])00[\s.\-]*31(?=[\s.\-(]*\d)', '+31', line)
+        line = re.sub(r'\(\s*0\s*\)', ' ', line)
+        line = fix_nl_mobile(line)
         for match in PHONE_RE.finditer(line):
             raw = match.group(0)
             # Voorkom het verwarren van getallen, jaartallen en datums met telefoonnummers.
@@ -5197,7 +5201,9 @@ def ontsluier_email(text):
 
 def fix_nl_mobile(text):
     """Google laat het '+' soms weg: '31 6 30…' / '316…' -> '+31 6 …' (alleen voor zoektekst)."""
-    return re.sub(r'(?<![\d+])31[\s.\-]*(?:\(0\))?[\s.\-]*6(?=[\s.\-]*\d)', '+31 6', text)
+    # Ook '31 06 12345678' (0 te veel). Alleen als er precies 8 cijfers volgen (dus geen datum als '31 06 2020').
+    return re.sub(r'(?<![\d+])31[\s.\-]*(?:\(\s*0\s*\)|0)?[\s.\-]*6(?=[\s.\-]*\d(?:[\s.\-]*\d){7}(?![\s.\-]*\d))',
+                  '+31 6', text)
 
 
 def linkedin_slug(link):

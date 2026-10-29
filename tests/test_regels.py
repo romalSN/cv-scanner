@@ -828,6 +828,12 @@ TAMIL = 'நான் ஐந்து ஆண்டுகளாக மென்�
 check('Hindi-cv = indiaas', c.cv_hoofdtaal(HINDI) == 'indiaas', c.cv_hoofdtaal(HINDI))
 check('Tamil-cv = indiaas', c.cv_hoofdtaal(TAMIL) == 'indiaas', c.cv_hoofdtaal(TAMIL))
 
+# --- Telefoon: 06 / 316 / 0031 / (0) / '31 06' = hetzelfde nummer; datums en te korte nummers niet ---
+for t in ['0031 (0)6 12 34 56 78', '31 06 12345678', '31612345678', '316 12345678', '0031-6-12345678', '(+31) 06 12345678']:
+    check(f'telefoon {t!r}', c.phones_in(t) == ['+31612345678'], c.phones_in(t))
+for t in ['geboren 31 06 1990', '31-06-2020 tot heden', 'Postbus 316, 1234 AB', '+3161853358', '06-1853358']:
+    check(f'geen telefoon: {t!r}', c.phones_in(t) == [], c.phones_in(t))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
