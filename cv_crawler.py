@@ -1052,6 +1052,23 @@ def _adres_segmenten(head):
     return segs
 
 
+# Eigen mobiel nummer uit Spanje (+34 6/7…) of India (+91 6-9…, 10 cijfers): wens opdrachtgever = niet meenemen.
+ES_IN_MOBIEL = re.compile(r'^\+(?:34[67]\d{8}|91[6-9]\d{9})$')
+
+
+def eigen_es_in_nummer(snippet, phones):
+    """Spaans/Indiaas MOBIEL nummer dat in de kop van het cv staat (bij naam en contactgegevens), dus van de
+    kandidaat zelf. Niet: een nummer verderop (referentie, werkgever, opdrachtgever) of een vaste lijn (bedrijf)."""
+    kop_cijfers = re.sub(r'\D', '', _kop(snippet))
+    for p in phones or []:
+        p = str(p)
+        if p in BUREAU_CONTACT:
+            continue                       # nummer van een bureau/recruiter (staat op cv's van 3+ mensen)
+        if ES_IN_MOBIEL.match(p) and p[3:] in kop_cijfers:
+            return p
+    return ''
+
+
 def woonplaats_bepalen(snippet, phones=(), emails=(), doc=None):
     """Huidige woonplaats: ('nl'|'buitenland'|'tegenstrijdig'|'aanwijzing_buitenland'|'', uitleg). 'nl' = NL of BE.
     - Meerdere adressen: 'huidig adres' / 'sinds 2022' wint; 'vorig adres' telt niet mee. Is niet duidelijk welk
@@ -1080,7 +1097,12 @@ def woonplaats_bepalen(snippet, phones=(), emails=(), doc=None):
     nu_nl = any(_plaats_in(w, nl_be) for w in nu)
     nu_buiten = next((_plaats_in(w, buiten) for w in nu if _plaats_in(w, buiten) and not _plaats_in(w, nl_be)), '')
     sterk_nl = [h for h in nl_hits if h[2]]
+    es_in = '' if tel_nl else eigen_es_in_nummer(snippet, phones)
+    land_nr = {'+34': 'Spaans', '+91': 'Indiaas'}.get(es_in[:3], '')
     if nl_hits and not buiten_hits and not onzeker:
+        if es_in:
+            # NL/BE-adres maar alleen een eigen Spaans/Indiaas mobiel nummer: AI kijkt mee (2 vragen eens = weg).
+            return 'tegenstrijdig', f'{nl_hits[0][1]}; eigen {land_nr} mobiel nummer'
         if sterk_nl or not tel_buiten:
             return 'nl', nl_hits[0][1]
         return 'tegenstrijdig', f'{nl_hits[0][1]}; buitenlands nummer'   # bv. alleen 'Bergen' + nummer +47
@@ -1103,6 +1125,10 @@ def woonplaats_bepalen(snippet, phones=(), emails=(), doc=None):
         return 'buitenland', plek.title()
     if tel_nl:
         return 'nl', 'telefoon'
+    if es_in and not nu_nl:
+        return 'buitenland', f'eigen {land_nr} mobiel nummer ({es_in[:3]})'
+    if es_in:
+        return 'tegenstrijdig', f'eigen {land_nr} mobiel nummer; huidige baan in NL/BE'
     if tel_buiten or nu_buiten:
         return 'aanwijzing_buitenland', (nu_buiten.title() if nu_buiten else 'telefoon ' + tel_buiten[0][:4])
     return '', ''
@@ -3986,6 +4012,8 @@ def filter_kandidaat(doc, phones, emails, ai_vraag):
     land, _waar = woonplaats_bepalen(snippet, phones, emails, doc)
     if land == 'buitenland':
         if ai_vraag('woont') != 'ja':
+            if 'mobiel nummer' in _waar:
+                return 'weg', ('Spaans' if 'Spaans' in _waar else 'Indiaas') + ' eigen mobiel nummer'
             return 'weg', 'woont niet in Nederland of België'
     elif land in ('tegenstrijdig', 'aanwijzing_buitenland'):
         # Twee verschillende AI-vragen moeten het eens zijn voordat iemand wegvalt (geen onterechte uitsluiting).

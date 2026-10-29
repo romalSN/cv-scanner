@@ -495,13 +495,14 @@ check('woon: alleen geboorteplaats buitenland = onbekend (niet buitenland)', _w(
 check('woon: werkgever in de kop (at Infosys Pune) = geen woonplaats', _w("Arjun\nDeveloper at Infosys Pune\n" + _ENK) == '')
 check('woon: verhuiswens naar NL telt niet als NL', _w("Rahul\nBangalore, India\nWilling to relocate to Amsterdam\n+91 98450 12345\n" + _ENK, ['+919845012345']) == 'buitenland')
 check('woon: buitenlandse plaats + NL-nummer = tegenstrijdig', _w("Rahul\nBangalore, India\n06-00000802\n" + _ENK, ['+31600000802']) == 'tegenstrijdig')
-check('woon: alleen buitenlands nummer = aanwijzing (geen bewijs)', _w("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345']) == 'aanwijzing_buitenland')
+check('woon: alleen buitenlands nummer = aanwijzing (geen bewijs)', _w("Piotr\n+48 512 345 678\n" + _ENK, ['+48512345678']) == 'aanwijzing_buitenland')
+check('woon: eigen Indiaas mobiel nummer = buitenland (wens opdrachtgever)', _w("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345']) == 'buitenland')
 check('woon: jaartal in de kop is geen postcode', _w(f"Rahul\n{_Y-2} to {_Y} Bangalore, India\n" + _ENK) != 'nl')
-fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'])
+fk = _filter("Piotr\n+48 512 345 678\n" + _ENK, ['+48512345678'])
 check('filter: alleen buitenlands nummer, zonder AI = door', fk[0] == 'ok', fk)
-fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'onduidelijk'})
+fk = _filter("Piotr\n+48 512 345 678\n" + _ENK, ['+48512345678'], ai={'woont': 'onduidelijk'})
 check('filter: alleen buitenlands nummer, AI onzeker = door', fk[0] == 'ok', fk)
-fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee', 'woont_buiten': 'ja'})
+fk = _filter("Piotr\n+48 512 345 678\n" + _ENK, ['+48512345678'], ai={'woont': 'nee', 'woont_buiten': 'ja'})
 check('filter: alleen buitenlands nummer, AI zeker buitenland = niet meegenomen', fk[0] == 'weg', fk)
 fk = _filter("Rahul\nBangalore, India\n06-00000803\n" + _ENK, ['+31600000803'], ai={'woont': 'onduidelijk'})
 check('filter: tegenstrijdig, AI onzeker = door', fk[0] == 'ok', fk)
@@ -542,7 +543,7 @@ check('postcode: 8001 Zurich = buitenland', _w("Jan\nBahnhofstrasse 1, 8001 Zuri
 check('postcode: alleen postcode = nl-aanwijzing (door)', _w("Jan\n2011 AB\n" + _ENK) == 'nl')
 check('postcode: onleesbaar = door', _filter("Jan\n2?1l A8\n" + _ENK, [])[0] == 'ok')
 
-fk = _filter("Rahul\n+91 98450 12345\n" + _ENK, ['+919845012345'], ai={'woont': 'nee', 'woont_buiten': 'nee'})
+fk = _filter("Piotr\n+48 512 345 678\n" + _ENK, ['+48512345678'], ai={'woont': 'nee', 'woont_buiten': 'nee'})
 check('filter: AI-vragen oneens = door (geen onterechte uitsluiting)', fk[0] == 'ok', fk)
 
 # --- Stap 3-7: verblijfsduur (verplichte tabel + extra) ---
@@ -833,6 +834,26 @@ for t in ['0031 (0)6 12 34 56 78', '31 06 12345678', '31612345678', '316 1234567
     check(f'telefoon {t!r}', c.phones_in(t) == ['+31612345678'], c.phones_in(t))
 for t in ['geboren 31 06 1990', '31-06-2020 tot heden', 'Postbus 316, 1234 AB', '+3161853358', '06-1853358']:
     check(f'geen telefoon: {t!r}', c.phones_in(t) == [], c.phones_in(t))
+
+# --- Eigen Spaans/Indiaas mobiel nummer in de kop = niet meenemen; referentie/vaste lijn/06 erbij = niet ---
+WERK_EN = ("Experience\n2016 - present Senior Java developer at a software company. Responsible for the development of "
+           "banking applications and managed a team of five developers using Scrum.\nEducation\n2010 - 2014 Bachelor Computer Science")
+for naam, t, want in [
+        ('eigen +34 mobiel', 'Juan Perez\njuan.perez@gmail.com | +34 612 345 678\n' + WERK_EN, 'weg'),
+        ('eigen +91 mobiel', 'Rahul Sharma\nrahul@gmail.com | +91 98765 43210\n' + WERK_EN, 'weg'),
+        ('+34 mobiel met ook 06', 'Juan Perez\n+34 612 345 678 | 06 12345678\n' + WERK_EN, 'ok'),
+        ('+34 mobiel met NL-adres (AI uit = door)', 'Juan Perez\nJavastraat 12, 1094 AB Amsterdam | +34 612 345 678\n' + WERK_EN, 'ok'),
+        ('+91 alleen bij referentie', 'Rahul Sharma\nrahul@gmail.com\n' + WERK_EN + '\nReferences\nMr. Gupta, Infosys, +91 98765 43210', 'ok'),
+        ('+34 vaste lijn in kop', 'Juan Perez\nTel. +34 91 123 45 67\n' + WERK_EN, 'ok'),
+        ('+44 mobiel (UK)', 'John Smith\n+44 7700 900123\n' + WERK_EN, 'ok')]:
+    d = {'snippet': c.normalized_snippet(t), 'taal': c.cv_hoofdtaal(t)}
+    r = c.filter_kandidaat(d, c.phones_in(t), c.emails_in(t), lambda v: '')
+    check(f'telefoonland: {naam}', r[0] == want, r)
+c.BUREAU_CONTACT.add('+34612345678')
+t = 'Juan Perez\njuan.perez@gmail.com | +34 612 345 678\n' + WERK_EN
+check('telefoonland: +34 van een bureau telt niet', c.filter_kandidaat({'snippet': c.normalized_snippet(t), 'taal': 'en'},
+      c.phones_in(t), c.emails_in(t), lambda v: '')[0] == 'ok')
+c.BUREAU_CONTACT.clear()
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
