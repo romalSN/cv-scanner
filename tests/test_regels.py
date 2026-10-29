@@ -1217,6 +1217,16 @@ _adam_echt = ('Curriculum Vitae\nAdam El Hani\nadam.el.hani@example.com\n+316000
               'Opleiding\n2018 - 2022 HBO Bedrijfskunde, Hogeschool van Amsterdam')
 check('zelfde naam; lastige CV zonder mail, andere opleiding = één kandidaat',
       c.safe_pair(_cvdoc(_adam_lastig, 6823), _cvdoc(_adam_echt, 6824))[0])
+_eva_a = ('Curriculum Vitae\nEva El Amrani\njobs@bureauvoorbeeld.nl\n020 1234567\n'
+          'Werkervaring\n2018 - heden Java developer bij Codewerk. Verantwoordelijk voor de backend.\n'
+          '2014 - 2018 Tester bij Datafabriek. Verantwoordelijk voor testautomatisering.\n'
+          'Opleiding\n2010 - 2014 HBO Informatica, Hogeschool Utrecht')
+_eva_b = ('Curriculum Vitae\nEva El Amrani\njobs@bureauvoorbeeld.nl\n020 1234567\n'
+          'Werkervaring\n2019 - heden Scrum master bij Tulpsoft. Verantwoordelijk voor de migratie.\n'
+          '2013 - 2019 Data analist bij Havenbouw. Verantwoordelijk voor rapportages.\n'
+          'Opleiding\n2009 - 2013 HBO Informatica, Saxion')
+check('zelfde naam; alleen bureau-mail en andere loopbaan = niet samen',
+      not c.safe_pair(_cvdoc(_eva_a, 6825), _cvdoc(_eva_b, 6826))[0])
 
 # Selectie van 1 hoofd-CV op werk, opleiding, daarna IT en stabiele tie-break.
 import types as _types

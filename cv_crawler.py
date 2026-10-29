@@ -3499,7 +3499,21 @@ def safe_pair(a, b):
             first = (venster.split() or [''])[0]
             if len(first) >= 4 and first not in WERK_STOP and first not in NL_PLACES:
                 found.add(first)
-        return {x for x in found if len(x) >= 4}
+        snippet = d['snippet'] if 'snippet' in (d.keys() if hasattr(d, 'keys') else d) else ''
+        words = str(snippet or '').split()
+        for i, w in enumerate(words[:-1]):
+            if w.endswith(JOB_ENDINGS):
+                found.add(words[i + 1])
+        for m in re.finditer(r'\b(?:bij|at)\s+([a-z]{4,})', str(snippet or '')):
+            found.add(m.group(1))
+        def _bedrijf(w):
+            w = str(w).lstrip('*')
+            if len(w) < 4 or w in WERK_STOP or w in NL_PLACES or w in COMPANY_WORDS or w.endswith(JOB_ENDINGS):
+                return ''
+            if w in {'heden', 'present', 'support', 'analyse', 'voor', 'met', 'van', 'the', 'and', 'voor'}:
+                return ''
+            return w
+        return {x for x in (_bedrijf(w) for w in found) if x}
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
     # Zelfde volle naam zonder twee verschillende persoonlijke mails: één kandidaat.
@@ -3532,7 +3546,19 @@ def safe_pair(a, b):
     # Naamgenoot met 1 gedeelde werkgever en verder andere banen blijft apart.
     if same_name and len(an.split()) >= 2 and not (ae and be and not (ae & be)):
         oa, ob = _werkgever_tokens(a), _werkgever_tokens(b)
-        naamgenoot = bool(oa and ob and (oa - ob) and (ob - oa) and len(oa & ob) <= 1)
+        # Precies één gedeelde werkgever én aan beide kanten andere banen: naamgenoot.
+        # Geen overlap (lastige CV met andere werkgever) is dezelfde persoon.
+        naamgenoot = bool(oa and ob and (oa - ob) and (ob - oa) and len(oa & ob) == 1)
+        try:
+            gedeeld = set(json.loads(a['emails'] or '[]')) & set(json.loads(b['emails'] or '[]'))
+        except (ValueError, TypeError):
+            gedeeld = set()
+        alleen_bureau = bool(gedeeld) and all(
+            GENERIC_EMAIL.match(e) or e in BUREAU_CONTACT for e in gedeeld)
+        # Zelfde naam op twee bureau-cv's met alleen jobs@/info@ en een andere loopbaan: niet één persoon.
+        # Het gedeelde 020-nummer is dan het recruiternummer, geen privénummer.
+        if alleen_bureau and oa and ob and oa != ob:
+            return False, False, ''
         if not naamgenoot:
             return True, False, 'zelfde volledige naam: één kandidaat; nieuwste CV wint, ontbrekende mail/telefoon aanvullen'
     # Beide cv's zonder bruikbare naam, maar hetzelfde persoonlijke mailadres ÉN telefoonnummer: één persoon.
