@@ -338,7 +338,8 @@ _db.commit()
 c.ai_twijfel(_db, _out)
 st = {r['path'].rsplit('/', 1)[-1].rsplit('\\', 1)[-1]: (r['status'], r['name']) for r in _db.execute('select path,status,name from docs')}
 check('AI twijfel: cv + naam uit tekst + contact = cv', st['a.docx'] == ('cv', 'Henk Winters'), st)
-check('AI twijfel: brief = geen cv', st['b.docx'][0] == 'other', st)
+check('AI twijfel: brief met AI-oordeel = geen cv, maar geen sterke cv-bewijzen',
+      st['b.docx'][0] == 'other', st)
 check('AI twijfel: cv zonder contact blijft twijfel', st['c.docx'][0] == 'review', st)
 _ar.available, _ar.classify = _o
 
@@ -365,7 +366,7 @@ check('zelfde bedrijf bij 3 kandidaten = bureau', c.bedrijf_soort('Voorbeeld Exp
 check('onduidelijk = onbekend', c.bedrijf_soort('Voorbeeld Experts BV', 'Lisa Groen', ['lisa@gmail.com'])[1] == 'onbekend')
 check('werkgever in werkervaring is geen leverancier', c.leverancier_from("Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == '')
 
-# --- Geen persoonsnaam te vinden: AI zegt cv -> eigen bedrijfsnaam als naam ---
+# --- Geen persoonsnaam: AI mag nooit bedrijfsnaam verzinnen of gebruiken ---
 _ar.available = lambda: True; _ar.TWIJFEL_AAN = True
 _ar.classify = lambda t: {'soort': 'cv', 'naam': '', 'reden': 'lijkt een cv'}
 _out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
@@ -376,8 +377,38 @@ _db.execute("insert into docs(path,name,status,snippet,sha,emails,phones,links,r
 _db.commit(); (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
 c.ai_twijfel(_db, _out)
 rw = _db.execute('select status,name,reason from docs').fetchone()
-check('geen persoonsnaam: bedrijfsnaam wordt de naam (AI zegt cv)', rw[0] == 'cv' and rw[1] == 'Jansen IT Consultancy BV', tuple(rw))
-check('bedrijfsnaam-cv wordt niet elke scan opnieuw gelezen', c.keep_cv_name(rw[1], rw[2]) == 'Jansen IT Consultancy BV')
+check('geen persoonsnaam: AI mag geen bedrijfsnaam als kandidaat opnemen',
+      rw[0] == 'review' and not rw[1], tuple(rw))
+check('oude bedrijfsnaam wordt niet behouden bij nieuwe scan',
+      c.keep_cv_name('Jansen IT Consultancy BV', 'naam = bedrijfsnaam (geen persoonsnaam gevonden)') == '')
+_ar.available, _ar.classify = _o
+
+# AI draait na gewone herkenning voor naamloze cv's. Alleen bewezen namen in CV.
+_ar.available = lambda: True; _ar.TWIJFEL_AAN = True
+_ar.classify = lambda t: {'soort': 'cv', 'naam': 'jasmijn koster', 'reden': 'cv'}
+_out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
+def _ai_cv(path, name, snippet, sha):
+    _db.execute("INSERT INTO docs(path,name,status,name_verified,snippet,sha,emails,phones,links,reason,classifier_version) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (str(_out / path), name, 'cv', 0, snippet, sha, '[]', '[]', '[]',
+                 'kopjes: opleiding, profiel, werkervaring; naam: nee; contact: nee', c.CLASSIFIER_VERSION))
+_ai_cv('CV_Jasmijn_Koster.docx', '', 'curriculum vitae naam jasmijn koster profiel developer '
+       'werkervaring 2019 heden opleiding hbo informatica', 'ai_gevonden')
+_ai_cv('CV_Jeroen_Bos.docx', '', 'naam jasmijn koster profiel developer werkervaring 2019 heden '
+       'opleiding informatica', 'ai_conflict')
+_ai_cv('bedrijfsnaam.docx', '', 'profiel sap consultant vaardigheden sap opleiding mbo', 'ai_leeg')
+_db.commit(); (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
+c.ai_twijfel(_db, _out)
+_ai_rows = {Path(r['path']).name: (r['status'], r['name'], r['name_verified'])
+            for r in _db.execute('SELECT path,status,name,name_verified FROM docs')}
+check('AI vult alleen bewezen naam op bestaand cv aan',
+      _ai_rows['CV_Jasmijn_Koster.docx'] == ('cv', 'Jasmijn Koster', 1), _ai_rows)
+check('AI mag naam uit ander bestandsnaam-conflict niet verzinnen',
+      _ai_rows['CV_Jeroen_Bos.docx'] == ('cv', '', 0), _ai_rows)
+check('AI laat naam leeg zonder controleerbaar bewijs',
+      _ai_rows['bedrijfsnaam.docx'] == ('cv', '', 0), _ai_rows)
+check('AI-leeg cv blijft buiten unieke kandidaten',
+      _db.execute("SELECT COUNT(*) FROM docs WHERE status='cv' AND name_verified=1").fetchone()[0] == 1)
 _ar.available, _ar.classify = _o
 
 _es = ("Juan Garcia\nDatos personales: telefono, correo\nExperiencia laboral\n2018 - actualidad Desarrollador de software en Empresa "

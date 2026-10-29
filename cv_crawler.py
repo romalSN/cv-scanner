@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 22
+CLASSIFIER_VERSION = 23
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -54,7 +54,7 @@ def keep_cv_name(name, reason=''):
     """Al gevonden cv: mag het blijven staan zonder opnieuw lezen? Alleen als de naam (opgeschoond) klopt.
     Geeft de opgeschoonde naam terug, of '' = opnieuw lezen."""
     if 'naam = bedrijfsnaam' in (reason or ''):
-        return name or ''                          # bewust de bedrijfsnaam (geen persoonsnaam te vinden)
+        return ''    # Een bedrijf mag nooit als naam van een kandidaat blijven staan.
     return tidy_name(clean_person_name(name or ''))
 SUPPORTED = {'.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.pages'}
 # Zip-archieven worden alleen gelezen, nooit uitgepakt in de map of gewijzigd.
@@ -5362,6 +5362,11 @@ def build_exports(db, out):
                               'OCR heeft het gelezen maar vond geen tekst; open het bestand zelf als het een cv kan zijn.'
                               if 'geen tekst' in (d['note'] or '') else
                               'Nog niet met OCR gelezen (OCR stond uit); scan opnieuw met OCR aan.')))
+    # Lege namen alleen onderaan 'Bestanden en status'; nooit tussen kandidaten.
+    # Ze blijven zichtbaar en klikbaar, ook wanneer AI niets kon bevestigen.
+    files.sort(key=lambda row: (not bool((row.get('naam') or '').strip()),
+                                normalized_name(row.get('naam') or ''),
+                                (row.get('oorspronkelijk_bestand') or '').lower()))
     pcols = ['persoon_id','cv_id','naam','email','telefoon','linkedin',
              'online_linkedin','online_email','online_telefoon','online_zekerheid','online_waarom',
              'te_controleren_linkedin','te_controleren_email','te_controleren_telefoon',
@@ -6926,6 +6931,39 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     return True
 
 
+def ai_naam_bevestigd(ai_naam, doc):
+    """AI is alleen een aanwijzing. Accepteer een persoonsnaam uitsluitend
+    als die letterlijk als naam in het cv terug te vinden is, met onafhankelijk
+    aanvullend bewijs uit kop/naamveld, eigen e-mail of eigen BESTANDSNAAM.
+    Niets uit een bovenliggende map wordt ooit gebruikt als persoonsnaam.
+    """
+    naam = tidy_name(clean_person_name(ai_naam or ''))
+    if not naam or not reasonable_name(naam):
+        return ''
+    snippet = ' '.join((doc['snippet'] or '').lower().split())
+    tokens = snippet.split()
+    norm = normalized_name(naam)
+    compleet = ' ' + snippet + ' '
+    expliciet = f' {norm} ' in compleet or f' {"".join(norm.split())} ' in compleet
+    if not expliciet:
+        return ''            # AI mag geen naam verzinnen
+    kop = ' ' + ' '.join(tokens[:120]) + ' '
+    in_kop = f' {norm} ' in kop or f' {"".join(norm.split())} ' in kop
+    met_label = bool(re.search(
+        r'\b(?:naam|name|fullname|volledige naam|kandidaat|candidate|cv van|'
+        r'curriculum vitae|voornaam)\s+' + re.escape(norm) + r'\b',
+        snippet[:3500]))
+    bestandsnaam = naam_uit_bestandsnaam(doc['path'], '', zonder_tekst=True)
+    bestand_klopt = normalized_name(bestandsnaam) == norm
+    try:
+        e_mails = json.loads(doc['emails'] or '[]')
+    except (ValueError, TypeError):
+        e_mails = []
+    eigen_mail = any(email_matches_name(naam, mail) for mail in e_mails
+                    if not GENERIC_EMAIL.match(mail))
+    return naam if bestand_klopt or met_label or (in_kop and eigen_mail) else ''
+
+
 def ai_twijfel(db, out):
     """Lokale AI helpt bij twijfelgevallen: cv of geen cv (en welke naam). Jouw eigen keuzes in het
     twijfel-venster gaan altijd voor. Resultaten worden bewaard, dus stoppen en later verder kan."""
@@ -6944,13 +6982,16 @@ def ai_twijfel(db, out):
         cache = json.loads(cache_path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         cache = {}
-    rows = db.execute("SELECT path, sha, name, snippet, reason, emails, phones, links, leverancier FROM docs "
-                      "WHERE status='review' AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
+    # Pas na alle gewone herkenningsregels: review en al herkende cv-documenten
+    # waarvan de persoonsnaam nog ontbreekt (nooit bij reeds complete cv's).
+    rows = db.execute("SELECT path, sha, name, name_verified, status, snippet, reason, emails, phones, links, leverancier FROM docs "
+                      "WHERE (status='review' OR (status='cv' AND (name='' OR name_verified=0))) "
+                      "AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
     todo = [r for r in rows if r['sha'] not in decided and (r['snippet'] or '').strip()
             and not (r['reason'] or '').startswith('controleren:')]
     if not todo:
         return
-    print(f'AI-TWIJFEL: {len(todo)} twijfelgevallen laten beoordelen door de lokale AI (stoppen mag, '
+    print(f'AI-TWIJFEL: {len(todo)} onvolledige cv-/twijfelbestanden controleren met lokale AI (stoppen mag, '
           'de volgende keer gaat hij verder waar hij was)…', flush=True)
     counts = collections.Counter()
     seen = {}
@@ -6971,35 +7012,47 @@ def ai_twijfel(db, out):
         m = re.search(r'werkperiodes: (\d+)', rs)
         cv_kenmerk = ('werkervaring' in rs.split(';')[0] or 'opleiding' in rs.split(';')[0]
                       or 'cv-kop: ja' in rs or (m and int(m.group(1)) > 0))
-        if res['soort'] == 'cv' and not cv_kenmerk:
-            res = dict(res, soort='onzeker')          # geen kopje Werkervaring/Opleiding, cv-kop of werkperiodes
-        if res['soort'] == 'cv':
-            name = r['name'] or ''
-            if not name and res.get('naam'):
-                cand = tidy_name(clean_person_name(res['naam'].title()))
-                # De naam moet echt in het document staan (geen verzonnen naam).
-                if cand and all(w in (r['snippet'] or '') for w in normalized_name(cand).split()):
-                    name = cand
-            extra = ''
-            if not name and contact and (r['leverancier'] or '') and not r['leverancier'].startswith('via:'):
-                # Echt geen persoonsnaam te vinden (niet in de tekst, e-mail, LinkedIn of via de AI):
-                # dan de eigen bedrijfsnaam als naam, zodat de kandidaat niet verdwijnt.
-                name, extra = r['leverancier'], '; naam = bedrijfsnaam (geen persoonsnaam gevonden)'
-            if name and contact:
+        # Een door de regels al herkend cv blijft een cv. AI mag alleen het
+        # LEGE NAAMVELD aanvullen, nooit zo'n cv alsnog weggooien.
+        name = r['name'] or ''
+        if not name and res.get('naam'):
+            name = ai_naam_bevestigd(res['naam'], r)
+        if r['status'] == 'cv':
+            if name:
+                db.execute("UPDATE docs SET name=?, name_verified=1, reason=? WHERE path=?",
+                           (name, (r['reason'] or '') + '; AI-naam onafhankelijk bevestigd', r['path']))
+                counts['cv'] += 1
+            else:
+                db.execute("UPDATE docs SET name='', name_verified=0, reason=? WHERE path=?",
+                           ((r['reason'] or '') + '; naam na AI-controle niet bevestigd', r['path']))
+                counts['onzeker'] += 1
+        elif res['soort'] == 'cv':
+            if not cv_kenmerk:
+                name = ''      # een referentiebrief / losse lijst mag nooit cv worden door AI alleen
+            if name and contact and cv_kenmerk and reasonable_name(name):
                 db.execute("UPDATE docs SET status='cv', name_verified=1, name=?, reason=? WHERE path=?",
-                           (name, (r['reason'] or '') + f'; AI: cv ({reden})' + extra, r['path']))
+                           (name, (r['reason'] or '') + f'; AI: cv ({reden}); naam gecontroleerd', r['path']))
                 counts['cv'] += 1
             else:
                 db.execute("UPDATE docs SET reason=? WHERE path=?",
                            ((r['reason'] or '') + '; AI: lijkt een cv, maar ' +
-                            ('naam onbekend' if not name else 'geen contactgegevens') + ' – zelf kijken', r['path']))
+                            ('naam niet bevestigd' if not name else 'onvoldoende contact of cv-bewijs') +
+                            ' – zelf kijken', r['path']))
                 counts['onzeker'] += 1
         elif res['soort'] == 'geen_cv':
-            db.execute("UPDATE docs SET status='other', reason=? WHERE path=?",
-                       ((r['reason'] or '') + f'; AI: geen cv ({reden})', r['path']))
-            counts['geen'] += 1
+            # De AI mag documenten met aantoonbare cv-opbouw niet alleen op
+            # eigen oordeel afwijzen; een vacature-/sjabloonregel beslist wel.
+            if cv_kenmerk and not ('vacature' in rs or 'sjabloon' in rs):
+                db.execute("UPDATE docs SET reason=? WHERE path=?",
+                           ((r['reason'] or '') + '; AI: geen cv, maar cv-signalen; controle nodig', r['path']))
+                counts['onzeker'] += 1
+            else:
+                db.execute("UPDATE docs SET status='other', reason=? WHERE path=?",
+                           ((r['reason'] or '') + f'; AI: geen cv ({reden})', r['path']))
+                counts['geen'] += 1
         else:
-            db.execute("UPDATE docs SET reason=? WHERE path=?", ((r['reason'] or '') + '; AI: twijfelt ook', r['path']))
+            db.execute("UPDATE docs SET reason=? WHERE path=?",
+                       ((r['reason'] or '') + '; AI: twijfelt ook', r['path']))
             counts['onzeker'] += 1
         if i % 20 == 0 or i == len(todo):
             db.commit()
