@@ -57,8 +57,24 @@ g2 = bd.gegevens(cache['bd|piet-smit'])
 check('werkervaring met periode', g2['werkervaring'] == ['Tester · Codewerk · 2019 - Present'], g2['werkervaring'])
 # batches: 250 URL's -> 3 snapshots
 aanvragen.clear(); cache2 = {}
-bd.ophalen([f'https://www.linkedin.com/in/p{i}' for i in range(250)], cache2, log=lambda m: None, slaap=lambda s: None)
-check('250 URL\'s -> 3 batches van max 100', [len(a) for a in aanvragen] == [100, 100, 50], [len(a) for a in aanvragen])
+bd.ophalen([f'https://www.linkedin.com/in/p{i}' for i in range(12)], cache2, log=lambda m: None, slaap=lambda s: None)
+check('12 URL\'s -> batches van max 5', [len(a) for a in aanvragen] == [5, 5, 2], [len(a) for a in aanvragen])
+# één hangende snapshot houdt de rest niet op
+aanvragen.clear(); cache3 = {}; klok = {'t': 0}
+_oude = bd._verzoek
+def hangt(methode, pad, body=None, timeout=60):
+    if pad.startswith('/progress/') and pad.endswith('_1'):
+        return json.dumps({'status': 'running'})      # eerste snapshot blijft hangen
+    if pad.startswith('/progress/'):
+        return json.dumps({'status': 'ready'})
+    return _oude(methode, pad, body, timeout)
+bd._verzoek = hangt
+def tik(s): klok['t'] += s
+n3 = bd.ophalen([f'https://www.linkedin.com/in/q{i}' for i in range(10)] + ['https://www.linkedin.com/in/piet-smit/'], cache3,
+                log=lambda m: None, slaap=tik, nu=lambda: klok['t'])
+check('hangende snapshot: de andere batches wel opgehaald', 'bd|piet-smit' in cache3 and len(cache3.get('bd_open', {})) == 1, list(cache3))
+check('hangende snapshot: gestopt na max wachttijd en onthouden voor volgende scan', klok['t'] >= bd.MAX_WACHT and list(cache3['bd_open']) == ['s_1'], klok)
+bd._verzoek = _oude
 # geen sleutel -> niets
 os.environ['BRIGHTDATA_API_KEY'] = ''
 check('zonder sleutel: niets doen', bd.ophalen(urls, {}, log=lambda m: None) == 0)

@@ -15,8 +15,9 @@ import urllib.request
 
 API = 'https://api.brightdata.com/datasets/v3'
 DATASET_STANDAARD = 'gd_l1viktl72bvl7bjuj0'
-BATCH = 100                # URL's per snapshot (1.500 cv's = 15 snapshots, die tegelijk lopen)
-MAX_WACHT = 15 * 60        # seconden per snapshot
+BATCH = 5                  # URL's per snapshot: klein, zodat één traag profiel maar 4 andere ophoudt
+MAX_WACHT = 10 * 60        # seconden in totaal; wat dan nog loopt, haalt de volgende scan op (zonder opnieuw betalen)
+PEIL = 15                  # seconden tussen statusrondes
 NEGEER_VELDEN = {'activity', 'posts', 'people_also_viewed', 'similar_profiles', 'recommendations',
                  'recommendations_count', 'followers', 'connections', 'banner_image', 'avatar', 'image_url',
                  'default_avatar', 'memorialized_account', 'bio_links'}
@@ -110,46 +111,50 @@ def ophalen(urls, cache, log=print, slaap=time.sleep, nu=time.time):
         open_[sid] = deel
         log(f'BRIGHT DATA: {len(deel)} LinkedIn-profielen aangevraagd (snapshot {sid[:10]}…).')
     binnen = 0
-    for sid in list(open_):
-        start = nu()
-        st = ''
-        while nu() - start < MAX_WACHT:
+    start = nu()
+    while open_ and nu() - start < MAX_WACHT:
+        # Alle openstaande snapshots tegelijk volgen; wat klaar is meteen ophalen en gebruiken.
+        for sid in list(open_):
             try:
                 st = status(sid)
             except (urllib.error.URLError, RuntimeError, ValueError) as exc:
                 log(f'BRIGHT DATA: status opvragen lukte niet ({str(exc)[:80]}).')
-                break
-            if st in ('ready', 'failed', 'canceled'):
-                break
-            slaap(10)
-        if st != 'ready':
+                continue
             if st in ('failed', 'canceled'):
                 log(f'BRIGHT DATA: snapshot {sid[:10]}… {st}; die profielen gaan via Serper/SerpApi.')
                 for u in open_.pop(sid):
                     cache[f'bd|{slug(u)}'] = {'fout': st}
-            else:
-                log(f'BRIGHT DATA: snapshot {sid[:10]}… nog niet klaar; volgende scan haalt hem op.')
-            continue
-        try:
-            profielen = download(sid)
-        except (urllib.error.URLError, RuntimeError, ValueError) as exc:
-            log(f'BRIGHT DATA: downloaden lukte niet ({str(exc)[:80]}); volgende scan opnieuw.')
-            continue
-        gevraagd = open_.pop(sid)
-        gezien = set()
-        for p in profielen:
-            s = slug(p.get('url') or p.get('input_url') or (p.get('input') or {}).get('url', ''))
-            if not s:
                 continue
-            gezien.add(s)
-            if p.get('error') or p.get('error_code'):
-                cache[f'bd|{s}'] = {'fout': str(p.get('error') or p.get('error_code'))[:80]}
+            if st != 'ready':
                 continue
-            cache[f'bd|{s}'] = {k: v for k, v in p.items() if k not in NEGEER_VELDEN}
-            binnen += 1
-        for u in gevraagd:
-            if slug(u) not in gezien:
-                cache[f'bd|{slug(u)}'] = {'fout': 'niet gevonden'}
+            try:
+                profielen = download(sid)
+            except (urllib.error.URLError, RuntimeError, ValueError) as exc:
+                log(f'BRIGHT DATA: downloaden lukte niet ({str(exc)[:80]}); volgende ronde opnieuw.')
+                continue
+            if not profielen:
+                continue                       # nog aan het klaarzetten
+            gevraagd = open_.pop(sid)
+            gezien = set()
+            for p in profielen:
+                s_ = slug(p.get('url') or p.get('input_url') or (p.get('input') or {}).get('url', ''))
+                if not s_:
+                    continue
+                gezien.add(s_)
+                if p.get('error') or p.get('error_code'):
+                    cache[f'bd|{s_}'] = {'fout': str(p.get('error') or p.get('error_code'))[:80]}
+                    continue
+                cache[f'bd|{s_}'] = {k: v for k, v in p.items() if k not in NEGEER_VELDEN}
+                binnen += 1
+            for u in gevraagd:
+                if slug(u) not in gezien:
+                    cache[f'bd|{slug(u)}'] = {'fout': 'niet gevonden'}
+        if open_:
+            slaap(PEIL)
+    if open_:
+        n_open = sum(len(v) for v in open_.values())
+        log(f'BRIGHT DATA: {n_open} profielen nog niet klaar na {MAX_WACHT // 60} min; die gaan nu via Serper/SerpApi '
+            f'en worden bij de volgende scan alsnog opgehaald.')
     if binnen:
         log(f'BRIGHT DATA: {binnen} profielen opgehaald.')
     return binnen
