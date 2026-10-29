@@ -56,7 +56,7 @@ def _met_wachten(fn, *args, **kw):
 
 
 def start_run(urls):
-    raw = _met_wachten(_verzoek, 'POST', f'/acts/{actor()}/runs', {'queries': urls, 'urls': urls})
+    raw = _met_wachten(_verzoek, 'POST', f'/acts/{actor()}/runs', {'urls': urls})
     d = json.loads(raw).get('data') or {}
     if not d.get('id'):
         raise RuntimeError('Apify gaf geen run-id: ' + raw[:150])
