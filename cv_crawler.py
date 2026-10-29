@@ -3197,6 +3197,9 @@ def safe_pair(a, b):
             # Beide achternamen passen bij het adres -> zeker dezelfde persoon. Past er maar één ('Jan de Vries'
             # met jan.bakker@ – bv. een referentie), dan alleen samen als ook het telefoonnummer gelijk is.
             if (a_in and b_in) or (ap & bp):
+                if opleiding_botst(a, b):
+                    # Zelfde (gedeeld/oud) mailadres, maar een heel andere opleiding in andere jaren: niet blind samen.
+                    return False, True, 'zelfde e-mailadres, maar andere opleiding in andere jaren'
                 return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
     aw0, bw0 = set(an.split()), set(bn.split())
     if conflict and strong and not (min(len(aw0), len(bw0)) >= 2 and (aw0 <= bw0 or bw0 <= aw0)):
@@ -4092,6 +4095,23 @@ def loopbaan_botst(a, b):
                     and not ook_daar(pb, w1, lo + 1, hi - 1) and not ook_daar(pa, w2, lo + 1, hi - 1)):
                 return True
     return False
+
+
+OPL_WOORD = re.compile(r' (?:hbo|mbo|wo|bachelor|master|bsc|msc|universiteit|university|hogeschool|college|'
+                       r'opleiding|studie|propedeuse|informatica) ')
+
+
+def opleiding_botst(a, b):
+    """Beide cv's noemen een opleiding met jaartallen, maar geen enkele opleiding begint of eindigt in hetzelfde
+    jaar ('HBO Informatica, Saxion 2001-2005' tegenover 'HBO Informatica, Avans 2008-2012'). Versies van hetzelfde
+    cv houden hun opleidingsjaren; dit is dus geen bewijs van 'anders', wel reden om niet blind samen te voegen."""
+    def opl(d):
+        return [(bm // 12, em // 12) for bm, em, v, _x, _vo in periodes_uit_cv(d['snippet'] or '')
+                if OPL_WOORD.search(' ' + ' '.join(v.split()[:6]) + ' ')]
+    pa, pb = opl(a), opl(b)
+    if not pa or not pb:
+        return False
+    return not ({x for x, _ in pa} & {x for x, _ in pb}) and not ({y for _, y in pa} & {y for _, y in pb})
 
 
 def zelfde_werk(a, b):

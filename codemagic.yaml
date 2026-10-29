@@ -28,7 +28,8 @@ workflows:
         script: |
           export CV_AI=0
           for t in tests/test_basis.py tests/test_kandidaten.py tests/test_apify.py tests/test_sleutels.py \
-                   tests/test_regels.py tests/test_mac_lezen.py tests/test_ocr.py; do
+                   tests/test_regels.py tests/test_dubbel_paren.py tests/test_dubbel_versies.py tests/test_uitsluiting.py \
+                   tests/test_mac_lezen.py tests/test_ocr.py; do
             echo "== $t"; python "$t" || exit 1
           done
       - name: App bouwen

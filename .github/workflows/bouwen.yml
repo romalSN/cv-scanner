@@ -59,6 +59,15 @@ jobs:
       - name: Test - sleutelbestand wordt automatisch op de juiste plek gezet
         run: python tests/test_sleutels.py
 
+      - name: Test - 5.000 verzonnen cv-paren (dubbelen samen, naamgenoten nooit)
+        run: python tests/test_dubbel_paren.py
+
+      - name: Test - 8 personen met 2 cv-versies (1 zonder contact, andere opmaak, bureau-cv) + naamgenoten
+        run: python tests/test_dubbel_versies.py
+
+      - name: Test - 30 cv's mee/weg (taal, woonplaats, 5 jaar NL/BE; 0 onterecht uitgesloten)
+        run: python tests/test_uitsluiting.py
+
       - name: Test - alle afgesproken regels (matching, plaatsen, typfouten, cloud, sleutels, Pages)
         run: python tests/test_regels.py
 
