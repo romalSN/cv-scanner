@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 24
+CLASSIFIER_VERSION = 25
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -1465,6 +1465,88 @@ CV_SECTION_PATTERNS = {
                           r'algemene gegevens|personal details|personal information|personal data|samenvatting|'
                           r'persoonlijke intro|kandidaatprofiel|profielschets)\s*:?$')
 }
+# Een documenttitel is sterker dan losse CV-kopjes.
+# Geen generieke trefwoordencheck op de hele tekst: een échte kandidaat mag
+# rapportages/handleidingen schrijven, facturatie doen of op vacatures werken.
+NIET_CV_TITELS = [
+    ('vacature', re.compile(
+        r'(?i)^(?:vacature(?:tekst)?|vacatur|vacancy|job\s+(?:posting|advertisement|description|requirements|opening)|'
+        r'functie(?:omschrijving|eisen|profiel)|inhuuraanvraag|aanvraag\s+(?:inhuur|personeel)|'
+        r'eisen\s+en\s+wensen|opdrachtomschrijving)(?:\b[\s:–-]+.{0,80})?$')),
+    ('factuur / administratie', re.compile(
+        r'(?i)^(?:factuur|facturatie|facturering|invoice|billing|creditnota|credit\s+note|'
+        r'betalingsherinnering|declaratie(?:formulier)?|onkostendeclaratie|'
+        r'urenstaat|urenregistratie|kostenoverzicht)(?:\b[\s:–-]+.{0,80})?$')),
+    ('handleiding / instructie', re.compile(
+        r'(?i)^(?:(?:gebruikers|installatie|beheer|werk|service|praktijk)?handleiding|'
+        r'gebruiksaanwijzing|user\s+(?:manual|guide)|instruction\s+manual|'
+        r'werkinstructie|werkwijze|stappenplan|installatiegids|manual|'
+        r'instructiedocument|instructies\s+voor|how\s+to)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+    ('rapport / rapportage', re.compile(
+        r'(?i)^(?:(?:onderzoeks|project|jaar|eind|voortgangs|advies|evaluatie|'
+        r'beoordelings|management|stage|sollicitatie|salaris|loopbaanadvies|'
+        r'kwaliteit|audit|marktonderzoeks|klant|hr[\s_-]*)?'
+        r'(?:rapport|rapportage|verslag)(?:en|s)?|'
+        r'interviewsamenvatting|gespreksnotulen|gespreksverslag|'
+        r'kandidatenbeoordeling|evaluatieformulier|jaarverslag|'
+        r'auditrapport|research\s+report|report|reporting\s+document)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+    ('opdracht / eisen', re.compile(
+        r'(?i)^(?:werkopdracht|aanbesteding|bestek|projectplan|'
+        r'klantpresentatie|website[\s_-]*team|teamoverzicht|'
+        r'projectbrief|projectbeschrijving|requirements\s+document|'
+        r'specificatie|opdracht(?:beschrijving|bevestiging)|'
+        r'implementatieplan|plan\s+van\s+aanpak|adviesdocument)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+    ('contract / beleid', re.compile(
+        r'(?i)^(?:stageovereenkomst|arbeidsovereenkomst|werkovereenkomst|'
+        r'dienstverleningsovereenkomst|contract|privacybeleid|'
+        r'hr[\s_-]*privacybeleid|avg[\s_-]*beleid|'
+        r'intakeformulier|sollicitatieformulier|toestemmingsverklaring|'
+        r'verwerkersovereenkomst|algemene\s+voorwaarden|'
+        r'personeelsreglement)(?:\b[\s:–-]+.{0,80})?$')),
+    ('lijst / lesmateriaal', re.compile(
+        r'(?i)^(?:kandidatenlijst|kandidatenoverzicht|'
+        r'cv[\s_-]*(?:bestanden|overzicht|database|lijst)|'
+        r'overzicht\s+(?:van\s+)?(?:cv.?s|kandidaten|bestanden)|'
+        r'database[\s_-]*export|linkedin[\s_-]*resultaat|'
+        r'zoekresultaten|boekbespreking|lesmateriaal|'
+        r'cursusmateriaal|trainingsmateriaal|sollicitatietips|'
+        r'cv[\s_-]*checklist|checklist)(?:\b[\s:–-]+.{0,80})?$')),
+    ('cv-sjabloon', re.compile(
+        r'(?i)^(?:cv[\s_-]*(?:template|sjabloon|voorbeeld|voorbeeldbestand)|'
+        r'(?:template|sjabloon|voorbeeld)[\s_-]*(?:cv|curriculum\s+vitae)|'
+        r'curriculum\s+vitae[\s_-]*(?:template|sjabloon|voorbeeld)|'
+        r'resum[eé][\s_-]*(?:template|example)|sample[\s_-]*resume)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+]
+
+
+def niet_cv_documentsoort(text, filename=''):
+    """Herken expliciet een ANDERE documentsoort aan de echte titel.
+
+    'Rapportage' als documenttitel => geen cv. 'Rapportages gemaakt' onder
+    Werkervaring => juist normaal op een cv. CV-mapcontext telt hier niet.
+    """
+    regels = [re.sub(r'\s+', ' ', line).strip(' :–—-\t')
+              for line in (text or '')[:5000].splitlines() if line.strip()][:5]
+    # Niet de functietitel direct na een echte CV-kop voor een documenttitel
+    # aanzien. Een echte CV-header is sterk bewijs, geen blind vrijbrief.
+    heeft_cv_kop = bool(regels and CV_HEADER.fullmatch(regels[0]))
+    titels = regels[:1] if heeft_cv_kop else regels[:2]
+    basis = str(filename or '').replace('\\', '/').rsplit('/', 1)[-1]
+    basis = re.sub(r'(?i)\.(?:pdf|docx?|txt|rtf|odt|pages)$', '', basis)
+    basis = re.sub(r'^(?:\d{1,5}[\s_.-]+)+', '', basis)
+    basis = re.sub(r'(?i)^(?:cv|c\.v\.)[\s_.-]+', '', basis)
+    basis = basis.replace('_', ' ').replace('-', ' ')
+    titels.append(basis.strip())
+    for soort, pattern in NIET_CV_TITELS:
+        if any(pattern.fullmatch(title.strip()) for title in titels if title.strip()):
+            return soort
+    return ''
+
+
 CV_HEADER = re.compile(r'(?i)^(?:europass\s+)?(?:curriculum vitae|resume|résumé|cv)'
                        r'(?:(?:\s*[-–—:]\s*|\s+(?:van|of|von|de)\s+|\s+)[a-zÀ-ÿ .-]{3,50})?$')
 NON_CV_LINES = re.compile(r'(?i)\b(?:wij zoeken|solliciteer nu|vacature|functieomschrijving|de kandidaat dient|stageovereenkomst|onderzoeksrapport|inhoudsopgave|algemene voorwaarden|referaat|studieboek)\b')
@@ -1513,6 +1595,10 @@ def cv_map_hint(source_path):
     """CV-map in een echt bestandspad; niet blind 'cv' ergens midden in een woord."""
     path = str(source_path or '').replace('\\', '/')
     folders = path.split('/')[:-1]
+    # Een testpakket of scannermap heeft soms CV in de mapnaam zonder dat
+    # het een recruiter-map is. Alleen echte CV-mappen als hint gebruiken.
+    folders = [folder for folder in folders if not re.search(
+        r'(?i)(?:scanner|stresstest|testbestanden|testdata|testset|testcases)', folder)]
     return any(re.search(r"(?i)(?:^|[\s_.-])(?:cv|cvs|cv['’]s|c\.?v\.?|resumes?|curriculum[\s_-]*vitae)"
                          r"(?=$|[\s_.-])", folder) for folder in folders)
 
@@ -1607,7 +1693,35 @@ def is_template(text):
         return True
     lines = [l for l in (text or '')[:8000].splitlines() if l.strip()]
     blanks = sum(1 for l in lines if BLANK_FIELD.search(l))
-    return blanks >= 3 and blanks >= 0.2 * max(1, len(lines))
+    if blanks >= 3 and blanks >= 0.2 * max(1, len(lines)):
+        return True
+    # Lege cv-formulieren: drie of meer echte CV-kopjes, maar nagenoeg
+    # geen ingevulde sectie-inhoud (ook zonder [Naam]-placeholders).
+    sections = []
+    for i, line in enumerate(lines[:120]):
+        clean = line.strip(' \t:•*-')
+        if any(rx.fullmatch(clean) for rx in CV_SECTION_PATTERNS.values()):
+            sections.append(i)
+    if len(sections) >= 3:
+        empty = 0
+        for n, ix in enumerate(sections):
+            stop = sections[n+1] if n+1 < len(sections) else min(ix+6, len(lines))
+            contents = [v.strip() for v in lines[ix+1:stop] if v.strip()]
+            useful = [v for v in contents if len(v) >= 10 and not re.search(
+                r'(?i)(?:\b20xx\b|\bxxxx\b|\bvul\s+(?:hier|in)\b|'
+                r'\bin\s+te\s+vullen\b|\bvoorbeeld(?:naam|bedrijf|opleiding|werkgever)?\b|'
+                r'\bplaceholder\b|\benter\s+(?:your|here)\b|'
+                r'\b(?:your|jouw)\s+(?:name|naam|opleiding|werkervaring)\b|'
+                r'_{3,}|\.{5,})', v)]
+            if not useful:
+                empty += 1
+        if empty >= max(2, len(sections) - 1):
+            return True
+    if len(re.findall(r'(?i)\b(?:naam\s+voorbeeld|voorbeeldnaam|'
+                      r'vul\s+(?:hier|in)|20xx|voorbeeldwerkgever|'
+                      r'your\s+name\s+here|enter\s+your\s+name)\b', text[:8000])) >= 2:
+        return True
+    return False
 
 
 def name_on_top(text, name):
@@ -1671,7 +1785,8 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
     loose = headingless_cv(text, name, emails, phones, links, non_cv, enormous)
     if loose:
         score = max(score, 75)
-    if is_template(text):
+    ander_document = niet_cv_documentsoort(text, filename)
+    if is_template(text) or ander_document:
         score = min(score, 20)
     if not name:
         score = min(score, 49)
@@ -1685,11 +1800,13 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
         score = min(score, 49)
     reason = ('kopjes: ' + (', '.join(sorted(heads)) or 'geen') +
               f'; naam: {"ja" if name else "nee"}; contact: {"ja" if contact else "nee"}; '
-              f'CV-kop: {"ja" if explicit else "nee"}; werkperiodes: {len(periods)}' +
+              f'CV-kop: {"ja" if cv_header else "nee"}; werkperiodes: {len(periods)}' +
+              ('; CV-bestandsnaam: ja' if cv_filename else '') +
               ('; mogelijk andere documentsoort' if non_cv or enormous else '') +
               ('; cv zonder kopjes (naam, contact en periodes)' if loose and not structure else '') +
               ('; leeg sjabloon' if is_template(text) else '') +
               ('; vacature/inhuuraanvraag' if is_vacancy(text) else '') +
+              (f'; niet-cv-document: {ander_document}' if ander_document else '') +
               ('; CV-map: ja' if in_cv_map else ''))
     return max(0,min(100,score)), reason
 
@@ -1697,7 +1814,7 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
 def decide_status(text, filename, name, emails, phones, links, score, threshold=70, source_path=''):
     if not text.strip():
         return 'other'        # gescand/afbeelding en ook de OCR vond niets: geen cv (staat wel in Bestanden en status)
-    if is_template(text) or is_vacancy(text):
+    if is_template(text) or is_vacancy(text) or niet_cv_documentsoort(text, filename):
         return 'other'
     # Vacatures/inhuuraanvragen zijn géén twijfel-cv's. Een expliciete
     # vacaturekop of bestandsnaam wordt ook zonder drie losse trefwoorden afgewezen.
@@ -2660,13 +2777,17 @@ def iter_files(roots, out, deep=False):
     visited = set()
     out = out.resolve()
     cvdir = cv_folder(out).resolve()
+    naamloosdir = naamloze_cv_folder(out).resolve()
     roots = list(roots) + ([cvdir] if cvdir.exists() else [])   # eigen cv-map altijd meenemen
     def excluded(d):
         r = d.resolve()
         in_out = r == out or out in r.parents
         in_cv = r == cvdir or cvdir in r.parents
-        return in_out and not in_cv
+        in_naamloos = r == naamloosdir or naamloosdir in r.parents
+        return in_naamloos or (in_out and not in_cv)
     for root in roots:
+        if excluded(root):
+            continue
         if root.is_file():
             if root.suffix.lower() in (SUPPORTED | ARCHIVES) and root != out:
                 yield root
@@ -2820,8 +2941,7 @@ def ingest(args, db, out, roots=None, label=None):
                 summary['hergebruikt'] += 1
                 continue
             if (not retry_ocr and saved and saved['mtime_ns'] == stat.st_mtime_ns and saved['size'] == stat.st_size
-                    and ((saved['status'] == 'cv' and keep_cv_name(saved['name'], saved['reason']))
-                         or (saved['status'] == 'other' and not maybe_cv(saved['reason'])))
+                    and saved['status'] == 'other' and not maybe_cv(saved['reason'])
                     and (saved['classifier_version'] or 0) >= KEEP_FROM_VERSION
                     and not args.force):
                 # Nieuwere herkenning, maar dit document was al zeker cv of zeker geen cv: niet opnieuw lezen.
@@ -2979,7 +3099,7 @@ def ingest_zip(zpath, zstat, args, db, archive, lang, summary, seen_paths):
     if (old and not args.force and all(r['mtime_ns'] == zstat.st_mtime_ns and r['size'] == zstat.st_size
             and (r['classifier_version'] == CLASSIFIER_VERSION and r['status'] not in ('error', 'deferred')
                  or (r['classifier_version'] or 0) >= KEEP_FROM_VERSION
-                 and ((r['status'] == 'cv' and keep_cv_name(r['name'], r['reason'])) or (r['status'] == 'other' and not maybe_cv(r['reason']))))
+                 and (r['status'] == 'other' and not maybe_cv(r['reason']))))
             for r in old)):
         for r in old:
             seen_paths.add(r['path'])
@@ -3408,6 +3528,79 @@ def cv_folder(out=None):
     except OSError:
         chosen = ''
     return (Path(chosen) / CV_FOLDER) if chosen else (out / CV_FOLDER)
+
+
+NAAMLOZE_FOLDER = 'Naamloze_cvs'
+
+
+def naamloze_cv_folder(out=None):
+    """Eigen map naast Alle_cvs, ook bij een zelfgekozen CV-bestandslocatie."""
+    return cv_folder(out).parent / NAAMLOZE_FOLDER
+
+
+def kopieer_naamloze_cvs(out, naamloze):
+    """Kopieer overgebleven naamloze CV-kandidaten na AI; wijzig geen originelen.
+    Voor ZIP-documenten wordt uitsluitend het betreffende ZIP-lid gekopieerd.
+    Maak geen duplicaten en verwijder bestaande kopieën nooit.
+    """
+    folder = naamloze_cv_folder(out)
+    try:
+        if folder.is_symlink():
+            print('NAAMLOZE CVS: doelmap is een verwijzing; overgeslagen.', flush=True)
+            return 0
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f'NAAMLOZE CVS: map niet beschikbaar ({type(exc).__name__}).', flush=True)
+        return 0
+    copied, seen = 0, set()
+    for row in naamloze:
+        sha = row.get('sha256') or ''
+        location = row.get('oorspronkelijk_bestand') or ''
+        if not re.fullmatch(r'[a-fA-F0-9]{64}', sha) or not location or sha in seen:
+            continue
+        seen.add(sha)
+        vname = location.split(ZIP_SEP)[-1].replace('\\', '/').rsplit('/', 1)[-1]
+        ext = Path(vname).suffix.lower()
+        if ext not in SUPPORTED:
+            continue
+        target = folder / f'{cv_id_of(sha)}_{safe_part(Path(vname).stem, 45)}{ext}'
+        part = folder / (target.name + '.bezig')
+        try:
+            if target.exists():
+                if target.is_file() and not target.is_symlink() and (ext == '.pages' or hash_file(target) == sha):
+                    row['kopie_in_naamloze_map'] = str(target)
+                continue   # nooit een andere bestaande kopie overschrijven
+            if part.exists():
+                part.unlink()       # eigen tijdelijke kopie na afgebroken export
+            if ZIP_SEP in location:
+                pathzip, member = location.split(ZIP_SEP, 1)
+                with zipfile.ZipFile(pathzip) as z:
+                    info = z.getinfo(member)
+                    if info.is_dir() or info.flag_bits & 1 or info.file_size > GROOT_MB * 1024 * 1024:
+                        continue
+                    with z.open(info) as source, part.open('wb') as dest:
+                        shutil.copyfileobj(source, dest, 1048576)
+            else:
+                source = Path(location)
+                if not source.exists() or source.is_symlink():
+                    continue
+                copy_document(source, part)
+            if ext != '.pages' and hash_file(part) != sha:
+                print('NAAMLOZE CVS: kopie komt niet overeen met origineel:', vname, flush=True)
+                continue
+            part.replace(target)
+            row['kopie_in_naamloze_map'] = str(target)
+            copied += 1
+        except (OSError, ValueError, RuntimeError, KeyError, zipfile.BadZipFile) as exc:
+            print(f'NAAMLOZE CVS: kopiëren mislukt ({type(exc).__name__}): {vname}', flush=True)
+        finally:
+            if part.exists():
+                try:
+                    part.unlink()
+                except OSError:
+                    pass
+    print(f'NAAMLOZE CVS: {copied} nieuwe kopieën in {folder}; originelen blijven staan.', flush=True)
+    return copied
 
 
 def cv_rel_link(rel):
@@ -5453,8 +5646,9 @@ def build_exports(db, out):
     # Naamloze CV's apart tonen, nooit als kandidaten of als dubbelpaar.
     # De AI-stap is al afgerond voordat build_exports wordt aangeroepen.
     naamloze = naamloze_cv_rijen(all_docs)
+    kopieer_naamloze_cvs(out, naamloze)
     naamloos_cols = ['cv_id','naam_onbevestigd','beoordeling','cv_score',
-                     'oorspronkelijk_bestand','archiefkopie','sha256','jaar','toelichting']
+                     'oorspronkelijk_bestand','kopie_in_naamloze_map','archiefkopie','sha256','jaar','toelichting']
     save_csv(out/'naamloze_cvs.csv',naamloze,naamloos_cols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
     error_cols = ['categorie','bestand','extensie','status','omschrijving']

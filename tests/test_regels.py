@@ -744,6 +744,73 @@ for a, b, m, ta, tb, verwacht in C:
     _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
     check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
+# --- Niet-CV documenten en template-leegte ---
+check('testpakketmap is geen CV-map',
+      not c.cv_map_hint('/Download/CV_Scanner_Stresstest_Moeilijke_Bestanden/Projectplan.txt'))
+check('echte cv-map blijft CV-context',
+      c.cv_map_hint("/Inkoop/cv's/cv's Micha/Jan_Smit.docx"))
+check('CV-kop is sterke aanwijzing: Jacques',
+      c.decide_status('Curriculum Vitae\nJacques van Nes\njacques@gmail.com\n'
+                      '06 11223344\nOpleiding\nHBO Informatica\nProfiel\nErvaren consultant',
+                      'C.V. Jacques van Nes.pdf', 'Jacques van Nes',
+                      ['jacques@gmail.com'], ['+31611223344'], [], 40) == 'cv')
+for _title in ('Rapport', 'Rapportage', 'Onderzoeksrapport', 'Interviewsamenvatting',
+               'Vacature', 'Vacatur', 'Factuur', 'Facturatie', 'Invoice',
+               'Handleiding', 'Gebruikershandleiding', 'Manual',
+               'Projectplan Digitalisering', 'Stageovereenkomst', 'Kandidatenoverzicht',
+               'Job Description', 'CV Template', 'Cursusmateriaal', 'Privacybeleid'):
+    _body = _title + '\nWerkervaring\nOpleiding\nVaardigheden\nDat zijn de vereiste competenties.'
+    _file = '21_CV_' + _title.replace(' ', '_') + '.docx'
+    check('niet-cv-titel herkend: ' + _title,
+          bool(c.niet_cv_documentsoort(_body, _file)), c.niet_cv_documentsoort(_body, _file))
+    check('niet-cv-titel onmiddellijk other: ' + _title,
+          c.decide_status(_body, _file, 'Jan Jansen',
+                          ['jan@gmail.com'], [], [], 90,
+                          source_path="/Download/cv's") == 'other')
+_werk_cv = ('Curriculum Vitae\nRoos van Aalst\nroos@example.com\n'
+            'Opleiding\nHBO ICT\nVaardigheden\nPython en SQL\nWerkervaring\n'
+            '2018 - 2022 Consultant bij een projectplan digitalisering.\n'
+            '2022 - heden Handleidingen en onderzoeksrapportages geschreven.')
+check('cv met rapportage/handleiding in werkervaring blijft cv',
+      not c.niet_cv_documentsoort(_werk_cv, 'CV_Roos_van_Aalst.docx') and
+      c.decide_status(_werk_cv, 'CV_Roos_van_Aalst.docx', 'Roos van Aalst',
+                      ['roos@example.com'], [], [], 80) == 'cv')
+_leeg = ('Curriculum Vitae\nProfiel\nVul hier jouw profiel in.\n'
+         'Werkervaring\n20XX-20XX Voorbeeldwerkgever.\n'
+         'Opleiding\n[Vul opleiding in]\nVaardigheden\n______')
+check('lege kopjes en invulvelden zijn CV-sjabloon, geen CV',
+      c.is_template(_leeg) and
+      c.decide_status(_leeg, 'CV.docx', '', [], [], [], 99) == 'other')
+check('cv-kopjes zonder ingevulde inhoud zijn sjabloon',
+      c.is_template('Curriculum Vitae\nProfiel\nWerkervaring\nOpleiding\nVaardigheden'))
+# --- Naamloze mappen bewaren kopieën, originelen blijven staan ---
+import hashlib as _hashlib
+_nm_base = Path(tempfile.mkdtemp())
+_nm_out = _nm_base / 'export'; _nm_out.mkdir()
+_nm_orig = _nm_base / 'originele_cv.txt'
+_nm_orig.write_text('Curriculum Vitae\nOpleiding HBO Informatica\nWerkervaring 2019-2024\n', encoding='utf-8')
+_nm_sha = _hashlib.sha256(_nm_orig.read_bytes()).hexdigest()
+_nm_record = [{'sha256': _nm_sha, 'oorspronkelijk_bestand': str(_nm_orig)}]
+check('naamloze CV kopie in eigen map zonder origineel te verplaatsen',
+      c.kopieer_naamloze_cvs(_nm_out, _nm_record) == 1 and
+      _nm_orig.exists() and len(list(c.naamloze_cv_folder(_nm_out).glob('*.txt'))) == 1)
+check('zelfde naamloze CV kopie niet nogmaals aangemaakt',
+      c.kopieer_naamloze_cvs(_nm_out, _nm_record) == 0)
+check('naamloze map wordt bij een nieuwe scan overgeslagen',
+      not any(c.naamloze_cv_folder(_nm_out) in p.parents
+              for p in c.iter_files([_nm_base], _nm_out)))
+_nm_zip = _nm_base / 'bron.zip'
+_nm_zipped = b'Curriculum Vitae\nOpleiding HBO\nWerkervaring 2018-2024\n'
+with zipfile.ZipFile(_nm_zip, 'w') as _z:
+    _z.writestr('cvs/naamloos_uit_zip.txt', _nm_zipped)
+_nm_zip_sha = _hashlib.sha256(_nm_zipped).hexdigest()
+check('naamloos CV uit ZIP kopieren zonder ZIP te veranderen',
+      c.kopieer_naamloze_cvs(_nm_out, [{
+          'sha256': _nm_zip_sha, 'oorspronkelijk_bestand': str(_nm_zip) + c.ZIP_SEP + 'cvs/naamloos_uit_zip.txt'
+      }]) == 1 and _nm_zip.exists() and len(zipfile.ZipFile(_nm_zip).namelist()) == 1)
+check('naamloze map staat naast Alle_cvs',
+      c.naamloze_cv_folder(_nm_out).parent == c.cv_folder(_nm_out).parent)
+
 # --- Excel: tabblad Naamloze cv's alleen na alle checks, niet tussen kandidaten ---
 def _naamloze_testdoc(path, status, name, verified, reason, sha):
     return {'path': '/in/CV_Stresstest/' + path, 'sha': sha, 'status': status,
