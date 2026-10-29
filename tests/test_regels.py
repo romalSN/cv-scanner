@@ -815,6 +815,19 @@ for tekst, mail in [('jan.bakker [at] gmail [dot] com', 'jan.bakker@gmail.com'),
 for tekst in ['Bel 06-12345678', '📞 06 12 34 56 78', '+31 (0)6 1234 5678', 'mobiel 316 12345678', 'WhatsApp: 0612345678']:
     check(f'bio-telefoon: {tekst!r}', c.phones_in(c.fix_nl_mobile(tekst)) == ['+31612345678'], c.phones_in(c.fix_nl_mobile(tekst)))
 
+# --- Marcels Excel (her-audit): naam uit bestandsnaam als de kop geen naam geeft; Indiase schriften ---
+for f, t, want in [('Boin Hans HQ00003041 (U)', 'Persoonlijke gegevens\nAchternaam Boin\nVoornaam Hans\nWerkervaring\nHans Boin heeft ervaring', 'Hans Boin'),
+                   ('CV Paul van Staalduinen new', 'Persoonlijke gegevens\nPaul van Staalduinen werkt als tester', 'Paul van Staalduinen'),
+                   ('CV Mark Lemmen data governance', 'Woonplaats Noordhoek\nIk ben Mark Lemmen', 'Mark Lemmen'),
+                   ('CV Ting Kung_SAPBO', 'Woonplaats Amstelveen\nTing Kung is consultant', 'Ting Kung'),
+                   ('Veer Gerard HQ00003002 (U)', 'Woonplaats Tilburg\nGerard Veer\nReferentie: Koen Arts koen.arts@achmea.nl', 'Gerard Veer')]:
+    got = c.guess_name(t, f, c.emails_in(t))
+    check(f'naam uit bestandsnaam: {f}', got == want, got)
+HINDI = 'मैंने पांच साल तक सॉफ्टवेयर डेवलपर के रूप में काम किया है। मैं जावा और पायथन में प्रोग्रामिंग करता हूं। ' * 2
+TAMIL = 'நான் ஐந்து ஆண்டுகளாக மென்பொருள் உருவாக்குநராக பணியாற்றி வருகிறேன். ஜாவா மற்றும் பைதான் மொழிகளில் நிரலாக்கம் செய்கிறேன். ' * 2
+check('Hindi-cv = indiaas', c.cv_hoofdtaal(HINDI) == 'indiaas', c.cv_hoofdtaal(HINDI))
+check('Tamil-cv = indiaas', c.cv_hoofdtaal(TAMIL) == 'indiaas', c.cv_hoofdtaal(TAMIL))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

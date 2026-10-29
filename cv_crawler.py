@@ -494,6 +494,12 @@ def naam_uit_bestandsnaam(path_or_stem, snippet):
     stem = re.sub(r'\b[A-Za-z]{0,4}\d+[A-Za-z0-9]*\b', ' ', stem)        # HQ00000869, v2, 2024
     woorden = [w for w in re.split(r'[^A-Za-zÀ-ÿ]+', stem) if w]
     woorden = [w for w in woorden if not (w.isupper() and len(w) <= 3) or normalized_name(w) in NAME_FILLERS]
+    # Na een Hoofdletter-naam: kleine woorden ('data governance') of HOOFDLETTER-codes ('SAPBO') zijn geen naam meer.
+    for i, w in enumerate(woorden):
+        eerder = [x for x in woorden[:i] if x[:1].isupper() and not x.isupper() and normalized_name(x) not in BESTANDSNAAM_RUIS]
+        if len(eerder) >= 2 and normalized_name(w) not in NAME_FILLERS and (w.islower() or (w.isupper() and len(w) >= 4)):
+            woorden = woorden[:i]
+            break
     kern = [w for w in woorden if normalized_name(w) not in BESTANDSNAAM_RUIS]
     if not (2 <= len(kern) <= 4):
         return ''
@@ -594,10 +600,15 @@ def _guess_name(text, filename, emails, links=()):
         from_link = name_from_linkedin(link)
         if from_link:
             return from_link
+    # Naam in de bestandsnaam die ook in het cv staat ('Boin Hans HQ00003041 (U)', '2025-04-08 CV Frank Jansen (1)').
+    uit_bestand = naam_uit_bestandsnaam(filename, normalized_snippet(text))
+    if uit_bestand:
+        return uit_bestand
     candidate = re.sub(r'(?i)^(cv|resume|curriculum[ _-]*vitae)[ _-]+', '', filename)
     if candidate != filename:
-        candidate = re.sub(r'(?i)[ _-]+(?:final|versie|nieuw|updated|definitief)\b.*$', '', candidate)
+        candidate = re.sub(r'(?i)[ _-]+(?:final|versie|nieuw|new|updated|definitief|lang|kort|nl|en|eng|uk)\b.*$', '', candidate)
         candidate = re.sub(r'[_-]+', ' ', candidate).strip()
+        candidate = re.sub(r'(?<=[a-z]) [A-Z]{4,}$', '', candidate)      # 'Ting Kung SAPBO' -> 'Ting Kung'
         if reasonable_name(candidate):
             return candidate.title()
     for email in emails:
@@ -824,8 +835,9 @@ def cv_hoofdtaal(text):
     Werkt op de originele tekst (dan tellen woorden met een hoofdletter niet mee) en op de opgeslagen
     tekst (kleine letters; dan in blokjes van 12 woorden)."""
     text = (text or '')[:30000]
-    letters = len(re.findall(r'[^\W\d_]', text))
-    if letters >= 200:
+    # Klinkertekens in Indiase schriften zijn geen 'letter' voor Python: die tellen hier wel mee.
+    letters = len(re.findall(r'[^\W\d_]|[\u0900-\u0D7F]', text))
+    if letters >= 120:
         indic = len(INDIC_RE.findall(text))
         if indic >= .3 * letters:
             return 'indiaas'
