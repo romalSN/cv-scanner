@@ -4159,32 +4159,82 @@ def _opl_niveau(venster):
     return ''
 
 
-def opleiding_botst(a, b):
-    """Beide cv's noemen een opleiding van HETZELFDE niveau (bv. allebei HBO/bachelor) die niet kan kloppen:
-    - in andere jaren: 'HBO Informatica, Saxion 2001-2005' tegenover 'HBO Informatica, Avans 2008-2012';
-    - of in dezelfde jaren in een andere plaats: 'Hogeschool Utrecht 2006-2010' tegenover 'Hogeschool van Amsterdam
-      2006-2010'.
-    Een ander niveau (oud cv alleen bachelor 2006-2010, nieuw cv alleen master 2010-2012) is GEEN botsing."""
-    def opl(d):
-        uit = collections.defaultdict(list)
-        for bm, em, v, _x, _vo in periodes_uit_cv(d['snippet'] or ''):
-            kop = ' ' + ' '.join(v.split()[:6]) + ' '
-            if OPL_WOORD.search(kop):
-                niveau = _opl_niveau(v)
-                if niveau:
-                    uit[niveau].append((bm // 12, em // 12, _plaats_in(kop, NL_PLACES | BE_PLACES)))
-        return uit
-    pa, pb = opl(a), opl(b)
-    for niveau in set(pa) & set(pb):
-        la, lb = pa[niveau], pb[niveau]
-        if not ({x for x, _y, _p in la} & {x for x, _y, _p in lb}) and not ({y for _x, y, _p in la} & {y for _x, y, _p in lb}):
-            return True
-        for x1, y1, p1 in la:
-            for x2, y2, p2 in lb:
-                if (x1, y1) == (x2, y2) and p1 and p2 and p1 != p2:
-                    return True
-    return False
+# Een opleiding kan zich meerdere keren in een loopbaan voordoen (twee bachelors, overstap, master na HBO).
+# Lees daarom de afzonderlijke opleidingen, niet alleen het niveau en niet de huidige woonplaats.
+OPLEIDING_RICHTINGEN = ('informatica', 'bedrijfskunde', 'data science', 'computer science',
+                        'software engineering', 'commerciele economie', 'ict', 'rechten',
+                        'verpleegkunde', 'werktuigbouwkunde', 'psychologie')
 
+
+def opleiding_periodes(d):
+    """(niveau, richting, school, plaats_bij_school, beginjaar, eindjaar).
+    Een adres/woonplaats verderop in het cv is nooit de plaats van een opleiding."""
+    out = []
+    for begin, eind, venster, _exact, _voor in periodes_uit_cv(d['snippet'] or ''):
+        words = venster.split()
+        eerste = ' ' + ' '.join(words[:8]) + ' '
+        if not OPL_WOORD.search(eerste) or re.search(r' (?:bij|at) ', ' ' + ' '.join(words[:5]) + ' '):
+            continue
+        niveau = _opl_niveau(venster)
+        if not niveau:
+            continue
+        # De eerstvolgende cv-sectie/contactregel hoort niet bij de school.
+        kort = re.split(r'\b(?:woonplaats|adres|werkervaring|experience|vaardigheden|skills|'
+                        r'telefoon|mobiel|linkedin|huidige functie)\b',
+                        ' '.join(words[:16]), maxsplit=1)[0]
+        richting = next((v for v in OPLEIDING_RICHTINGEN if re.search(r'\b' + re.escape(v) + r'\b', kort)), '')
+        m = re.search(r'\b(?:hogeschool|hogescholen|universiteit|university|college|roc)\b', kort)
+        school = ''
+        plaats = ''
+        if m:
+            # 'Hogeschool van Amsterdam' -> Amsterdam; 'Hogeschool Utrecht' -> Utrecht.
+            # 'Woonplaats Amsterdam' na 'Hogeschool Utrecht' mag deze plaats niet vervangen.
+            na = kort[m.end():].split()
+            na = [w for w in na if w not in ('van', 'de', 'het', 'der')][:3]
+            plaats = _plaats_in(' ' + ' '.join(na) + ' ', NL_PLACES | BE_PLACES)
+            school = kort[:m.end()].split()[-1] + ' ' + ' '.join(na[:2])
+            school = school.strip()
+        else:
+            # Ook Fontys, Avans of Saxion tellen als opleiding; locatie is dan onbekend.
+            for naam in ('fontys', 'avans', 'saxion', 'hanzehogeschool', 'inholland', 'stenden'):
+                if re.search(r'\b' + naam + r'\b', kort):
+                    school = naam
+                    break
+        out.append((niveau, richting, school, plaats, begin // 12, eind // 12))
+    return out
+
+
+def opleiding_overeenkomsten(a, b):
+    """Dezelfde volledige opleiding: niveau + richting + school + begin- en eindjaar.
+    Alleen 'HBO' of alleen 'Hogeschool Utrecht' is onvoldoende bewijs."""
+    uit = set()
+    for niveau, richting, school, plaats, jaar, einde in opleiding_periodes(a):
+        if not richting or not school:
+            continue
+        for nv2, ri2, sc2, pl2, jr2, eind2 in opleiding_periodes(b):
+            if (niveau, richting, school, jaar, einde) == (nv2, ri2, sc2, jr2, eind2):
+                uit.add(f'{niveau} {richting} - {school} ({jaar}-{einde})')
+    return sorted(uit)
+
+
+def opleiding_botst(a, b):
+    """Alleen een sterk en concreet conflict: dezelfde opleiding op hetzelfde niveau
+    in exact dezelfde jaren, maar aantoonbaar aan een ANDERE school in een andere stad.
+    Verschillende studiejaren, andere studies en bachelor -> master zijn geen blokkade.
+    Bij uitwisseling, overstap of dubbele studie blokkeren we niet op schoolverschil."""
+    alle = opleiding_periodes(a), opleiding_periodes(b)
+    cv_tekst = ' '.join((a['snippet'] or '', b['snippet'] or ''))
+    if re.search(r'\b(?:uitwisseling|exchange|erasmus|overstap|overgestapt|transferred|'
+                 r'dubbele studie|double degree|dual degree)\b', cv_tekst):
+        return False
+    for niveau, richting, school, plaats, jaar, eind in alle[0]:
+        if not richting or not plaats or not school:
+            continue
+        for nv2, ri2, sc2, pl2, jr2, eind2 in alle[1]:
+            if (niveau == nv2 and richting == ri2 and (jaar, eind) == (jr2, eind2)
+                    and school != sc2 and plaats and pl2 and plaats != pl2):
+                return True
+    return False
 
 MAAND_WOORDEN = {'jan', 'januari', 'january', 'feb', 'februari', 'february', 'mrt', 'maart', 'mar', 'march', 'apr', 'april',
                  'mei', 'may', 'jun', 'juni', 'june', 'jul', 'juli', 'july', 'aug', 'augustus', 'august', 'sep', 'sept',
