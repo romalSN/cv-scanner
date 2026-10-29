@@ -51,4 +51,9 @@ with tempfile.TemporaryDirectory() as out:
     # Verwijderde/verplaatste bestanden mogen nooit meer als nieuwe Excel openen.
     marker.unlink()
     assert gui.geldige_excel_export(outdir) is None
+
+    # Dashboard-twijfel volgt het overzicht, ook als Scan afgerond geen review telt (hergebruikte scan).
+    assert gui.parse_progress('TWIJFEL-OVERZICHT (8 documenten, zonder namen of paden):').get('twijfel') == '8'
+    hergebruikt = gui.parse_progress("Scan afgerond: {'gevonden_ondersteund': 129, 'hergebruikt': 129, 'fouten': 2}")
+    assert 'twijfel' not in hergebruikt
 print('BASIS OK')

@@ -3499,6 +3499,13 @@ def safe_pair(a, b):
         return {x for x in found if len(x) >= 4}
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
+    # Zelfde volle naam zonder twee verschillende persoonlijke mails: één kandidaat.
+    # Opleiding of loopbaan op een lastige/oude CV mag dat niet splitsen (nieuwste CV wint).
+    # Echte naamgenoten met andere werkgevers blijven via de token-check hieronder apart.
+    if (blok.startswith(('tegenstrijdige opleiding', 'andere loopbaan'))
+            and same_name and len(an.split()) >= 2
+            and not (ae and be and not (ae & be))):
+        blok = ''
     if blok:
         if blok == 'andere voornaam' and ae & be and all(
                 not email_matches_name(a['name'], e) and not email_matches_name(b['name'], e) for e in ae & be):
@@ -5664,10 +5671,18 @@ def build_checks(reviews, people, doubt, legacy_count, unread_count, scanned_cou
 def twijfel_overzicht(db):
     """Anoniem overzicht van de twijfelgevallen: per soort hoeveel, zonder namen of paden.
     Zo kun je zien waar de twijfel vandaan komt zonder persoonsgegevens te delen."""
-    rows = db.execute("SELECT ext, reason, note FROM docs WHERE status='review' AND classifier_version=?",
+    rows = db.execute("SELECT ext, reason, note, sha FROM docs WHERE status='review' AND classifier_version=?",
                       (CLASSIFIER_VERSION,)).fetchall()
     if not rows:
         return
+    uniq, seen_sha = [], set()
+    for r in rows:
+        key = r['sha'] or r['ext']
+        if key in seen_sha:
+            continue
+        seen_sha.add(key)
+        uniq.append(r)
+    rows = uniq
     groups = collections.Counter()
     for r in rows:
         reason = (r['reason'] or '').lower()

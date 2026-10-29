@@ -222,6 +222,35 @@ class Tooltip:
             self.tip.destroy()
             self.tip = None
 
+def list_twijfel(output: Path) -> list[dict]:
+    """Zelfde selectie als het venster Twijfelgevallen: unieke sha, huidige herkenning, laatste scan."""
+    dbp = output / 'cv_index.sqlite'
+    if not dbp.exists():
+        return []
+    con = sqlite3.connect(str(dbp))
+    con.row_factory = sqlite3.Row
+    try:
+        ver = con.execute('SELECT MAX(classifier_version) FROM docs').fetchone()[0] or 0
+        try:
+            start = json.loads((output / 'laatste_scan.json').read_text(encoding='utf-8'))['start_ns']
+        except (OSError, ValueError, KeyError):
+            start = 0
+        cols_now = {c[1] for c in con.execute('PRAGMA table_info(docs)')}
+        seen_col = 'gezien_ns' if 'gezien_ns' in cols_now else '0 AS gezien_ns'
+        rows = con.execute(f"SELECT path, name, reason, note, sha, archive, status, {seen_col} FROM docs WHERE status='review' "
+                           "AND classifier_version=? ORDER BY path", (ver,)).fetchall()
+    finally:
+        con.close()
+    seen, items = set(), []
+    for r in rows:
+        if start and (r['gezien_ns'] or 0) < start:
+            continue
+        if r['sha'] and r['sha'] not in seen:
+            seen.add(r['sha'])
+            items.append(dict(r))
+    return items
+
+
 def parse_progress(line: str) -> dict[str, str]:
     """Bepaalt de status uit de voortgangsregels van de crawler."""
     output: dict[str, str] = {}
@@ -237,6 +266,9 @@ def parse_progress(line: str) -> dict[str, str]:
     control = re.match(r'EXPORT-CONTROLE:\s*(.*)', line)
     if control:
         output['fouten'] = str(sum(int(n) for n in re.findall(r'(\d+) [A-Za-z]', control.group(1))))
+    twijfel_end = re.search(r'TWIJFEL-OVERZICHT \((\d+) documenten', line)
+    if twijfel_end:
+        output['twijfel'] = twijfel_end.group(1)
     if line.startswith('Scan afgerond:'):
         try:
             summary = ast.literal_eval(line.split(':', 1)[1].strip())
@@ -903,6 +935,10 @@ class ScannerApp:
                             self.metrics[key].set(value)
                 elif kind == 'finished':
                     self.set_running(False)
+                    try:
+                        self.metrics['twijfel'].set(str(len(list_twijfel(self.output))))
+                    except Exception:
+                        pass
                     rc, stopped, recovered = payload
                     if getattr(self, 'last_mode', '') == 'plan':
                         self.status.set('Klaar om op te schonen.')
@@ -1307,31 +1343,10 @@ class ScannerApp:
     def open_doubts(self):
         if self.running:
             return
-        dbp = self.output / 'cv_index.sqlite'
-        if not dbp.exists():
+        items = list_twijfel(self.output)
+        if not items and not (self.output / 'cv_index.sqlite').exists():
             messagebox.showinfo('Eerst scannen', 'Start eerst een scan.', parent=self.root)
             return
-        con = sqlite3.connect(str(dbp))
-        con.row_factory = sqlite3.Row
-        try:
-            ver = con.execute('SELECT MAX(classifier_version) FROM docs').fetchone()[0] or 0
-            try:
-                start = json.loads((self.output / 'laatste_scan.json').read_text(encoding='utf-8'))['start_ns']
-            except (OSError, ValueError, KeyError):
-                start = 0
-            cols_now = {c[1] for c in con.execute('PRAGMA table_info(docs)')}
-            seen_col = 'gezien_ns' if 'gezien_ns' in cols_now else '0 AS gezien_ns'
-            rows = con.execute(f"SELECT path, name, reason, note, sha, archive, status, {seen_col} FROM docs WHERE status='review' "
-                               "AND classifier_version=? ORDER BY path", (ver,)).fetchall()
-        finally:
-            con.close()
-        seen, items = set(), []
-        for r in rows:
-            if start and (r['gezien_ns'] or 0) < start:
-                continue      # alleen wat in de LAATSTE scan is gezien; oude mislukkingen niet tonen
-            if r['sha'] and r['sha'] not in seen:
-                seen.add(r['sha'])
-                items.append(dict(r))
         if not items:
             messagebox.showinfo('Twijfelgevallen', 'Er zijn geen twijfelgevallen.', parent=self.root)
             return
