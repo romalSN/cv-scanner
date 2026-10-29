@@ -3096,10 +3096,12 @@ def ingest_zip(zpath, zstat, args, db, archive, lang, summary, seen_paths):
     like = prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
     old = db.execute("SELECT path,mtime_ns,size,status,classifier_version,reason,name FROM docs WHERE path LIKE ? ESCAPE '\\'",
                      (like,)).fetchall()
-    if (old and not args.force and all(r['mtime_ns'] == zstat.st_mtime_ns and r['size'] == zstat.st_size
-            and (r['classifier_version'] == CLASSIFIER_VERSION and r['status'] not in ('error', 'deferred')
-                 or (r['classifier_version'] or 0) >= KEEP_FROM_VERSION
-                 and (r['status'] == 'other' and not maybe_cv(r['reason']))))
+    if (old and not args.force and all(
+            r['mtime_ns'] == zstat.st_mtime_ns and r['size'] == zstat.st_size
+            and ((r['classifier_version'] == CLASSIFIER_VERSION
+                  and r['status'] not in ('error', 'deferred'))
+                 or ((r['classifier_version'] or 0) >= KEEP_FROM_VERSION
+                     and r['status'] == 'other' and not maybe_cv(r['reason'])))
             for r in old)):
         for r in old:
             seen_paths.add(r['path'])
