@@ -4227,24 +4227,60 @@ def opleiding_overeenkomsten(a, b):
     return sorted(uit)
 
 
+def _zelfde_opleiding_record(x, y):
+    """Eén specifieke studie, met jaar, richting en instelling, in twee cv's."""
+    nv, richting, school, _plaats, jaar, einde = x
+    nv2, richting2, school2, _plaats2, jaar2, einde2 = y
+    return (nv == nv2 and richting and richting == richting2
+            and school and school == school2
+            and abs(jaar - jaar2) <= 1 and abs(einde - einde2) <= 1)
+
+
 def opleiding_botst(a, b):
-    """Alleen een sterk en concreet conflict: dezelfde opleiding op hetzelfde niveau
-    in exact dezelfde jaren, maar aantoonbaar aan een ANDERE school in een andere stad.
-    Verschillende studiejaren, andere studies en bachelor -> master zijn geen blokkade.
-    Bij uitwisseling, overstap of dubbele studie blokkeren we niet op schoolverschil."""
-    alle = opleiding_periodes(a), opleiding_periodes(b)
-    cv_tekst = ' '.join((a['snippet'] or '', b['snippet'] or ''))
-    if re.search(r'\b(?:uitwisseling|exchange|erasmus|overstap|overgestapt|transferred|'
-                 r'dubbele studie|double degree|dual degree)\b', cv_tekst):
-        return False
-    for niveau, richting, school, plaats, jaar, eind in alle[0]:
-        if not richting or not plaats or not school:
+    """Twee cv's vermelden per opleidingsniveau maar één duidelijk verschillende opleiding:
+    dan is dat GEEN bewijs voor twee studies van dezelfde kandidaat. Behandel dit als
+    twee personen (zonder dubbel-twijfelgeval), tenzij een ander cv beide studies bewijst.
+    Verschillende niveaus (bachelor/master), ontbrekende informatie en twee opleidingen
+    in één cv zijn op zichzelf géén conflict.
+    """
+    pa, pb = opleiding_periodes(a), opleiding_periodes(b)
+    for niveau in {o[0] for o in pa} & {o[0] for o in pb}:
+        la = [x for x in pa if x[0] == niveau]
+        lb = [x for x in pb if x[0] == niveau]
+        if len(la) != 1 or len(lb) != 1:
+            continue     # CV noemt zelf meerdere studies op hetzelfde niveau
+        x, y = la[0], lb[0]
+        if _zelfde_opleiding_record(x, y):
             continue
-        for nv2, ri2, sc2, pl2, jr2, eind2 in alle[1]:
-            if (niveau == nv2 and richting == ri2 and (jaar, eind) == (jr2, eind2)
-                    and school != sc2 and plaats and pl2 and plaats != pl2):
-                return True
+        _nv, richting, school, plaats, jaar, eind = x
+        _nv2, richting2, school2, plaats2, jaar2, eind2 = y
+        # Alleen blokkeren op echte, voldoende specifieke tegenspraak. Een andere
+        # woonplaats kan hier niet meetellen: plaats is direct aan de school gekoppeld.
+        voldoende = (richting or school) and (richting2 or school2)
+        andere_richting = bool(richting and richting2 and richting != richting2)
+        andere_school = bool(school and school2 and school != school2)
+        andere_plaats = bool(plaats and plaats2 and plaats != plaats2)
+        andere_jaren = abs(jaar - jaar2) > 1 or abs(eind - eind2) > 1
+        if voldoende and (andere_richting or andere_school or andere_plaats or andere_jaren):
+            return True
     return False
+
+
+def opleidingen_verzoend(a, b, groep):
+    """Een cv dat BEIDE afwijkende studies expliciet noemt kan een groepsbotsing verzoenen.
+    De twee enkele cv's op zichzelf blijven terecht verschillend."""
+    if not opleiding_botst(a, b):
+        return True
+    pa, pb = opleiding_periodes(a), opleiding_periodes(b)
+    for doc in groep:
+        studies = opleiding_periodes(doc)
+        if len(studies) < 2:
+            continue
+        if (any(_zelfde_opleiding_record(x, s) for x in pa for s in studies)
+                and any(_zelfde_opleiding_record(y, s) for y in pb for s in studies)):
+            return True
+    return False
+
 
 MAAND_WOORDEN = {'jan', 'januari', 'january', 'feb', 'februari', 'february', 'mrt', 'maart', 'mar', 'march', 'apr', 'april',
                  'mei', 'may', 'jun', 'juni', 'june', 'jul', 'juli', 'july', 'aug', 'augustus', 'august', 'sep', 'sept',
@@ -4481,8 +4517,19 @@ def deduplicate(db, merge_file=None):
     leden = {i: [i] for i in range(len(docs))}
 
     def groep_botst(ra, rb):
-        """Hele kandidaatgroep controleren: een nieuw cv moet bij ALLE cv's van de groep passen."""
-        return any(harde_blokkade(docs[x], docs[y]) for x in leden[ra] for y in leden[rb])
+        """Toets de hele groep; twee verschillende studies mogen alleen samen wanneer
+        een derde cv BEIDE opleidingen letterlijk bevat."""
+        alle = [docs[i] for i in leden[ra] + leden[rb]]
+        for x in leden[ra]:
+            for y in leden[rb]:
+                blokkade = harde_blokkade(docs[x], docs[y])
+                if not blokkade:
+                    continue
+                if (blokkade.startswith('tegenstrijdige opleiding')
+                        and opleidingen_verzoend(docs[x], docs[y], alle)):
+                    continue
+                return True
+        return False
 
     def samenvoegen(a, b):
         ra, rb = dsu.find(a), dsu.find(b)

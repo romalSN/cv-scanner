@@ -37,8 +37,7 @@ apart("zelfde naam/mail; andere schoolplaats", a, b)
 
 d = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
        "2004 - 2008 HBO Informatica Hogeschool Utrecht")
-assert not c.opleiding_botst(a, d), "een tweede bachelor in andere jaren kan gewoon"
-assert c.safe_pair(a, d)[0], "zelfde persoonlijk contact mag twee opleidingen combineren"
+apart("een bachelor per cv, maar totaal andere studiejaren", a, d)
 
 e = cv("Jan de Vries", "jan.devries@gmail.com", "+31622223333",
        "2014 - 2016 Master Data Science Universiteit Utrecht")
@@ -56,4 +55,19 @@ g = cv("Jan de Vries", "jan.anders@outlook.com", "+31677776666",
 assert c.opleiding_overeenkomsten(a, g), "exacte opleiding moet matchen"
 assert c.zelfde_werk(a, g), "zelfde werkgevers en jaren moeten matchen"
 assert c.safe_pair(a, g)[0], "sterke overeenkomst zonder gedeeld contact moet kunnen koppelen"
+# Twee opleidingen in dezelfde cv zijn wél expliciet bewijs dat iemand beide deed.
+# Nieuwe bachelor later in de loopbaan: dit is anders dan twee cv's met elk één opleiding.
+dubbel = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
+            "2004 - 2008 HBO Informatica Hogeschool Utrecht\n"
+            "2010 - 2014 HBO Informatica Hogeschool Utrecht")
+assert len(c.opleiding_periodes(dubbel)) >= 2, c.opleiding_periodes(dubbel)
+assert not c.opleiding_botst(dubbel, a), "twee opleidingen in één cv is geen conflict"
+assert c.opleidingen_verzoend(a, d, [a, d, dubbel]), "bewijs van beide studies verzoent drie cv's"
+assert not c.opleidingen_verzoend(a, d, [a, d]), "zonder dat bewijs moeten twee cv's apart blijven"
+
+# Andere studierichting, elk cv één HBO, ook bij gedeelde naam en persoonlijk contact.
+anders = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
+            "2010 - 2014 HBO Bedrijfskunde Hogeschool Utrecht")
+apart("zelfde jaren, andere HBO-opleiding", a, anders)
+# Niet dezelfde studierichting afleiden uit een verhuizing: test hierboven blijft gelden.
 print("OPLEIDINGSBOTSING OK")

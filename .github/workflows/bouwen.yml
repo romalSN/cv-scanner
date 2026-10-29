@@ -10,6 +10,11 @@ on:
 env:
   CV_AI: '0'      # tests en bouwtest: geen echt AI-model (2,4 GB) ophalen; de AI-test gebruikt een eigen testmodel
 
+# Houd per branch alleen de nieuwste build over als er toch kort na elkaar wordt gepusht.
+concurrency:
+  group: cv-scanner-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bouwen:
     strategy:
