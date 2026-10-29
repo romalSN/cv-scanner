@@ -711,6 +711,42 @@ for a, b, m, ta, tb, verwacht in C:
     _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
     check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
+# --- Naam uitsluitend uit eigen bestandsnaam, nooit uit cv-/recruitermap ---
+_marthijn_bestand = 'Marthijn_vanRheenen-SCOM_OMS_Consultant.docx'
+_marthijn_pad = r'C:\CVs\Micha\Marthijn_vanRheenen-SCOM_OMS_Consultant.docx'
+check('Windows-pad: naam Marthijn van Rheenen, niet map Micha of SCOM/OMS',
+      c.naam_uit_bestandsnaam(_marthijn_pad, '', zonder_tekst=True) == 'Marthijn van Rheenen',
+      c.naam_uit_bestandsnaam(_marthijn_pad, '', zonder_tekst=True))
+check('aan elkaar geplakte tekst MarthijnvanRheenen wordt naam',
+      c.naam_uit_bestandsnaam(_marthijn_bestand,
+                              c.normalized_snippet('MarthijnvanRheenen')) == 'Marthijn van Rheenen')
+_marthijn_cv = ('Curriculum Vitae\nVaardigheden\nSAP en procesoptimalisatie.\n'
+                'Werkervaring\n2018 - 2022 Consultant bij Stadsprojecten.\n'
+                '06 12345678\nSCOM OMS Consultant profiel en opdrachten.')
+_marthijn_em, _marthijn_ph = c.emails_in(_marthijn_cv), c.phones_in(_marthijn_cv)
+_marthijn_naam = c.guess_name(_marthijn_cv, _marthijn_bestand, _marthijn_em)
+check('Marthijn naam uit alleen bestandsnaam + twee cv-kopjes en echte cv-kop',
+      _marthijn_naam == 'Marthijn van Rheenen', _marthijn_naam)
+_marthijn_score, _ = c.classify(_marthijn_cv, _marthijn_bestand,
+                                _marthijn_naam, _marthijn_em, _marthijn_ph, [])
+check('Marthijn met eigen bestandsnaam: cv, niet review',
+      c.decide_status(_marthijn_cv, _marthijn_bestand, _marthijn_naam,
+                      _marthijn_em, _marthijn_ph, [], _marthijn_score,
+                      source_path=_marthijn_pad) == 'cv')
+check('een map met naam Micha maakt van een hash geen persoonsnaam',
+      c.naam_uit_bestandsnaam('/u/CV Micha/1234567890.pdf', '', zonder_tekst=True) == '')
+check('een hash-bestand verzint geen naam op basis van map',
+      c.guess_name(_marthijn_cv, 'ab88123ed5da', _marthijn_em) == '')
+check('bij één los kopje leidt bestandsnaam nooit tot aangenomen kandidaat',
+      c.guess_name('Vaardigheden\nSAP consultancy en advisering.',
+                   _marthijn_bestand, []) == '')
+check('expliciete persoonsnaam in document gaat vóór kandidaat uit bestandsnaam',
+      c.guess_name('Naam: Jeroen Bos\n' + _marthijn_cv,
+                   _marthijn_bestand, []) == 'Jeroen Bos')
+check('bestandsnaam met alleen functietitel is geen persoonsnaam',
+      c.naam_uit_bestandsnaam('/cv/CV Java Developer.pdf', '',
+                              zonder_tekst=True) == '')
+
 # --- Bureau-cv's: naam in bestandsnaam vs recruiter bovenaan ---
 _sn = c.normalized_snippet('Elmer van den Heuvel\nJRecruit\naplitrakmail@broadbean.net\nCurriculum Vitae\nTom den Bulck\nWerkervaring')
 check('bestandsnaam: denBulck Tom HQ… -> Tom den Bulck', c.naam_uit_bestandsnaam('/u/JR/D/denBulck Tom HQ00000869 (U).txt', _sn) == 'Tom den Bulck')

@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 21
+CLASSIFIER_VERSION = 22
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -497,11 +497,13 @@ BESTANDSNAAM_RUIS = {'cv', 'resume', 'curriculum', 'vitae', 'nl', 'en', 'eng', '
 
 
 def naam_uit_bestandsnaam(path_or_stem, snippet, zonder_tekst=False):
-    """Naam uit de bestandsnaam, ALLEEN als die naam ook in het cv zelf staat.
-    'denBulck Tom HQ00000869 (U).txt' -> 'Tom den Bulck'; '20250325_CV_Rick_van_der_Kraan_NL (1)' -> 'Rick van der Kraan'.
-    Geeft '' als de bestandsnaam geen (bevestigde) persoonsnaam bevat."""
-    stem = Path(str(path_or_stem).split(ZIP_SEP)[-1]).stem if ('/' in str(path_or_stem) or '\\' in str(path_or_stem)
-                                                              or ZIP_SEP in str(path_or_stem)) else str(path_or_stem)
+    """Haal een mogelijke persoonsnaam UITSLUITEND uit de eigen bestandsnaam.
+    De bovenliggende mappen kunnen van recruiters of andere kandidaten zijn.
+    Normaal moet de naam ook in de cv-tekst staan; zonder_tekst wordt alleen
+    gebruikt na een aparte controle op sterke CV-kenmerken."""
+    # PosixPath(...).stem snijdt op een Windows-pad de map niet af.
+    basis = str(path_or_stem or '').split(ZIP_SEP)[-1].replace('\\', '/').rsplit('/', 1)[-1]
+    stem = re.sub(r'(?i)\.(?:pdf|docx?|txt|rtf|odt|pages)$', '', basis)
     stem = re.sub(r'\([^)]*\)', ' ', stem)
     stem = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', stem)              # denBulck -> den Bulck
     stem = re.sub(r'\b[A-Za-z]{0,4}\d+[A-Za-z0-9]*\b', ' ', stem)        # HQ00000869, v2, 2024
@@ -526,7 +528,12 @@ def naam_uit_bestandsnaam(path_or_stem, snippet, zonder_tekst=False):
         return ''
     tekst = ' ' + (snippet or '')[:4000] + ' '
     gewone_match = all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2)
-    aaneen_match = bool(kern) and f' {''.join(normalized_name(w) for w in kern)} ' in tekst
+    # Bij een aan elkaar geplakte naam hoort het tussenvoegsel er ook bij:
+    # 'marthijnvanrheenen' is 'Marthijn van Rheenen'.
+    aaneen_match = bool(kern) and any(
+        f' {vorm} ' in tekst for vorm in (
+            ''.join(normalized_name(w) for w in kern),
+            ''.join(normalized_name(w) for w in naam_w)))
     if not (gewone_match or aaneen_match or zonder_tekst):
         return ''
     # Volgorde zoals in het cv ('Tom den Bulck'), anders de bestandsnaam ('Bulck Tom' -> achternaam eerst).
@@ -629,14 +636,24 @@ def _guess_name(text, filename, emails, links=()):
     uit_bestand = naam_uit_bestandsnaam(filename, normalized_snippet(text))
     if uit_bestand:
         return uit_bestand
-    # Bij 'cv_MarcHorstmanNL_2026' kan de naam in de uitgelezen tekst ontbreken
-    # of aaneengeplakt zijn. Alleen bij expliciete CV-bestandsnaam + meerdere echte
-    # CV-kopjes een veilige naamkandidaat uit de bestandsnaam gebruiken.
-    if cv_bestandsnaam_hint(filename) and len(text.strip()) >= 60:
-        h, _header, _file, non_cv, enormous, _periods = cv_signals(text, filename)
-        if ('opleiding' in h and h & {'werkervaring', 'profiel', 'vaardigheden'}
-                and not non_cv and not enormous and not is_template(text) and not is_vacancy(text)):
+    # Sommige Word/PDF-lezers missen de zichtbare naam, maar in de eigen
+    # bestandsnaam staat bijv. 'Marthijn_vanRheenen-SCOM_OMS_Consultant'.
+    # Probeer dit pas na de normale naamherkenning in de cv-tekst, en NOOIT
+    # met een naam afkomstig uit bovenliggende mappen (bijv. 'Micha').
+    if len(text.strip()) >= 60:
+        h, hdr, cv_file, non_cv, enormous, periods = cv_signals(text, filename)
+        twee_inhoudelijke_kopjes = (
+            ('opleiding' in h and bool(h & {'werkervaring', 'profiel', 'vaardigheden'}))
+            or ('werkervaring' in h and bool(h & {'profiel', 'vaardigheden'})))
+        contact = personal_contact(emails, phones_in(text), links)
+        context = hdr or cv_file or contact or (len(h) >= 3 and len(periods) >= 2)
+        if (twee_inhoudelijke_kopjes and context and not non_cv and not enormous
+                and not is_template(text) and not is_vacancy(text)
+                and not is_school_doc(text, filename, strong_cv=bool(
+                    'werkervaring' in h and 'opleiding' in h and contact))):
             kandidaat = naam_uit_bestandsnaam(filename, '', zonder_tekst=True)
+            # Een e-mailadres van aantoonbaar iemand anders kan een bureaureferentie
+            # zijn: neem dan niet blind de naam uit de bestandsnaam over.
             if kandidaat and not any(email_owner_mismatch(kandidaat, e) for e in emails
                                      if not GENERIC_EMAIL.match(e)):
                 return kandidaat
