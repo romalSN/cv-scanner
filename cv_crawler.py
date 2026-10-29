@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 25
+CLASSIFIER_VERSION = 24
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
