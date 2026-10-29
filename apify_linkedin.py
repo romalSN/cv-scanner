@@ -17,7 +17,7 @@ from brightdata import slug, nette_url  # zelfde URL-normalisatie
 PREFIX = 'ap|'
 API = 'https://api.apify.com/v2'
 ACTOR_STANDAARD = 'harvestapi~linkedin-profile-scraper'
-BATCH = int(os.environ.get('APIFY_BATCH', '100'))   # gratis account: max 10 profielen per run en 50 runs
+BATCH = int(os.environ.get('APIFY_BATCH', '10'))    # gratis account: max 10 profielen per run en 50 runs in totaal
 MAX_WACHT = 10 * 60
 PEIL = 10
 NEGEER_VELDEN = {'moreProfiles', 'photo', 'receivedRecommendations', 'givenRecommendations', 'featured',
