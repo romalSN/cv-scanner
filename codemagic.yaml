@@ -1,0 +1,58 @@
+# Mac-app (M-chip) bouwen op Codemagic (Mac mini M2). Start met de hand in Codemagic: zo gaan er geen gratis minuten
+# verloren aan elke push. Doet hetzelfde als de Mac-15-build in .github/workflows/bouwen.yml.
+workflows:
+  mac-app:
+    name: CV Scanner Mac (M-chip)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    scripts:
+      - name: Python 3.12 (python.org, met tkinter)
+        script: |
+          curl -sL --fail -o py.pkg https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg
+          sudo installer -pkg py.pkg -target /
+          PY=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+          $PY -m venv venv
+          echo "PATH=$CM_BUILD_DIR/venv/bin:$PATH" >> $CM_ENV
+      - name: Onderdelen installeren
+        script: |
+          python --version
+          python -c "import tkinter; print('tkinter OK')"
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller cryptography pillow certifi openpyxl
+          python -m pip install llama-cpp-python --prefer-binary --no-cache-dir \
+            --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal \
+          || python -m pip install llama-cpp-python --no-binary llama-cpp-python --no-cache-dir
+          python -c "import llama_cpp; print('llama-cpp-python', llama_cpp.__version__)"
+          curl -sL --fail -o "$CM_BUILD_DIR/test.gguf" https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
+      - name: Testen
+        script: |
+          export CV_AI=0
+          for t in tests/test_basis.py tests/test_kandidaten.py tests/test_apify.py tests/test_sleutels.py \
+                   tests/test_regels.py tests/test_mac_lezen.py tests/test_ocr.py; do
+            echo "== $t"; python "$t" || exit 1
+          done
+      - name: App bouwen
+        script: |
+          pyinstaller --noconfirm --windowed --name "CV Scanner" --paths . \
+            --hidden-import gui --hidden-import cv_crawler --hidden-import reader_worker \
+            --hidden-import rtf_reader --hidden-import pages_reader --hidden-import certifi \
+            --collect-data certifi --collect-submodules pypdf \
+            --hidden-import ai_rechter --hidden-import apify_linkedin --hidden-import profielbron --collect-all llama_cpp \
+            --osx-bundle-identifier nl.solutionnow.cvscanner start_app.py
+      - name: Gebouwde app testen
+        script: |
+          APP="dist/CV Scanner.app/Contents/MacOS/CV Scanner"
+          python tests/maak_frozen_set.py "$CM_BUILD_DIR/set"
+          "$APP" --backend --root "$CM_BUILD_DIR/set" --output "$CM_BUILD_DIR/uit" > log.txt 2>&1 || true
+          cat log.txt
+          N=$(grep -c "CV GEVONDEN" log.txt || true)
+          [ "$N" -ge 3 ] || { echo "FOUT: gebouwde app vond $N van 3 cv's"; exit 1; }
+          "$APP" --ssl-test > ssl.txt 2>&1 || true; cat ssl.txt
+          grep -q "SSL OK" ssl.txt || { echo "FOUT: internet (https) werkt niet in de app"; exit 1; }
+          "$APP" --ai-test "$CM_BUILD_DIR/test.gguf" > ai.txt 2>&1 || true; cat ai.txt
+          grep -q "AI OK" ai.txt || { echo "FOUT: lokale AI werkt niet in de app"; exit 1; }
+          ls "$CM_BUILD_DIR/uit"/*.xlsx
+      - name: Inpakken
+        script: ditto -c -k --keepParent "dist/CV Scanner.app" "CV-Scanner-Mac.zip"
+    artifacts:
+      - CV-Scanner-Mac.zip
