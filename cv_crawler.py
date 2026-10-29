@@ -5713,7 +5713,7 @@ def linkedin_gegevens_rijen(people, out):
     """Tabblad 'LinkedIn-gegevens': alleen voor profielen die zeker van de kandidaat zijn (uit het cv of online
     'zeker'). Gegevens uit het openbare profiel via Bright Data."""
     try:
-        import brightdata
+        import profielbron as brightdata
         cache = json.loads((out / 'online_cache.json').read_text(encoding='utf-8'))
     except Exception:
         return []
@@ -5724,7 +5724,7 @@ def linkedin_gegevens_rijen(people, out):
         if not link and p.get('online_linkedin'):          # alleen zekere online profielen staan hier
             link, bron = p.get('online_linkedin') or '', 'online (zeker)'
         s = brightdata.slug(link)
-        g = brightdata.gegevens(cache.get('bd|' + s)) if s else {}
+        g = brightdata.gegevens(cache.get(brightdata.PREFIX + s)) if s else {}
         if not g:
             continue
         rijen.append(dict(kandidaat_id=p.get('kandidaat_id', ''), naam=p.get('naam', ''), linkedin=link, linkedin_bron=bron,
@@ -5743,7 +5743,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     (werkgever, school, functie, plaats). Alles blijft een SUGGESTIE."""
     key = os.environ.get('TAVILY_API_KEY', '').strip()
     try:
-        import brightdata
+        import profielbron as brightdata          # Apify (als er een token is), anders Bright Data
     except Exception:
         brightdata = None
     bd_aan = bool(brightdata and brightdata.sleutel())
@@ -5998,7 +5998,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 content = result.get('content', '') or ''
                 if bd_aan and kind == 'linkedin':
                     # Volledig openbaar profiel van Bright Data (werkgevers, functies, jaren, opleidingen, about).
-                    bdp = cache.get('bd|' + brightdata.slug(url))
+                    bdp = cache.get(brightdata.PREFIX + brightdata.slug(url))
                     if bdp and not bdp.get('fout'):
                         content = content + '\n' + brightdata.tekst(bdp)
                 if result.get('raw'):
@@ -6274,7 +6274,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     # Met Bright Data: alleen contact dat rechtstreeks op het (zekere) profiel staat; geen extra
                     # Google-zoekopdrachten.
                     xqueries = []
-                    g = brightdata.gegevens(cache.get('bd|' + brightdata.slug(zeker_link)) or {})
+                    g = brightdata.gegevens(cache.get(brightdata.PREFIX + brightdata.slug(zeker_link)) or {})
                     for typ_, val in (('email', g.get('email', '')), ('telefoon', g.get('telefoon', ''))):
                         if val and not have[typ_] and not (typ_ == 'email' and GENERIC_EMAIL.match(val)):
                             if typ_ == 'telefoon':
