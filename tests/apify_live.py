@@ -12,6 +12,19 @@ def meet(rid):
         klaar.append(rid)
     return d
 ap.run_info = meet
+_items = ap.items
+def meet_items(ds):
+    d = _items(ds)
+    lijst = d if isinstance(d, list) else []
+    sleutels = sorted({k for x in lijst if isinstance(x, dict) for k in x})[:40]
+    st = collections.Counter(str(x.get('status')) for x in lijst if isinstance(x, dict))
+    url_ok = sum(1 for x in lijst if isinstance(x, dict) and ap.slug(x.get('linkedinUrl') or ''))
+    pid = sum(1 for x in lijst if isinstance(x, dict) and x.get('publicIdentifier'))
+    err = collections.Counter(str(x.get('error') or x.get('message') or '')[:60] for x in lijst if isinstance(x, dict) and (x.get('error') or x.get('message')))
+    print(f'::notice::dataset: {len(lijst)} items | status {dict(st)} | linkedinUrl bruikbaar {url_ok} | publicIdentifier {pid} | '
+          f'fouten {dict(err)} | velden: {", ".join(sleutels)}')
+    return d
+ap.items = meet_items
 n = ap.ophalen(urls, cache, log=lambda m: None)
 duur = time.time() - t0
 prof = [v for k, v in cache.items() if k.startswith('ap|') and not v.get('fout')]
