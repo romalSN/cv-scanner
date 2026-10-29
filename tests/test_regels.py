@@ -17,6 +17,7 @@ os.environ['TAVILY_API_KEY'] = 'test'
 os.environ['SERPER_API_KEY'] = 'test'
 os.environ['CV_AI'] = '0'          # zonder echt AI-model testen; AI-gedrag wordt hieronder nagebootst
 import cv_crawler as c  # noqa: E402
+import json  # noqa: E402
 import traceback
 def _hook(t, v, tb):
     print('::error::CRASH ' + ''.join(traceback.format_exception(t, v, tb)).replace(chr(10), ' | ')[-900:])
@@ -854,6 +855,62 @@ t = 'Juan Perez\njuan.perez@gmail.com | +34 612 345 678\n' + WERK_EN
 check('telefoonland: +34 van een bureau telt niet', c.filter_kandidaat({'snippet': c.normalized_snippet(t), 'taal': 'en'},
       c.phones_in(t), c.emails_in(t), lambda v: '')[0] == 'ok')
 c.BUREAU_CONTACT.clear()
+
+# --- Dubbel zonder gedeeld contact: andere opmaak in de nieuwe versie ('Tulpnet – Azure consultant (aug 2015 – heden)') ---
+class _R(dict):
+    def keys(self): return super().keys()
+def _cvdoc(t, i):
+    em = c.emails_in(t); ph = sorted(set(filter(None, (c.norm_phone(x) for x in c.phones_in(t)))))
+    return _R(name=c.guess_name(t, f'cv{i}', em), emails=json.dumps(em), phones=json.dumps(ph), links='[]', sha=f'z{i}',
+              path=f'/u/cvz{i}.pdf', snippet=c.normalized_snippet(t), tokens=json.dumps(c.signature(t)),
+              werkgevers=c.werkgevers_from(t), opleidingen=c.opleidingen_from(t))
+_A = ('Curriculum Vitae\nRandy Vaessen\nrandy.v@voorbeeldmail.nl\n06 12345678\nWerkervaring\n'
+      '2019 - heden Azure consultant bij Tulpnet. Verantwoordelijk voor projecten.\n'
+      '2015 - 2019 Projectmanager bij Molenaar Software. Verantwoordelijk voor planning.\n'
+      '2011 - 2015 Java ontwikkelaar bij Kanaalsoft. Verantwoordelijk voor bouw.\nOpleiding\nHBO Informatica, Avans Hogeschool')
+for k, _B in enumerate([
+        'CV – Randy Vaessen\nProfiel\nErvaren consultant.\nLoopbaan\nmrt 2019 – heden\nTulpnet – Azure consultant\n'
+        'Werkzaamheden: analyse.\njun 2015 – mrt 2019\nMolenaar Software – Projectmanager\nWerkzaamheden: planning.',
+        'CV – Randy Vaessen\nLoopbaan\nAzure consultant, Tulpnet | mrt 2019 – heden\nWerkzaamheden: analyse.\n'
+        'Projectmanager, Molenaar Software | jun 2015 – mrt 2019\nWerkzaamheden: planning.',
+        'Randy Vaessen\nExperience\nTulpnet, Azure consultant (Mar 2019 - present)\nAnalysis.\n'
+        'Molenaar Software, Project manager (Jun 2015 - Mar 2019)\nPlanning.']):
+    r = c.safe_pair(_cvdoc(_A, 100 + k), _cvdoc(_B, 200 + k))
+    check(f'dubbel: nieuwe versie in andere opmaak zonder contact = samen ({k})', r[0], r)
+# Naamgenoot met maar 1 zelfde werkgever+jaar (collega), verder andere loopbaan: niet samen.
+_N = ('CV – Randy Vaessen\nLoopbaan\nmrt 2019 – heden\nTulpnet – Servicedesk medewerker\nWerkzaamheden: support.\n'
+      'jan 2012 – mrt 2019\nDijkstra Systems – Beheerder\nWerkzaamheden: beheer.')
+check('dubbel: naamgenoot met 1 zelfde werkgever+jaar = niet samen', not c.safe_pair(_cvdoc(_A, 300), _cvdoc(_N, 301))[0])
+
+# --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
+W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"
+L=[
+("Persoonlijke gegevens\nNaam: Hans Boin\nWoonplaats: Utrecht\n"+W,'Hans Boin'),
+("Persoonlijke gegevens\nNaam Boin\nVoornaam Hans\nWoonplaats Utrecht\n"+W,'Hans Boin'),
+("PERSOONLIJKE GEGEVENS\nAchternaam: Beukema\nVoornamen: Peter Johannes\nRoepnaam: Peter\n"+W,'Peter Beukema'),
+("Persoonlijke gegevens\nAchternaam\tDe Kleijn\nVoornaam\tRuud\n"+W,'Ruud de Kleijn'),
+("Personal details\nLast name Verhoeff\nFirst name Jan\nNationality Dutch\n"+W,'Jan Verhoeff'),
+("Personal details\nFull name: Jan Verhoeff\nNationality: Dutch\n"+W,'Jan Verhoeff'),
+("Name Christian Weber\nGender Male\nNationality German\n"+W,'Christian Weber'),
+("Roepnaam Marc\nAchternaam de Vries\nGeboortedatum 01-01-1980\n"+W,'Marc de Vries'),
+("Voornaam Edwin\nAchternaam van Velzen\n"+W,'Edwin van Velzen'),
+("Woonplaats Amsterdam\nDennis Zweijtzer\n"+W,'Dennis Zweijtzer'),
+("The Netherlands\nJohan Stover\nKerkstraat 1, Utrecht\n"+W,'Johan Stover'),
+("Algemene gegevens\nNaam : J. (Jan) Moors\n"+W,'Jan Moors'),
+("Naam: ing. R.M. (Ruben) Knol\n"+W,'Ruben Knol'),
+("Curriculum Vitae\nNaam\nTukker\nVoornaam\nMaurice\n"+W,'Maurice Tukker'),
+("Over mij\nIk ben Salomo Petrus, een gedreven tester.\n"+W,'Salomo Petrus'),
+("Contact information\nPawel Gorny\npawel.gorny@gmail.com\n"+W,'Pawel Gorny'),
+("Nationaliteit Nederlandse\nNaam Erik Hoekstra\n"+W,'Erik Hoekstra'),
+("Scrum Master\nCors Snijders\n"+W,'Cors Snijders'),
+("Senior Java EE Developer\nHenrique Ordine\n"+W,'Henrique Ordine'),
+("TypeScript React\nAlvaro Gomez\nFull-stack developer\n"+W,'Alvaro Gomez'),
+("Get in touch\nAbdul Ahad\nabdul.ahad@gmail.com\n"+W,'Abdul Ahad'),
+("Gegevens\nNaam\t\tGerard Hebenaar\nAdres\t\tDorpsstraat 1\n"+W,'Gerard Hebenaar'),
+]
+for t, want in L + [("Profiel\nIk ben Gedreven En Flexibel.\n" + W, '')]:
+    g = c.guess_name(t, 'cv', c.emails_in(t))
+    check(f'naam uit opmaak: {t.splitlines()[0][:30]!r}', c.normalized_name(g) == c.normalized_name(want), g)
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))

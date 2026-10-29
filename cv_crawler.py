@@ -228,12 +228,23 @@ def reasonable_name(value):
 PERSON_LABEL = re.compile(
     r'(?i)^(voornamen|voornaam|first\s*name|given\s*name|achternaam|familienaam|surname|last\s*name|family\s*name|'
     r'volledige\s*naam|full\s*name|roepnaam|naam\s*kandidaat|naam|name|candidate\s*name|kandidaat)'
-    r'(?:\s*[:：=\-]\s*|\s+(?=[A-ZÀ-Ý]))(.*)$')
+    r'(?:\s*[:：=\-]\s*|\s+(?=[A-ZÀ-Ý])|\s*$)(.*)$')
 # Na de naam volgt in tabellen vaak meteen het volgende veld: 'Name Jan Smit Sex Male'.
 NEXT_FIELD = re.compile(r'(?i)\s+(?:sex|gender|geslacht|geboren|geboortedatum|geboorteplaats|date\s+of\s+birth|'
                         r'birth\s*date|nationaliteit|nationality|adres|address|woonplaats|residence|telefoon|tel\.?|'
                         r'phone|mobiel|mobile|e-?mail|burgerlijke\s+staat|marital|rijbewijs|driving|leeftijd|age|'
                         r'functie|beschikbaar|postcode|plaats|city)\b.*$')
+
+
+def _roepnaam_tussen_haakjes(v):
+    """'ing. R.M. (Ruben) Knol' -> 'Ruben Knol'; 'J. (Jan) Moors' -> 'Jan Moors'; titels ervoor eraf."""
+    v = re.sub(r'(?i)^(?:(?:ing|ir|drs|dr|mr|prof|ds)\.?\s+)+', '', v.strip())
+    m = re.search(r'\(\s*([A-ZÀ-Ý][a-zà-ÿ]+(?:[- ][A-ZÀ-Ý][a-zà-ÿ]+)?)\s*\)', v)
+    if m:
+        rest = (v[:m.start()] + ' ' + v[m.end():]).strip()
+        rest = re.sub(r'\b(?:[A-Z]\.\s*)+', ' ', rest)          # voorletters weg: de roepnaam staat erbij
+        v = ' '.join((m.group(1) + ' ' + rest).split())
+    return v
 
 
 def name_parts(value):
@@ -257,7 +268,7 @@ def name_parts(value):
             nxt = lines[i+1].strip()
             if nxt and not PERSON_LABEL.match(nxt) and not re.match(r'(?i)^(?:e-?mail|telefoon|phone|linkedin|adres|address)\s*[:：=]',nxt):
                 remainder = nxt
-        remainder = NEXT_FIELD.sub('', remainder).strip()
+        remainder = _roepnaam_tussen_haakjes(NEXT_FIELD.sub('', remainder).strip())
         if remainder:
             fields[label] = remainder
     # Roepnaam gaat voor ('Johannes Pieter' heet 'Hans').
@@ -358,6 +369,8 @@ def clean_person_name(name):
         if len(w) >= 4 and len(w) % 2 == 0 and [x.casefold() for x in w[:len(w)//2]] == [x.casefold() for x in w[len(w)//2:]]:
             return ' '.join(w[:len(w)//2])
         return t
+    # 'CV – Randy Vaessen', 'Curriculum Vitae: Jan Smit', 'Resume | Jan Smit': kopwoord ervoor eraf.
+    s = re.sub(r'(?i)^(?:cv|c\.v\.|curriculum\s+vitae|resume|résumé)\s*(?:[-–—:|]|van|of)\s*(?=\S)', '', s).strip()
     # Word-veldcode aan de naam geplakt: 'MERGEFORMATtom Coenraad' -> 'tom Coenraad'.
     s = re.sub(r'(?i)^(?:mergeformat|macrobutton|mergefield|formtext)(?=[a-z])', '', s).strip()
     s = undouble(s)
@@ -600,6 +613,16 @@ def _guess_name(text, filename, emails, links=()):
         from_link = name_from_linkedin(link)
         if from_link:
             return from_link
+    # 'Ik ben Salomo Petrus, …' / 'Mijn naam is …' / 'My name is …' in de eerste regels.
+    m = re.search(r'(?:\b[Ii]k ben|\b[Mm]ijn naam is|\b[Mm]y name is|\bI am|\bI\'m)\s+'
+                  r'([A-ZÀ-Ý][a-zà-ÿ]+(?:\s+(?:van|de|der|den|el|la|ten|ter|van der|van den)?\s*[A-ZÀ-Ý][a-zà-ÿ\-]+){1,3})',
+                  '\n'.join(lines[:20]))
+    gewone = set().union(*TAAL_WOORDEN.values()) | {'en', 'and', 'gedreven', 'flexibel', 'enthousiast', 'ervaren',
+                                                     'motivated', 'passionate', 'experienced', 'senior', 'junior',
+                                                     'zelfstandig', 'creatief', 'creative', 'professional', 'certified'}
+    if (m and clean_person_name(m.group(1)) and reasonable_name(m.group(1))
+            and not any(w.lower() in gewone for w in m.group(1).split())):
+        return clean_person_name(m.group(1))
     # Naam in de bestandsnaam die ook in het cv staat ('Boin Hans HQ00003041 (U)', '2025-04-08 CV Frank Jansen (1)').
     uit_bestand = naam_uit_bestandsnaam(filename, normalized_snippet(text))
     if uit_bestand:
@@ -3869,7 +3892,7 @@ def _maand(tok):
     return int(tok) if re.fullmatch(r'0?[1-9]|1[0-2]', tok) else 0
 
 
-def periodes_uit_cv(snippet):
+def periodes_uit_cv(snippet, voor_n=4):
     """Alle periodes met jaartallen: [(begin_maand, eind_maand, venster_tekst, exact)].
     Maandnummer = jaar*12 + maand-1. Notaties: 2015 2020, 03 2018 06 2022, mar 2018 jun 2022, 2021 heden,
     maart 2019 present. Alleen jaartallen: geen maanden verzonnen; de periode loopt dan van midden tot midden
@@ -3916,7 +3939,7 @@ def periodes_uit_cv(snippet):
             i = j
             continue                               # tegenstrijdig: einde voor begin
         venster = ' ' + ' '.join(words[j:j + 25]) + ' '
-        voor = ' ' + ' '.join(words[max(0, i - 4):i]) + ' '
+        voor = ' ' + ' '.join(words[max(0, i - voor_n):i]) + ' '
         uit.append((b, max(e, b), venster, exact, voor))
         i = j
     return uit
@@ -4074,8 +4097,19 @@ def loopbaan_botst(a, b):
 def zelfde_werk(a, b):
     """Dezelfde (niet-grote) werkgever met (bijna) dezelfde beginjaar in beide cv's: 'Datafabriek 2017-2021'."""
     pa, pb = werk_periodes(a), werk_periodes(b)
-    return sorted({f'{w} {y1}' for w, y1, _e in pa for w2, z1, _f in pb
-                   if w == w2 and not w.startswith('*') and y1 == z1})
+    uit = {f'{w} {y1}' for w, y1, _e in pa for w2, z1, _f in pb if w == w2 and not w.startswith('*') and y1 == z1}
+    # Andere opmaak in het andere cv ('aug 2015 – heden / Tulpnet – Azure consultant', zonder 'bij'): staat de
+    # werkgever uit het ene cv in het andere cv bij een periode met precies hetzelfde beginjaar?
+    def vensters(d):
+        # 'Tulpnet – Azure consultant (aug 2015 – heden)': werkgever kan ook vlak vóór de periode staan.
+        return [(bm // 12, ' ' + ' '.join(vo.split() + v.split()[:14]) + ' ')
+                for bm, _em, v, _x, vo in periodes_uit_cv(d['snippet'] or '', voor_n=6)]
+    for lijst, ander in ((pa, b), (pb, a)):
+        vs = vensters(ander)
+        for w, y1, _e in lijst:
+            if not w.startswith('*') and any(z == y1 and f' {w} ' in v for z, v in vs):
+                uit.add(f'{w} {y1}')
+    return sorted(uit)
 
 
 def cv_samenvatting(d, max_chars=1800):
