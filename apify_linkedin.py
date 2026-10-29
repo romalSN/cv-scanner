@@ -198,6 +198,7 @@ def gegevens(p):
         'certificeringen': [c for c in cert if c],
         'vaardigheden': [v for v in vaard if v][:40],
         'over': (p.get('about') or '')[:1500],
+        'kop': p.get('headline') or '',           # kopregel onder de naam (soms staat daar mail/telefoon)
         'locatie': loc.get('linkedinText', '') if isinstance(loc, dict) else str(loc),
         'email': '',          # e-mailzoeken staat uit; op LinkedIn zelf staat geen e-mail
         'telefoon': '',

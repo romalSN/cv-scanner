@@ -49,6 +49,7 @@ import csv, shutil, tempfile
 import cv_crawler as c
 os.environ['SERPER_API_KEY'] = 'nep'; os.environ.pop('TAVILY_API_KEY', None)
 PROF['jan-bakker-1']['about'] = 'Backend developer. Bel gerust: 06-12345678.'
+PROF['jan-bakker-1']['headline'] = 'Java developer | jan.bakker90 [at] gmail [dot] com'
 runs.clear(); peil['n'] = 0
 google = []
 def nep_google(q):
@@ -79,6 +80,7 @@ tel = [r['gevonden_waarde'] for r in rows if r['type'] == 'telefoon']
 mail = [r['gevonden_waarde'] for r in rows if r['type'] == 'email']
 check('telefoon uit about van het eigen profiel', any('612345678' in t.replace(' ', '') for t in tel), rows)
 check('geen telefoon-X-ray nodig (al gevonden)', not any('+31 6' in q for q in google), google)
-check('e-mail via X-ray, alleen van het eigen profiel', mail == ['jan.bakker@voorbeeldmail.nl'], mail)
+check('verstopte e-mail uit de kopregel van het eigen profiel', mail == ['jan.bakker90@gmail.com'], mail)
+check('geen mail-X-ray nodig (al gevonden)', not any('"@"' in q for q in google), google)
 shutil.rmtree(out, ignore_errors=True)
 print('APIFY OK' if not fout else f'{len(fout)} FOUT(EN)'); sys.exit(1 if fout else 0)

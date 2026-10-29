@@ -5147,6 +5147,42 @@ def google_search(query):
     return None, 'geen sleutel'
 
 
+_HAAK_AT = r'\s*(?:\[\s*(?:at|@|apenstaartje)\s*\]|\(\s*(?:at|@|apenstaartje)\s*\)|\{\s*(?:at|@)\s*\}|<\s*at\s*>|\uff20|@)\s*'
+_HAAK_DOT = r'\s*(?:\[\s*(?:dot|punt)\s*\]|\(\s*(?:dot|punt)\s*\)|\{\s*(?:dot|punt)\s*\}|<\s*dot\s*>|\.)\s*'
+_TLD = r'(?:com|nl|be|org|net|eu|de|io|info|nu|me|biz|uk|fr|es|it)'
+_VERSTOPT_HAAK = re.compile(rf'([\w+-]+(?:{_HAAK_DOT}[\w+-]+)*){_HAAK_AT}([a-z0-9-]+(?:{_HAAK_DOT}[a-z0-9-]+)*){_HAAK_DOT}({_TLD})\b', re.I)
+_WOORD_DOT = r'\s+(?:dot|punt)\s+|\.'
+_VERSTOPT_WOORD = re.compile(rf'([\w+-]+(?:(?:{_WOORD_DOT})[\w+-]+)*)\s+(?:at|apenstaartje)\s+([a-z0-9-]+)(?:{_WOORD_DOT})({_TLD})\b', re.I)
+
+
+# Alleen maildiensten (geen werkgevers zoals Ziggo/KPN): 'Team lead at Ziggo.nl' is geen e-mail.
+_ALLEEN_MAIL = {'gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.nl', 'live.nl', 'live.com', 'outlook.com',
+                'outlook.nl', 'msn.com', 'yahoo.com', 'yahoo.nl', 'icloud.com', 'me.com', 'proton.me', 'protonmail.com'}
+
+
+def ontsluier_email(text):
+    """Verstopte e-mail in een bio/Info-tekst leesbaar maken: 'jan.bakker [at] gmail [dot] com',
+    'jan.bakker(at)gmail.com', 'jan.bakker @ gmail . com', 'jan punt bakker apenstaartje gmail punt com'.
+    Alleen tussen haakjes/@ altijd; met los 'at' alleen bij een maildienst (gmail, hotmail, …) (anders is 'Sales at Bol.com' geen mail)."""
+    def haak(m):
+        if '@' in m.group(0) and not re.search(r'\s|\[|\(|\{|<|\uff20', m.group(0)):
+            return m.group(0)                       # al een gewone e-mail
+        loc = re.sub(_HAAK_DOT, '.', m.group(1), flags=re.I)
+        dom = re.sub(_HAAK_DOT, '.', m.group(2), flags=re.I)
+        return f' {loc}@{dom}.{m.group(3)} '
+    def woord(m):
+        dom = f'{m.group(2)}.{m.group(3)}'.lower()
+        m0 = m.group(0).lower()
+        if dom not in _ALLEEN_MAIL and 'apenstaartje' not in m0:
+            return m.group(0)
+        if not ('apenstaartje' in m0 or re.search(r'\s(?:dot|punt)\s', m0) or re.search(r'[._\d]', m.group(1))):
+            return m.group(0)                       # 'Consultant at Outlook.com': functie, geen e-mail
+        loc = re.sub(_WOORD_DOT, '.', m.group(1), flags=re.I)
+        return f' {loc}@{dom} '
+    text = _VERSTOPT_HAAK.sub(haak, text or '')
+    return _VERSTOPT_WOORD.sub(woord, text)
+
+
 def fix_nl_mobile(text):
     """Google laat het '+' soms weg: '31 6 30…' / '316…' -> '+31 6 …' (alleen voor zoektekst)."""
     return re.sub(r'(?<![\d+])31[\s.\-]*(?:\(0\))?[\s.\-]*6(?=[\s.\-]*\d)', '+31 6', text)
@@ -6092,12 +6128,12 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                             found.append(('linkedin', link))
                     # Gratis meepakken: e-mail/telefoon uit de Info-tekst, alleen van een eigen profiel.
                     if found and not have['email']:
-                        found += [('email', e) for e in emails_in(title + '\n' + content) if not GENERIC_EMAIL.match(e)]
+                        found += [('email', e) for e in emails_in(ontsluier_email(title + '\n' + content)) if not GENERIC_EMAIL.match(e)]
                     if found and not have['telefoon']:
                         found += [('telefoon', t) for t in phones_in(title + '\n' + content)]
                 if kind == 'contact':
                     if not have['email']:
-                        found += [('email', e) for e in emails_in(title + '\n' + content) if not GENERIC_EMAIL.match(e)]
+                        found += [('email', e) for e in emails_in(ontsluier_email(title + '\n' + content)) if not GENERIC_EMAIL.match(e)]
                     if not have['telefoon']:
                         found += [('telefoon', t) for t in phones_in(title + '\n' + content)]
                 for typ, value in found:
@@ -6268,7 +6304,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 page = own_profile_text((cache.get(ak) or {}).get('text', '')) if isinstance(cache.get(ak), dict) else ''
                 pn = normalized_name(page)
                 if page and len(words) >= 2 and words[0] in pn and words[-1] in pn:
-                    text = fix_nl_mobile(page)
+                    text = fix_nl_mobile(ontsluier_email(page))
                     mails = [e for e in emails_in(text) if not GENERIC_EMAIL.match(e)]
                     named = [e for e in mails if any(w in normalized_name(e.split('@')[0].replace('.', ' ').replace('_', ' '))
                                                      for w in words)]
@@ -6290,10 +6326,12 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     # Eerst gratis: e-mail/telefoon die de kandidaat zelf in zijn profiel (about/info) heeft gezet,
                     # uit het Apify-profiel. Alleen wat dan nog ontbreekt: Google X-ray (Serper/SerpApi) hieronder.
                     g = profielen.gegevens_van(cache, profielen.slug(zeker_link))
-                    eigen_tekst = fix_nl_mobile(' '.join([g.get('over', ''), g.get('email', ''), g.get('telefoon', '')]))
-                    named = [e for e in emails_in(eigen_tekst) if not GENERIC_EMAIL.match(e)
-                             and any(w in normalized_name(e.split('@')[0].replace('.', ' ').replace('_', ' ')) for w in words)]
-                    for e in named[:1]:
+                    eigen_tekst = fix_nl_mobile(ontsluier_email('\n'.join(
+                        [g.get('kop', ''), g.get('over', ''), g.get('email', ''), g.get('telefoon', '')])))
+                    mails = [e for e in emails_in(eigen_tekst) if not GENERIC_EMAIL.match(e)]
+                    named = [e for e in mails if any(w in normalized_name(e.split('@')[0].replace('.', ' ').replace('_', ' '))
+                                                     for w in words)]
+                    for e in (named or mails)[:1]:
                         if not have['email']:
                             candidates.setdefault(('email', e), dict(match=set(), hits=set(), url=zeker_link,
                                                   title='LinkedIn-profiel (about)', query='profiel'))['from_linkedin'] = zeker_link
@@ -6319,7 +6357,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     for r in cache.get(xk) or []:
                         if linkedin_slug(r.get('url', '')) != slug:
                             continue          # alleen het profiel dat zeker klopt
-                        text = fix_nl_mobile((r.get('title') or '') + '\n' + (r.get('content') or ''))
+                        text = fix_nl_mobile(ontsluier_email((r.get('title') or '') + '\n' + (r.get('content') or '')))
                         for e in emails_in(text):
                             if not have['email'] and not GENERIC_EMAIL.match(e):
                                 candidates.setdefault(('email', e), dict(match=set(), hits=set(), url=zeker_link,

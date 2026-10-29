@@ -804,6 +804,17 @@ _x4 = _doc_t(_bw1.replace('Codewerk', 'Bitbouw').replace('Datafabriek', 'Havenbo
 _r = c.safe_pair(_x4, _x2)
 check('meerdere voornamen: naam past maar loopbaan niet = niet samen', not _r[0], _r)
 
+# --- Contact uit LinkedIn-bio/Info-tekst: verstopte e-mail en losse telefoonschrijfwijzen ---
+for tekst, mail in [('jan.bakker [at] gmail [dot] com', 'jan.bakker@gmail.com'), ('jan.bakker(at)gmail.com', 'jan.bakker@gmail.com'),
+                    ('jan.bakker @ gmail . com', 'jan.bakker@gmail.com'), ('jan at gmail dot com', 'jan@gmail.com'),
+                    ('mail: jan punt bakker apenstaartje gmail punt com', 'jan.bakker@gmail.com'),
+                    ('📧 jan.bakker＠gmail.com', 'jan.bakker@gmail.com'), ('j_b (at) eigenbedrijf (dot) nl', 'j_b@eigenbedrijf.nl'),
+                    ('Sales at Bol.com', None), ('Team lead at Ziggo.nl', None), ('Consultant at Outlook.com team', None)]:
+    got = c.emails_in(c.ontsluier_email(tekst))
+    check(f'bio-mail: {tekst!r}', got == ([mail] if mail else []), got)
+for tekst in ['Bel 06-12345678', '📞 06 12 34 56 78', '+31 (0)6 1234 5678', 'mobiel 316 12345678', 'WhatsApp: 0612345678']:
+    check(f'bio-telefoon: {tekst!r}', c.phones_in(c.fix_nl_mobile(tekst)) == ['+31612345678'], c.phones_in(c.fix_nl_mobile(tekst)))
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)
