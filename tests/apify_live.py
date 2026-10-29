@@ -3,7 +3,8 @@ import collections, os, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import apify_linkedin as ap
-urls = [u.strip() for u in os.environ.get('BD_TEST_URLS', '').splitlines() if u.strip()]
+urls = [u.strip() for u in os.environ.get('BD_TEST_URLS', '').splitlines() if u.strip()][:int(os.environ.get('APIFY_TEST_N', '10'))]
+ap.BATCH = 10
 cache, t0, klaar = {}, time.time(), []
 _oud = ap.run_info
 def meet(rid):

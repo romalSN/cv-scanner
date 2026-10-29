@@ -17,7 +17,7 @@ from brightdata import slug, nette_url  # zelfde URL-normalisatie
 PREFIX = 'ap|'
 API = 'https://api.apify.com/v2'
 ACTOR_STANDAARD = 'harvestapi~linkedin-profile-scraper'
-BATCH = 100
+BATCH = int(os.environ.get('APIFY_BATCH', '100'))   # gratis account: max 10 profielen per run en 50 runs
 MAX_WACHT = 10 * 60
 PEIL = 10
 NEGEER_VELDEN = {'moreProfiles', 'photo', 'receivedRecommendations', 'givenRecommendations', 'featured',
@@ -116,7 +116,13 @@ def ophalen(urls, cache, log=print, slaap=time.sleep, nu=time.time):
                 continue
             gevraagd = open_.pop(rid)
             gezien = set()
-            for p in profielen if isinstance(profielen, list) else []:
+            lijst = profielen if isinstance(profielen, list) else []
+            if len(lijst) == 1 and set(lijst[0]) == {'error'} and 'limited to' in str(lijst[0]['error']):
+                log('APIFY: ' + str(lijst[0]['error'])[:160])
+                for u in gevraagd:
+                    cache.pop(PREFIX + slug(u), None)      # niet als 'niet gevonden' onthouden: later opnieuw
+                continue
+            for p in lijst:
                 q = p.get('query') or {}
                 s_ = slug(p.get('linkedinUrl') or '') or str(p.get('publicIdentifier') or q.get('publicIdentifier') or '').lower()
                 if not s_:
