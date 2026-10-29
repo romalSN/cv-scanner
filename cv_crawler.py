@@ -3483,6 +3483,20 @@ def safe_pair(a, b):
     # Andere namen en recruiter-adressen komen niet door deze uitzondering.
     if zelfde_naam_eigen_email(a, b):
         return True, False, 'zelfde volledige naam en persoonlijk e-mailadres: één kandidaat; nieuwste CV wint'
+    def _werkgever_tokens(d):
+        found = set()
+        raw = d['werkgevers'] if 'werkgevers' in (d.keys() if hasattr(d, 'keys') else d) else ''
+        for x in str(raw or '').split(' ; '):
+            stuk = normalized_name(x).split()
+            if stuk:
+                found.add(stuk[0])
+        for w, _b, _e in werk_periodes(d):
+            found.add(str(w).lstrip('*'))
+        for _b, _e, venster, *_rest in periodes_uit_cv(d['snippet'] or ''):
+            first = (venster.split() or [''])[0]
+            if len(first) >= 4 and first not in WERK_STOP and first not in NL_PLACES:
+                found.add(first)
+        return {x for x in found if len(x) >= 4}
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
     if blok:
@@ -3502,6 +3516,15 @@ def safe_pair(a, b):
                 return True, False, f'zelfde persoon met meerdere voornamen ({volledig}); zelfde mail, telefoon en loopbaan'
             return False, True, 'zelfde contactgegevens, maar andere achternaam'
         return False, False, ''
+    # Zelfde volle naam, geen twee verschillende persoonlijke mails, geen harde blokkade: één kandidaat.
+    # Excel toont het nieuwste CV; ontbrekende mail of telefoon komt van de andere CV.
+    # Heeft het nieuwste CV beide, dan worden oude mail en nummer niet gebruikt.
+    # Naamgenoot met 1 gedeelde werkgever en verder andere banen blijft apart.
+    if same_name and len(an.split()) >= 2 and not (ae and be and not (ae & be)):
+        oa, ob = _werkgever_tokens(a), _werkgever_tokens(b)
+        naamgenoot = bool(oa and ob and (oa - ob) and (ob - oa) and len(oa & ob) <= 1)
+        if not naamgenoot:
+            return True, False, 'zelfde volledige naam: één kandidaat; nieuwste CV wint, ontbrekende mail/telefoon aanvullen'
     # Beide cv's zonder bruikbare naam, maar hetzelfde persoonlijke mailadres ÉN telefoonnummer: één persoon.
     if not an and not bn and (ae & be) and (ap & bp):
         return True, False, 'geen naam, wel zelfde persoonlijk e-mailadres en telefoon'
@@ -5103,6 +5126,8 @@ def deduplicate(db, merge_file=None):
         employers = [d['employer'] for d in recent if d['employer']]
         distinct_shas = len({d['sha'] for d in group})
         def latest(field):
+            # Nieuwste CV wint per veld. Ontbreekt mail of telefoon daar, dan van een ouder CV.
+            # Heeft de nieuwste CV e-mail én telefoon, dan blijven oude contactgegevens ongebruikt.
             for item in recent:
                 values = json.loads(item[field])
                 if field == 'phones':

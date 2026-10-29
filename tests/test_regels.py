@@ -1204,6 +1204,11 @@ _versie_nieuw = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
                  'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
 check('zelfde naam + persoonlijke e-mail; echte nieuwe cv-versie wordt gekoppeld',
       c.safe_pair(_cvdoc(_versie_oud, 6811), _cvdoc(_versie_nieuw, 6812))[0])
+_adam_vol = ('Curriculum Vitae\nAdam El Hani\nadam.el.hani@example.com\n+31600000027\n'
+             'Werkervaring\n2020 - heden Consultant bij Voorbeeld BV\nOpleiding\nHBO Informatica')
+_adam_kaal = ('Curriculum Vitae\nAdam El Hani\nVaardigheden\nPython, SQL\nOpleiding\nHBO Informatica')
+check('zelfde naam; één CV met mail/nummer, de andere zonder = één kandidaat',
+      c.safe_pair(_cvdoc(_adam_vol, 6821), _cvdoc(_adam_kaal, 6822))[0])
 
 # Selectie van 1 hoofd-CV op werk, opleiding, daarna IT en stabiele tie-break.
 import types as _types
