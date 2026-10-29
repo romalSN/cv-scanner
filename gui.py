@@ -90,7 +90,6 @@ def load_key():
 
 SERPER_FILE = RUNTIME / 'serper_sleutel.txt'
 SERPAPI_FILE = RUNTIME / 'serpapi_sleutel.txt'
-BRIGHTDATA_FILE = RUNTIME / 'brightdata_sleutel.txt'
 APIFY_FILE = RUNTIME / 'apify_sleutel.txt'
 
 
@@ -101,16 +100,9 @@ def load_apify():
         return ''
 
 
-def load_brightdata():
-    try:
-        return BRIGHTDATA_FILE.read_text(encoding='utf-8').strip()
-    except OSError:
-        return ''
-
-
 def heeft_zoeksleutel():
-    """Online zoeken kan met Bright Data, Serper, SerpApi of Tavily (minstens één)."""
-    return any(f() for f in (load_apify, load_brightdata, load_serper, load_serpapi, load_key))
+    """Online zoeken kan met Apify, Serper, SerpApi of Tavily (minstens één)."""
+    return any(f() for f in (load_apify, load_serper, load_serpapi, load_key))
 
 
 def load_serpapi():
@@ -146,8 +138,7 @@ def save_key(key):
 
 
 SLEUTELBESTAND = 'cv-scanner-sleutels.txt'
-SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE, 'brightdata': BRIGHTDATA_FILE,
-                   'apify': APIFY_FILE}
+SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE, 'apify': APIFY_FILE}
 
 
 def _sleutelbestand_plekken():
@@ -351,7 +342,7 @@ class ScannerApp:
         menubar = tk.Menu(self.root)
         settings = tk.Menu(menubar, tearoff=0)
         settings.add_command(label='Tavily-sleutel instellen…', command=self.set_key)
-        settings.add_command(label='Zoeksleutels (Apify/Bright Data/Serper/SerpApi)…', command=self.set_serper)
+        settings.add_command(label='Zoeksleutels (Apify/Serper/SerpApi)…', command=self.set_serper)
         settings.add_separator()
         settings.add_command(label='Nu online aanvullen', command=self.online)
         settings.add_command(label='Online gevonden controleren…', command=self.open_online_check)
@@ -484,7 +475,7 @@ class ScannerApp:
         foot = tk.Frame(outer, bg=BACKGROUND)
         foot.pack(fill='x', pady=(8, 0))
         for text, cmd in (('Toegang en privacy', self.permissions), ('Tavily-sleutel instellen', self.set_key),
-                          ('Zoeksleutels (Apify/Bright Data/Serper/SerpApi)', self.set_serper),
+                          ('Zoeksleutels (Apify/Serper/SerpApi)', self.set_serper),
                           ('Nu online aanvullen', self.online)):
             link = tk.Label(foot, text=text, font=(FONT, 9, 'underline'), fg=MUTED, bg=BACKGROUND, cursor='hand2')
             link.pack(side='left', padx=(0, 16))
@@ -756,8 +747,6 @@ class ScannerApp:
                 env['SERPER_API_KEY'] = load_serper()
             if load_serpapi():
                 env['SERPAPI_API_KEY'] = load_serpapi()
-            if load_brightdata():
-                env['BRIGHTDATA_API_KEY'] = load_brightdata()
             if load_apify():
                 env['APIFY_TOKEN'] = load_apify()
             if online_key and online_key != '-':
@@ -1227,9 +1216,6 @@ class ScannerApp:
                 ('Apify (eerste keuze)', APIFY_FILE,
                  'Plak je Apify API-token (Settings > API & Integrations). Wordt als EERSTE gebruikt om openbare '
                  'LinkedIn-profielen op te halen, met werkervaring en jaren ($4 per 1.000, $5 gratis per maand).'),
-                ('Bright Data (reserve)', BRIGHTDATA_FILE,
-                 'Plak je Bright Data API-sleutel. Wordt als EERSTE gebruikt om openbare LinkedIn-profielen op te halen '
-                 '(werkgevers, functies, opleidingen, jaren).'),
                 ('Google-sleutel 1: Serper', SERPER_FILE,
                  'Plak je API-sleutel van serper.dev (2.500 gratis, eenmalig). Wordt EERST gebruikt.'),
                 ('Google-sleutel 2: SerpApi', SERPAPI_FILE,
@@ -1690,7 +1676,7 @@ def main():
         gezet = []
     ScannerApp(root)
     if gezet:
-        namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi', 'brightdata': 'Bright Data', 'apify': 'Apify'}
+        namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi', 'apify': 'Apify'}
         root.after(800, lambda: messagebox.showinfo(
             'Sleutels geïnstalleerd', 'Zoeksleutels geïnstalleerd: ' + ', '.join(namen[g] for g in gezet) +
             '.\nJe hoeft ze niet meer in te vullen.', parent=root))

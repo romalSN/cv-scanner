@@ -43,4 +43,42 @@ runs.clear(); ap.ophalen(['https://www.linkedin.com/in/jan-bakker-1'], cache, lo
 check('cache: niet opnieuw betalen', runs == [])
 import profielbron
 check('profielbron: Apify eerst', profielbron.BRONNEN[0] is ap and profielbron.sleutel())
+
+# --- In de online stap: Apify eerst; e-mail/telefoon uit 'about', daarna Google X-ray (Serper) voor wat ontbreekt ---
+import csv, shutil, tempfile
+import cv_crawler as c
+os.environ['SERPER_API_KEY'] = 'nep'; os.environ.pop('TAVILY_API_KEY', None)
+PROF['jan-bakker-1']['about'] = 'Backend developer. Bel gerust: 06-12345678.'
+runs.clear(); peil['n'] = 0
+google = []
+def nep_google(q):
+    google.append(q)
+    if 'site:linkedin.com/in' in q and '"Jan Bakker"' in q and 'mail' in q:
+        return ([{'url': 'https://nl.linkedin.com/in/jan-bakker-1', 'title': 'Jan Bakker - Java developer - LinkedIn',
+                  'content': 'Info: mail mij op jan.bakker@voorbeeldmail.nl'},
+                 {'url': 'https://nl.linkedin.com/in/jan-bakker-99', 'title': 'Jan Bakker - Kok - LinkedIn',
+                  'content': 'jan.bakker@anderepersoon.nl'}], 'Serper')
+    if 'Jan Bakker' in q:
+        return ([{'url': 'https://nl.linkedin.com/in/jan-bakker-1', 'title': 'Jan Bakker - Java developer - LinkedIn', 'content': 'Utrecht'}], 'Serper')
+    return ([], 'Serper')
+c.google_search = nep_google
+c.tavily_search = lambda *a, **k: (_ for _ in ()).throw(AssertionError('Tavily mag niet'))
+out = Path(tempfile.mkdtemp()); db = c.db_open(out)
+tekst_cv = 'Jan Bakker\nWerkervaring\n2016 - heden Java developer bij Datafabriek Noord, Utrecht\nOpleiding\n2008 - 2012 Hogeschool Utrecht'
+row = dict(path=str(out / 'cv.docx'), name='Jan Bakker', status='cv', snippet=c.normalized_snippet(tekst_cv),
+           employer='Datafabriek Noord', woonplaats='utrecht', opleidingen='Hogeschool Utrecht', stage='', sha='jb',
+           classifier_version=c.CLASSIFIER_VERSION)
+db.execute(f"insert into docs({','.join(row)}) values({','.join('?' * len(row))})", list(row.values())); db.commit()
+mensen = [dict(naam='Jan Bakker', persoon_id='p1', kandidaat_id='SNK-1', email='', telefoon='', linkedin='',
+               huidige_functie='Java developer', laatst_bekende_werkgever='Datafabriek Noord', woonplaats='utrecht')]
+c.online_suggestions(mensen, out, db=db, delay=0)
+rows = list(csv.DictReader(open(out / 'online_suggesties.csv', encoding='utf-8-sig'), delimiter=';'))
+best = next((r for r in rows if r['type'] == 'linkedin' and r['keuze'] == 'beste'), {})
+check('LinkedIn via Apify-profiel herkend', 'jan-bakker-1' in best.get('gevonden_waarde', ''), best)
+tel = [r['gevonden_waarde'] for r in rows if r['type'] == 'telefoon']
+mail = [r['gevonden_waarde'] for r in rows if r['type'] == 'email']
+check('telefoon uit about van het eigen profiel', any('612345678' in t.replace(' ', '') for t in tel), rows)
+check('geen telefoon-X-ray nodig (al gevonden)', not any('+31 6' in q for q in google), google)
+check('e-mail via X-ray, alleen van het eigen profiel', mail == ['jan.bakker@voorbeeldmail.nl'], mail)
+shutil.rmtree(out, ignore_errors=True)
 print('APIFY OK' if not fout else f'{len(fout)} FOUT(EN)'); sys.exit(1 if fout else 0)

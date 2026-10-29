@@ -1,0 +1,16 @@
+name: Apify live-test
+on:
+  workflow_dispatch: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Profielen ophalen via Apify (alleen tellingen in de log)
+        env:
+          BD_TEST_URLS: ${{ secrets.BD_TEST_URLS }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+        run: python tests/apify_live.py

@@ -12,7 +12,17 @@ import time
 import urllib.error
 import urllib.request
 
-from brightdata import slug, nette_url  # zelfde URL-normalisatie
+import re
+
+
+def slug(url):
+    m = re.search(r'linkedin\.com/in/([^/?#\s]+)', str(url or ''), re.I)
+    return m.group(1).lower().rstrip('/') if m else ''
+
+
+def nette_url(url):
+    s = slug(url)
+    return f'https://www.linkedin.com/in/{s}/' if s else ''
 
 PREFIX = 'ap|'
 API = 'https://api.apify.com/v2'

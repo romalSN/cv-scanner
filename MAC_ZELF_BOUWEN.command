@@ -59,7 +59,7 @@ echo "4/5 App bouwen…"
   --hidden-import gui --hidden-import cv_crawler --hidden-import reader_worker \
   --hidden-import rtf_reader --hidden-import pages_reader --hidden-import certifi \
   --collect-data certifi --collect-submodules pypdf \
-  --hidden-import ai_rechter --hidden-import brightdata --hidden-import apify_linkedin --hidden-import profielbron --collect-all llama_cpp \
+  --hidden-import ai_rechter --hidden-import apify_linkedin --hidden-import profielbron --collect-all llama_cpp \
   --osx-bundle-identifier nl.solutionnow.cvscanner start_app.py >>"$LOG" 2>&1 || stop "bouwen lukte niet"
 
 # 6. Gebouwde app testen
