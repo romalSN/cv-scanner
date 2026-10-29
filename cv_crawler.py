@@ -1522,6 +1522,53 @@ NIET_CV_TITELS = [
         r'(?:\b[\s:–-]+.{0,80})?$')),
 ]
 
+# Extra niet-cv-documenten. Alleen een documenttitel of een apart woord in
+# de BESTANDSNAAM is een afwijssignaal, geen functie of losse werkbeschrijving.
+NIET_CV_TITELS.extend([
+    ('recruiterprofiel', re.compile(
+        r'(?i)^(?:recruiter[\s_-]*(?:profiel|profile|briefing|beoordeling)|'
+        r'recruitment[\s_-]*(?:profiel|briefing|rapport)|'
+        r'kandidaten[\s_-]*(?:profiel|advies|beoordeling)|'
+        r'gewenst[\s_-]*profiel)(?:[\s:–-]+.{0,80})?$')),
+    ('verslag / rapport', re.compile(
+        r'(?i)^(?:stageverslag|eindverslag|voortgangsverslag|'
+        r'functioneringsverslag|evaluatieverslag|adviesverslag|'
+        r'klantverslag|weekverslag|maandverslag|werkverslag|'
+        r'gespreksverslag|reflectieverslag|onderzoeksverslag|auditverslag|'
+        r'verslag|rapport|rapportage|report|'
+        r'jaarverslag|jaaroverzicht|maandrapportage|'
+        r'voortgangsrapportage|projectrapportage|notulen|'
+        r'meeting[\s_-]*minutes)(?:[\s:–-]+.{0,80})?$')),
+    ('checklist / instructie', re.compile(
+        r'(?i)^(?:checklist|controlelijst|afvinklijst|'
+        r'draaiboek|praktijkhandleiding|quick[\s_-]*start[\s_-]*guide|'
+        r'gebruikersgids|gebruikersinstructie)(?:[\s:–-]+.{0,80})?$')),
+    ('salaris / facturatie', re.compile(
+        r'(?i)^(?:salaris|salarisoverzicht|salarisstrook|loonstrook|'
+        r'loonlijst|payroll[\s_-]*report|payslip|salary[\s_-]*report|'
+        r'factuur|facturen|facturatie|factuur(?:overzicht|specificatie)|'
+        r'facturering|invoice|invoices|billing[\s_-]*statement)'
+        r'(?:[\s:–-]+.{0,80})?$')),
+])
+
+# Herken ook "CV_Jan_2026_jaarverslag.pdf", maar NIET "Senior
+# Recruiter" of "Salarisadministrateur": die woorden zijn geen genre.
+NIET_CV_BESTANDSNAAM_WORDEN = re.compile(
+    r'(?i)(?:^|[\s_.-])(?:'
+    r'checklist|controlelijst|afvinklijst|'
+    r'handleiding|gebruikershandleiding|werkinstructie|gebruiksaanwijzing|'
+    r'jaarverslag|jaaroverzicht|stageverslag|eindverslag|'
+    r'projectverslag|projectrapport|projectrapportage|'
+    r'onderzoeksrapport|onderzoeksverslag|evaluatieverslag|'
+    r'voortgangsverslag|voortgangsrapportage|gespreksverslag|'
+    r'rapport|rapportage|verslag|'
+    r'salarisrapport|salarisoverzicht|salarisstrook|'
+    r'factuur|facturen|facturatie|facturering|invoice|invoices|'
+    r'kandidatenbeoordeling|stageovereenkomst|'
+    r'cv[\s_.-]*(?:sjabloon|template|voorbeeld)'
+    r')(?:$|[\s_.-])'
+)
+
 
 def niet_cv_documentsoort(text, filename=''):
     """Herken expliciet een ANDERE documentsoort aan de echte titel.
@@ -1541,6 +1588,10 @@ def niet_cv_documentsoort(text, filename=''):
     basis = re.sub(r'(?i)^(?:cv|c\.v\.)[\s_.-]+', '', basis)
     basis = basis.replace('_', ' ').replace('-', ' ')
     titels.append(basis.strip())
+    if NIET_CV_BESTANDSNAAM_WORDEN.search(basis):
+        # Bestandsnamen met een expliciete documentsoort hebben voorrang;
+        # een functienaam als 'Senior_Recruiter' geeft nooit deze match.
+        return 'niet-cv-bestandsnaam'
     for soort, pattern in NIET_CV_TITELS:
         if any(pattern.fullmatch(title.strip()) for title in titels if title.strip()):
             return soort
@@ -1786,7 +1837,8 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
     if loose:
         score = max(score, 75)
     ander_document = niet_cv_documentsoort(text, filename)
-    if is_template(text) or ander_document:
+    vier_banen = gelijktijdige_werkgevers(text) >= 4
+    if is_template(text) or ander_document or vier_banen:
         score = min(score, 20)
     if not name:
         score = min(score, 49)
@@ -1807,8 +1859,28 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
               ('; leeg sjabloon' if is_template(text) else '') +
               ('; vacature/inhuuraanvraag' if is_vacancy(text) else '') +
               (f'; niet-cv-document: {ander_document}' if ander_document else '') +
+              ('; minstens 4 gelijktijdige werkgevers' if vier_banen else '') +
               ('; CV-map: ja' if in_cv_map else ''))
     return max(0,min(100,score)), reason
+
+
+def gelijktijdige_werkgevers(text):
+    """Vier verschillende werkgevers met minimaal één volledig overlappend jaar.
+    Twee gelijktijdige banen / dezelfde startdag bewijzen NIET dat het geen cv is.
+    Alleen concrete 'bij X / at X' werkperiodes tellen mee.
+    """
+    jobs = werk_periodes({'snippet': normalized_snippet(text or '')})
+    jobs = {(w, start, end) for w, start, end in jobs if w and not w.startswith('*')}
+    if len({w for w, _, _ in jobs}) < 4:
+        return 0
+    # Vier verschillende werkgevers moeten écht tegelijk actief zijn;
+    # alleen vier verschillende functies in verschillende jaren is geen signaal.
+    years = {y for _, start, end in jobs for y in (start, end)}
+    for year in sorted(years):
+        active = {w for w, start, end in jobs if start <= year and end >= year + 1}
+        if len(active) >= 4:
+            return len(active)
+    return 0
 
 
 def decide_status(text, filename, name, emails, phones, links, score, threshold=70, source_path=''):
@@ -1816,6 +1888,14 @@ def decide_status(text, filename, name, emails, phones, links, score, threshold=
         return 'other'        # gescand/afbeelding en ook de OCR vond niets: geen cv (staat wel in Bestanden en status)
     if is_template(text) or is_vacancy(text) or niet_cv_documentsoort(text, filename):
         return 'other'
+    if gelijktijdige_werkgevers(text) >= 4:
+        # Een persoonlijke consultant kan meerdere parallelle opdrachten hebben.
+        # Bij een sterke CV-identiteit op review zetten; anders uitsluiten.
+        persoonlijk = (bool(name and reasonable_name(name))
+                       and any(CV_HEADER.fullmatch(line.strip()) for line in text.splitlines()[:7])
+                       and any(email_matches_name(name, e) and not GENERIC_EMAIL.match(e)
+                               for e in emails))
+        return 'review' if persoonlijk else 'other'
     # Vacatures/inhuuraanvragen zijn géén twijfel-cv's. Een expliciete
     # vacaturekop of bestandsnaam wordt ook zonder drie losse trefwoorden afgewezen.
     if re.match(r'(?i)^\s*(?:vacature|vacancy|inhuuraanvraag|job opening)\b',

@@ -744,6 +744,69 @@ for a, b, m, ta, tb, verwacht in C:
     _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
     check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
+# --- Titels, recruiterprofiel, gelijktijdige werkgevers ---
+for _filename in (
+    '12_Recruiter_profiel.docx', '09_Recruiter_Profile.pdf',
+    '06_CV_Checklist_werkervaring.rtf', 'jan_2026_handleiding.docx',
+    'CV_Naam_2024_jaarverslag.pdf', 'CV_salaris_2025.pdf',
+    'CV_factuur_2026.docx', 'CV_facturatie_2026.pdf',
+    'CV_rapportage_2023.rtf', 'CV_verslag_2026.docx',
+    'CV_voortgangsverslag_2026.docx', '01_projectrapportage.pdf',
+    'CV_stageverslag.docx', 'eindverslag.txt',
+    '2026_cv_salarisoverzicht.pdf', 'CV_controlelijst.pdf',
+    'CV_notulen.pdf', '24_Stageovereenkomst.rtf'
+):
+    _tekst = 'Werkervaring\nOpleiding\nVaardigheden\nVereisten voor de kandidaat.'
+    check('niet-cv-bestandsnaam: ' + _filename,
+          bool(c.niet_cv_documentsoort(_tekst, _filename)),
+          c.niet_cv_documentsoort(_tekst, _filename))
+    check('niet-cv wordt other: ' + _filename,
+          c.decide_status(_tekst, _filename, '', [], [], [], 90) == 'other')
+for _rol in ('Senior_Recruiter', 'Software_Engineer', 'Data_Analyst',
+             'Salarisadministrateur', 'Projectmanager', 'Consultant',
+             'IT_Architect', 'Recruitment_Consultant'):
+    _f = 'CV_Janneke_van_Buren_' + _rol + '.docx'
+    _cv = ('Curriculum Vitae\nJanneke van Buren\njanneke.vanburen@gmail.com\n'
+           'Opleiding\nHBO Informatica\nProfiel\nErvaren consultant')
+    check('functie in cv-bestandsnaam blijft toegestaan: '+_rol,
+          not c.niet_cv_documentsoort(_cv, _f)
+          and c.decide_status(_cv, _f, 'Janneke van Buren',
+                              ['janneke.vanburen@gmail.com'], [], [], 80) == 'cv')
+_profiel = ('Recruiter Profiel\nGewenste opleiding: HBO ICT\n'
+            'Minimaal 5 jaar ervaring vereist\nWerkervaring\nOpleiding\n'
+            'Vaardigheden\nMust have: Python en SQL')
+check('recruiterprofiel met cv-kopjes is other',
+      c.decide_status(_profiel, '12_Recruiter_profiel.docx', '', [], [], [], 90,
+                      source_path='/werk/CVs/Micha') == 'other')
+_vier = ('Overzicht functies\nWerkervaring\n'
+         '2020 - 2024 Developer bij Appstone\n'
+         '2020 - 2024 Analyst bij Bytefield\n'
+         '2020 - 2024 Manager bij Cloudhouse\n'
+         '2020 - 2024 Specialist bij Datahavens\n'
+         'Opleiding\nGewenst HBO niveau')
+check('vier werkgevers tegelijk worden herkend',
+      c.gelijktijdige_werkgevers(_vier) >= 4, c.gelijktijdige_werkgevers(_vier))
+check('vier gelijktijdige werkgevers zonder persoon = other',
+      c.decide_status(_vier, 'profielen.docx', '', [], [], [], 90) == 'other')
+_twee = ('Curriculum Vitae\nJanneke van Buren\njanneke.vanburen@gmail.com\n'
+         'Werkervaring\n2020 - 2024 Developer bij Appstone\n'
+         '2020 - 2024 Analyst bij Bytefield\n'
+         'Opleiding\n2018 - 2020 HBO ICT\nVaardigheden\nPython en SQL')
+check('twee parallelle banen van echte kandidaat blijven cv',
+      c.gelijktijdige_werkgevers(_twee) < 4
+      and c.decide_status(_twee, 'CV_Janneke_van_Buren.docx',
+                          'Janneke van Buren', ['janneke.vanburen@gmail.com'], [], [], 80) == 'cv')
+_freelance = ('Curriculum Vitae\nJanneke van Buren\n'
+              'janneke.vanburen@gmail.com\nWerkervaring\n'
+              '2020 - 2024 Consultant bij Appstone\n'
+              '2020 - 2024 Consultant bij Bytefield\n'
+              '2020 - 2024 Consultant bij Cloudhouse\n'
+              '2020 - 2024 Consultant bij Datahavens\n'
+              'Opleiding\nHBO ICT\nVaardigheden\nPython')
+check('vier parallelle opdrachten met sterk persoonlijk CV => review, nooit other',
+      c.decide_status(_freelance, 'CV_Janneke_van_Buren.docx',
+                      'Janneke van Buren', ['janneke.vanburen@gmail.com'], [], [], 90) == 'review')
+
 # --- Niet-CV documenten en template-leegte ---
 check('testpakketmap is geen CV-map',
       not c.cv_map_hint('/Download/CV_Scanner_Stresstest_Moeilijke_Bestanden/Projectplan.txt'))
