@@ -42,5 +42,5 @@ check('profieltekst "at bedrijf" voor het bewijs', 'Tester at Codewerk' in t and
 runs.clear(); ap.ophalen(['https://www.linkedin.com/in/jan-bakker-1'], cache, log=lambda m: None, slaap=lambda s: None)
 check('cache: niet opnieuw betalen', runs == [])
 import profielbron
-check('profielbron kiest Apify als er een token is', profielbron.NAAM == 'Apify' and profielbron.PREFIX == 'ap|')
+check('profielbron: Apify eerst', profielbron.BRONNEN[0] is ap and profielbron.sleutel())
 print('APIFY OK' if not fout else f'{len(fout)} FOUT(EN)'); sys.exit(1 if fout else 0)

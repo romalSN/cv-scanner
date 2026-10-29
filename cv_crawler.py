@@ -5684,8 +5684,14 @@ def bright_data_voorbereiden(people, todo, cache, cache_path, brightdata, max_pe
                 res = cache[ck]
             else:
                 res, via = google_search(f'site:linkedin.com/in "{full}" {term}'.strip())
+                tkey = os.environ.get('TAVILY_API_KEY', '').strip()
+                if res is None and tkey:
+                    try:
+                        res = tavily_search(f'"{full}" {term}'.strip(), tkey, include_domains=['linkedin.com'], max_results=20)
+                    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
+                        res = None
             if res is None:
-                print('BRIGHT DATA: geen Google-tegoed meer om LinkedIn-adressen te vinden; rest volgende keer.', flush=True)
+                print('PROFIELEN: geen zoektegoed meer (Serper, SerpApi, Tavily) om LinkedIn-adressen te vinden; rest volgende keer.', flush=True)
                 break
             if ck not in cache:
                 gezocht += 1
@@ -5724,7 +5730,7 @@ def linkedin_gegevens_rijen(people, out):
         if not link and p.get('online_linkedin'):          # alleen zekere online profielen staan hier
             link, bron = p.get('online_linkedin') or '', 'online (zeker)'
         s = brightdata.slug(link)
-        g = brightdata.gegevens(cache.get(brightdata.PREFIX + s)) if s else {}
+        g = brightdata.gegevens_van(cache, s) if s else {}
         if not g:
             continue
         rijen.append(dict(kandidaat_id=p.get('kandidaat_id', ''), naam=p.get('naam', ''), linkedin=link, linkedin_bron=bron,
@@ -5977,14 +5983,24 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         search_failed = True
                         continue
                 if results is None:
-                    # Tavily op: zelfde zoekvraag via Google (1 Serper/SerpApi-credit).
+                    # Zoeken via Google (Serper, daarna SerpApi). Op? Dan als laatste Tavily (als er een sleutel is).
                     res, via = google_search(f'site:linkedin.com/in {query}' if kind == 'linkedin' else query)
+                    if res is None and key and bd_aan:
+                        try:
+                            res = tavily_search(query, key, include_domains=domains, exclude_domains=excluded,
+                                                max_results=20 if kind == 'linkedin' else 8, raw=(kind == 'linkedin'))
+                            used += 1
+                            via = 'Tavily'
+                        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError) as exc:
+                            print('ONLINE: ook Tavily lukte niet (' + str(exc)[:80] + ').', flush=True)
+                            res = None
                     if res is None:
-                        print('ONLINE: ook het Google-tegoed is op (of geen Google-sleutel); rest volgende keer.', flush=True)
+                        print('ONLINE: geen zoektegoed meer (Serper, SerpApi en Tavily); rest volgende keer.', flush=True)
                         stop = True
                         break
-                    google_used += 1
-                    google_via[via] = google_via.get(via, 0) + 1
+                    if via != 'Tavily':
+                        google_used += 1
+                        google_via[via] = google_via.get(via, 0) + 1
                     results = res
                 cache['q|' + cache_key] = query
                 cache[cache_key] = [dict({k: r.get(k, '') for k in ('url', 'title', 'content')},
@@ -5998,9 +6014,9 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 content = result.get('content', '') or ''
                 if bd_aan and kind == 'linkedin':
                     # Volledig openbaar profiel van Bright Data (werkgevers, functies, jaren, opleidingen, about).
-                    bdp = cache.get(brightdata.PREFIX + brightdata.slug(url))
-                    if bdp and not bdp.get('fout'):
-                        content = content + '\n' + brightdata.tekst(bdp)
+                    ptekst = brightdata.tekst_van(cache, brightdata.slug(url))
+                    if ptekst:
+                        content = content + '\n' + ptekst
                 if result.get('raw'):
                     content = content + '\n' + own_profile_text(result['raw'])
                 context = normalized_name(title + ' ' + content + ' ' + url.replace('-', ' '))
@@ -6274,7 +6290,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     # Met Bright Data: alleen contact dat rechtstreeks op het (zekere) profiel staat; geen extra
                     # Google-zoekopdrachten.
                     xqueries = []
-                    g = brightdata.gegevens(cache.get(brightdata.PREFIX + brightdata.slug(zeker_link)) or {})
+                    g = brightdata.gegevens_van(cache, brightdata.slug(zeker_link))
                     for typ_, val in (('email', g.get('email', '')), ('telefoon', g.get('telefoon', ''))):
                         if val and not have[typ_] and not (typ_ == 'email' and GENERIC_EMAIL.match(val)):
                             if typ_ == 'telefoon':
