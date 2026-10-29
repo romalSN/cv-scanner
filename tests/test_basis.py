@@ -21,6 +21,10 @@ with tempfile.TemporaryDirectory() as out:
     assert 'CV GEVONDEN' in proc.stdout
     assert list(Path(out).glob('*.xlsx'))
     assert (Path(out) / 'kandidaten.json').exists()
+    duplicate_log = Path(out) / 'dubbele_kandidaten_controle.csv'
+    assert duplicate_log.is_file()
+    assert 'kandidaat_id_1' in duplicate_log.read_text(encoding='utf-8-sig')
+
     # GUI toont nooit een oude Excel als een nieuwe export mislukt.
     import json
     import gui

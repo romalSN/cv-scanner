@@ -5719,6 +5719,79 @@ def naamloze_cv_rijen(docs):
     return result
 
 
+def dubbele_kandidaten_controle(people, docs, docs_to_id, out):
+    """Onderzoek gelijke namen met verschillende kandidaatnummers.
+
+    Bewaart per paar WAAROM het apart gebleven is. Verandert geen kandidaat-IDs,
+    ontdubbelingsbesluiten, bronbestanden of persoonlijke informatie online.
+    """
+    cols = ['naam', 'kandidaat_id_1', 'kandidaat_id_2',
+            'hoofd_cv_1', 'hoofd_cv_2', 'gedeeld_persoonlijk_email',
+            'oorzaak', 'advies']
+    by_name = collections.defaultdict(list)
+    by_person = collections.defaultdict(list)
+    for d in docs:
+        pid = docs_to_id.get(d['path'])
+        if pid:
+            by_person[pid].append(d)
+    for p in people:
+        normalized = normalized_name(p.get('naam') or '')
+        if normalized:
+            by_name[normalized].append(p)
+    rows = []
+    for members in by_name.values():
+        if len(members) < 2:
+            continue
+        members = sorted(members, key=lambda p: p.get('kandidaat_id') or '')
+        for i, one in enumerate(members[:20]):
+            for two in members[i + 1:20]:
+                left = by_person.get(one['persoon_id'], [])
+                right = by_person.get(two['persoon_id'], [])
+                own_mail, auto_match, conflicts, doubts = False, False, set(), set()
+                for d1 in left[:12]:
+                    for d2 in right[:12]:
+                        if zelfde_naam_eigen_email(d1, d2):
+                            own_mail = True
+                        auto, review, reason = safe_pair(d1, d2)
+                        auto_match |= bool(auto)
+                        if review and reason:
+                            doubts.add(reason)
+                        conflict = harde_blokkade(d1, d2)
+                        if conflict:
+                            conflicts.add(conflict)
+                if own_mail:
+                    cause = 'Zelfde volledige naam én persoonlijke e-mail, maar niet gekoppeld'
+                    advice = 'FOUT: controleer groepsblokkade en vaste IDs'
+                elif auto_match:
+                    cause = 'Cv-paar had automatisch moeten koppelen; groep bleef gescheiden'
+                    advice = 'Groepsconflict: ' + ', '.join(sorted(conflicts)[:2]) if conflicts else 'Controleer groepsblokkade'
+                elif conflicts:
+                    cause = 'Tegenstrijdige informatie: ' + ', '.join(sorted(conflicts)[:2])
+                    advice = 'Niet automatisch samenvoegen; handmatige controle'
+                elif doubts:
+                    cause = 'Onzeker: ' + '; '.join(sorted(doubts)[:2])
+                    advice = 'Handmatige identiteitscontrole'
+                else:
+                    cause = 'Alleen dezelfde naam, zonder voldoende gedeeld identiteitsbewijs'
+                    advice = 'Controleer e-mail, telefoon en echte loopbaan'
+                rows.append(dict(
+                    naam=one['naam'],
+                    kandidaat_id_1=one.get('kandidaat_id') or '',
+                    kandidaat_id_2=two.get('kandidaat_id') or '',
+                    hoofd_cv_1=one.get('cv_pad') or '',
+                    hoofd_cv_2=two.get('cv_pad') or '',
+                    gedeeld_persoonlijk_email='ja' if own_mail else 'nee',
+                    oorzaak=cause, advies=advice))
+    save_csv(out / 'dubbele_kandidaten_controle.csv', rows, cols)
+    if rows:
+        n = sum(len(members) > 1 for members in by_name.values())
+        print(f'DUBBELE KANDIDATEN: {n} gelijke namen met meerdere nummers; '
+              f'{len(rows)} paren in dubbele_kandidaten_controle.csv', flush=True)
+    else:
+        print('DUBBELE KANDIDATEN: geen gelijke volledige namen met aparte nummers.', flush=True)
+    return rows
+
+
 def build_exports(db, out):
     # Vorige export nooit als nieuw rapporteren wanneer opbouwen mislukt.
     # De XLSX zelf mag voor herstel blijven staan; alleen de geldigheidsstempel vervalt.
@@ -5728,6 +5801,7 @@ def build_exports(db, out):
     if not merges.exists():
         save_csv(merges, [], ['persoon_id_1','persoon_id_2','toelichting'])
     docs, people, docs_to_id, reviews = deduplicate(db, merges)
+    dubbele_kandidaten_controle(people, docs, docs_to_id, out)
     apply_corrections(people,out)
     cv_files = collect_cvs(out, people, docs, docs_to_id, db=db)
     for p in people:
