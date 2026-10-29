@@ -4481,6 +4481,10 @@ def _opl_niveau(venster):
         return 'master'
     if re.search(r' (?:hbo|bachelor|bsc|ba|b tech|btech|propedeuse) ', v):
         return 'bachelor'
+    # 'WO Informatica' is een universitaire studie, maar het woord 'WO'
+    # zegt op zichzelf niet of er een bachelor of master is behaald.
+    if re.search(r' wo ', v):
+        return 'wo'
     if re.search(r' mbo ', v):
         return 'mbo'
     return ''

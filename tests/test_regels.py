@@ -1119,19 +1119,25 @@ for _i, _cv in enumerate((_old, _new)):
                       json.dumps(_em), '[]', '[]', 1000 + _i, 1000 + _i,
                       '', '', '', c.opleidingen_from(_cv), '', 'nl'))
 _db_main.commit()
-# Verificatie van één unieke persoon, gekozen hoofd-CV en blijvend kandidaatnummer.
-_dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(
-    _db_main, _db_main_out / 'samenvoegen_correcties.csv')
-check('Daan: twee CV-versies leveren slechts één kandidaat op',
-      len(_dm_people) == 1, [(p['naam'], p['cv_id']) for p in _dm_people])
-check('Daan: nieuwste werkdata wint ook bij andere opleiding',
-      len(_dm_people) == 1 and _dm_people[0]['cv_sha'] == 'b' * 64,
-      [(p['cv_sha'], p['kandidaat_id']) for p in _dm_people])
-_dm_id = _dm_people[0]['kandidaat_id'] if _dm_people else ''
-_dm_people2 = c.deduplicate(_db_main, _db_main_out / 'samenvoegen_correcties.csv')[1]
-check('Daan: kandidaatnummer blijft vast na volgende export',
-      len(_dm_people2) == 1 and _dm_people2[0]['kandidaat_id'] == _dm_id,
-      ([_dm_id], [p['kandidaat_id'] for p in _dm_people2]))
+# Test uitsluitend de ontdubbeling en kandidaat-ID's, niet de onafhankelijke
+# taal-, verblijf- en woonplaatsfilter. Die heeft eigen uitgebreide tests.
+_filter_orig = c.filter_kandidaat
+try:
+    c.filter_kandidaat = lambda *args, **kwargs: ('ok', '')
+    _dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(
+        _db_main, _db_main_out / 'samenvoegen_correcties.csv')
+    check('Daan: twee CV-versies leveren slechts één kandidaat op',
+          len(_dm_people) == 1, (len(_dm_docs), [(p['naam'], p['cv_id']) for p in _dm_people]))
+    check('Daan: nieuwste werkdata wint ook bij andere opleiding',
+          len(_dm_people) == 1 and _dm_people[0]['cv_sha'] == 'b' * 64,
+          [(p['cv_sha'], p['kandidaat_id']) for p in _dm_people])
+    _dm_id = _dm_people[0]['kandidaat_id'] if _dm_people else ''
+    _dm_people2 = c.deduplicate(_db_main, _db_main_out / 'samenvoegen_correcties.csv')[1]
+    check('Daan: kandidaatnummer blijft vast na volgende export',
+          len(_dm_people2) == 1 and _dm_people2[0]['kandidaat_id'] == _dm_id,
+          ([_dm_id], [p['kandidaat_id'] for p in _dm_people2]))
+finally:
+    c.filter_kandidaat = _filter_orig
 
 # --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
 W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"
@@ -1169,7 +1175,7 @@ _V1 = ('Curriculum Vitae\nMohamed Vos\nmohamed.vos47@gmail.com\n06 58562055\nWer
 _V2 = ('Curriculum Vitae\nMohamed Vos\nmohamed.vos47@gmail.com\n06 44593161\nWerkervaring\n2017 - heden Frontend developer bij '
        'Spaarnedata. Dashboards.\n2012 - 2017 Projectleider bij Spaarnedata. Migratie.\nOpleiding\n2008 - 2012 HBO Informatica, Avans')
 _r = c.safe_pair(_cvdoc(_V1, 400), _cvdoc(_V2, 401))
-check('dubbel: zelfde naam+mail, maar aparte opleiding zonder bewijs = apart, geen twijfel', not _r[0] and not _r[1], _r)
+check('dubbel: zelfde naam+persoonlijke mail, nieuwe CV-versie bij afwijkende opleiding = samen', _r[0] and not _r[1], _r)
 _V3 = _V2.replace('2008 - 2012 HBO Informatica, Avans', '2001 - 2005 HBO Informatica, Saxion').replace('06 44593161', '06 58562055')
 check('dubbel: zelfde naam+mail+opleiding (nieuwere versie) = samen', c.safe_pair(_cvdoc(_V1, 402), _cvdoc(_V3, 403))[0])
 # Oud cv noemt alleen de bachelor (2006-2010), nieuw cv alleen de master (2010-2012): gewoon samen.
