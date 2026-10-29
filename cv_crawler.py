@@ -4192,6 +4192,10 @@ def opleiding_periodes(d):
         kort = re.split(r'\b(?:woonplaats|adres|werkervaring|experience|vaardigheden|skills|'
                         r'telefoon|mobiel|linkedin|huidige functie)\b',
                         ' '.join(words[:16]), maxsplit=1)[0]
+        # Een periodevenster bevat soms ook de VOLGENDE studieperiode. Stop vóór
+        # het volgende jaartal, zodat 'Hogeschool Utrecht 2010' niet als schoolnaam
+        # wordt opgeslagen wanneer het tweede diploma in 2010 begint.
+        kort = re.split(r'\b(?:19|20)\d{2}\b', kort, maxsplit=1)[0].strip()
         richting = next((v for v in OPLEIDING_RICHTINGEN if re.search(r'\b' + re.escape(v) + r'\b', kort)), '')
         m = re.search(r'\b(?:hogeschool|hogescholen|universiteit|university|college|roc)\b', kort)
         school = ''

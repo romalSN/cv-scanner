@@ -60,7 +60,10 @@ assert c.safe_pair(a, g)[0], "sterke overeenkomst zonder gedeeld contact moet ku
 dubbel = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
             "2004 - 2008 HBO Informatica Hogeschool Utrecht\n"
             "2010 - 2014 HBO Informatica Hogeschool Utrecht")
-assert len(c.opleiding_periodes(dubbel)) >= 2, c.opleiding_periodes(dubbel)
+studies = c.opleiding_periodes(dubbel)
+assert len(studies) == 2, studies
+assert [x[2] for x in studies] == ['hogeschool utrecht', 'hogeschool utrecht'], studies
+assert [(x[4], x[5]) for x in studies] == [(2004, 2008), (2010, 2014)], studies
 assert not c.opleiding_botst(dubbel, a), "twee opleidingen in één cv is geen conflict"
 assert c.opleidingen_verzoend(a, d, [a, d, dubbel]), "bewijs van beide studies verzoent drie cv's"
 assert not c.opleidingen_verzoend(a, d, [a, d]), "zonder dat bewijs moeten twee cv's apart blijven"

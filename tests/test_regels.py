@@ -912,13 +912,13 @@ for t, want in L + [("Profiel\nIk ben Gedreven En Flexibel.\n" + W, '')]:
     g = c.guess_name(t, 'cv', c.emails_in(t))
     check(f'naam uit opmaak: {t.splitlines()[0][:30]!r}', c.normalized_name(g) == c.normalized_name(want), g)
 
-# Zelfde naam + zelfde (gedeeld/oud) mailadres, maar opleiding in heel andere jaren: niet blind samen (twijfel).
+# Zelfde naam en een oud/gedeeld mailadres, maar per cv één andere HBO-opleiding: apart, geen twijfel.
 _V1 = ('Curriculum Vitae\nMohamed Vos\nmohamed.vos47@gmail.com\n06 58562055\nWerkervaring\n2007 - heden Functioneel beheerder '
        'bij Spaarnedata. Testautomatisering.\n2005 - 2007 Frontend developer bij Testlab. Beheer.\nOpleiding\n2001 - 2005 HBO Informatica, Saxion')
 _V2 = ('Curriculum Vitae\nMohamed Vos\nmohamed.vos47@gmail.com\n06 44593161\nWerkervaring\n2017 - heden Frontend developer bij '
        'Spaarnedata. Dashboards.\n2012 - 2017 Projectleider bij Spaarnedata. Migratie.\nOpleiding\n2008 - 2012 HBO Informatica, Avans')
 _r = c.safe_pair(_cvdoc(_V1, 400), _cvdoc(_V2, 401))
-check('dubbel: zelfde naam+mail, opleiding in andere jaren = twijfel, niet samen', not _r[0] and _r[1], _r)
+check('dubbel: zelfde naam+mail, maar aparte opleiding zonder bewijs = apart, geen twijfel', not _r[0] and not _r[1], _r)
 _V3 = _V2.replace('2008 - 2012 HBO Informatica, Avans', '2001 - 2005 HBO Informatica, Saxion').replace('06 44593161', '06 58562055')
 check('dubbel: zelfde naam+mail+opleiding (nieuwere versie) = samen', c.safe_pair(_cvdoc(_V1, 402), _cvdoc(_V3, 403))[0])
 # Oud cv noemt alleen de bachelor (2006-2010), nieuw cv alleen de master (2010-2012): gewoon samen.
