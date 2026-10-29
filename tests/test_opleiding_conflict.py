@@ -1,5 +1,5 @@
-"""Opleidingsconflict: nooit automatisch samen en nooit een dubbel-twijfelmelding.
-Echte naamgenoten, dezelfde privé-mail en telefoon mogen een bewezen botsing niet opheffen.
+"""Bij één volledige persoonsnaam en persoonlijk e-mailadres: dezelfde kandidaat.
+Zonder overeenkomend persoonlijk e-mailadres blijft een opleidingsconflict een blokkade.
 """
 import json
 import os
@@ -22,22 +22,22 @@ def cv(name, mail, telefoon, opleiding, extra=""):
                 woonplaats="")
 
 
-def apart(label, x, y):
+def samen_of_apart(label, x, y, samen=True):
     assert c.opleiding_botst(x, y), f"{label}: opleidingsbotsing niet gezien"
     assert c.harde_blokkade(x, y), f"{label}: geen blokkade"
     auto, review, reason = c.safe_pair(x, y)
-    assert not auto and not review, f"{label}: auto={auto}, review={review}: {reason}"
+    assert auto == samen and (not review), f"{label}: auto={auto}, review={review}: {reason}"
 
 
 a = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
        "2010 - 2014 HBO Informatica Hogeschool Utrecht")
 b = cv("Jan de Vries", "jan.devries@gmail.com", "+31699998888",
        "2010 - 2014 HBO Informatica Hogeschool van Amsterdam")
-apart("zelfde naam/mail; andere schoolplaats", a, b)
+samen_of_apart("zelfde naam/mail; andere schoolplaats", a, b)
 
 d = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
        "2004 - 2008 HBO Informatica Hogeschool Utrecht")
-apart("een bachelor per cv, maar totaal andere studiejaren", a, d)
+samen_of_apart("een bachelor per cv, maar totaal andere studiejaren", a, d)
 
 e = cv("Jan de Vries", "jan.devries@gmail.com", "+31622223333",
        "2014 - 2016 Master Data Science Universiteit Utrecht")
@@ -71,6 +71,9 @@ assert not c.opleidingen_verzoend(a, d, [a, d]), "zonder dat bewijs moeten twee 
 # Andere studierichting, elk cv één HBO, ook bij gedeelde naam en persoonlijk contact.
 anders = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
             "2010 - 2014 HBO Bedrijfskunde Hogeschool Utrecht")
-apart("zelfde jaren, andere HBO-opleiding", a, anders)
+samen_of_apart("zelfde jaren, andere HBO-opleiding", a, anders)
+anders_mail = cv("Jan de Vries", "jan.anders@gmail.com", "+31611112222",
+                 "2010 - 2014 HBO Bedrijfskunde Hogeschool Utrecht")
+samen_of_apart("geen gedeeld eigen e-mailadres en tegenstrijdige studie", a, anders_mail, False)
 # Niet dezelfde studierichting afleiden uit een verhuizing: test hierboven blijft gelden.
 print("OPLEIDINGSBOTSING OK")

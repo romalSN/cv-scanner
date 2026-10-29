@@ -1070,8 +1070,14 @@ _daan_b = ('Curriculum Vitae\nDaan Vijverman\nE-mail: daan.vijverman@example.com
 _da, _db = _cvdoc(_daan_a, 6801), _cvdoc(_daan_b, 6802)
 check('Daan: zelfde naam/mail maar tegenstrijdige studie in dezelfde jaren',
       c.opleiding_botst(_da, _db), (c.opleiding_periodes(_da), c.opleiding_periodes(_db)))
-check('Daan: niet stilzwijgend onder hetzelfde kandidaatnummer samenvoegen',
-      not c.safe_pair(_da, _db)[0], c.safe_pair(_da, _db))
+check('Daan: dezelfde volledige naam en eigen e-mail = één kandidaat, ondanks botsende studies',
+      c.safe_pair(_da, _db)[0] and c.zelfde_naam_eigen_email(_da, _db), c.safe_pair(_da, _db))
+check('Daan: niet automatisch samen bij gedeeld algemeen bureauadres',
+      not c.zelfde_naam_eigen_email(dict(_da, emails=json.dumps(['info@voorbeeld.nl'])),
+                                    dict(_db, emails=json.dumps(['info@voorbeeld.nl']))))
+check('Daan: twee dezelfde namen met verschillende e-mail en botsende studie blijven apart',
+      not c.safe_pair(dict(_da, emails=json.dumps(['daan.a@gmail.com'])),
+                      dict(_db, emails=json.dumps(['daan.b@gmail.com'])))[0])
 # Een echte nieuwe versie met dezelfde naam, hetzelfde e-mailadres en
 # aanvullend werk: één kandidaat. De oudste versie blijft wel beschikbaar.
 _versie_oud = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
@@ -1083,6 +1089,49 @@ _versie_nieuw = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
                  'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
 check('zelfde naam + persoonlijke e-mail; echte nieuwe cv-versie wordt gekoppeld',
       c.safe_pair(_cvdoc(_versie_oud, 6811), _cvdoc(_versie_nieuw, 6812))[0])
+
+# Selectie van 1 hoofd-CV op werk, opleiding, daarna IT en stabiele tie-break.
+import types as _types
+def _docrank(text, n, sha, when=1000):
+    d = dict(_cvdoc(text, n))
+    d.update(mtime_ns=when, received_ns=when, year='', role='',
+             employer='', sha=sha, status='cv')
+    return d
+# Hoofdversie-test is end-to-end via deduplicate() hieronder, met echte sqlite docs.
+_db_main_out = Path(tempfile.mkdtemp())
+_db_main = c.db_open(_db_main_out)
+_old = ('Curriculum Vitae\nDaan Vijverman\ndaan.vijverman@example.com\n'
+        'Werkervaring\n2018 - 2022 Java ontwikkelaar bij Netwerkhof\n'
+        'Opleiding\n2013 - 2017 WO Informatica Universiteit Westberg')
+_new = ('Curriculum Vitae\nDaan Vijverman\ndaan.vijverman@example.com\n'
+        'Werkervaring\n2022 - 2025 Arts bij Fictief Medisch Centrum\n'
+        'Opleiding\n2013 - 2017 WO Geneeskunde Universiteit Zuidzicht')
+for _i, _cv in enumerate((_old, _new)):
+    _sha = ('a' if _i == 0 else 'b') * 64
+    _em = c.emails_in(_cv)
+    _db_main.execute("INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+                     "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+                     "opleiding,opleidingen,woonplaats,taal) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (str(_db_main_out / ('daan_' + str(_i) + '.txt')), _sha,
+                      'Daan Vijverman', 1, 'cv', c.CLASSIFIER_VERSION,
+                      c.normalized_snippet(_cv), json.dumps(c.signature(_cv)),
+                      json.dumps(_em), '[]', '[]', 1000 + _i, 1000 + _i,
+                      '', '', '', '', c.opleidingen_from(_cv), '', 'nl'))
+_db_main.commit()
+# Verificatie van één unieke persoon, gekozen hoofd-CV en blijvend kandidaatnummer.
+_dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(
+    _db_main, _db_main_out / 'samenvoegen_correcties.csv')
+check('Daan: twee CV-versies leveren slechts één kandidaat op',
+      len(_dm_people) == 1, [(p['naam'], p['cv_id']) for p in _dm_people])
+check('Daan: nieuwste werkdata wint ook bij andere opleiding',
+      len(_dm_people) == 1 and _dm_people[0]['cv_sha'] == 'b' * 64,
+      [(p['cv_sha'], p['kandidaat_id']) for p in _dm_people])
+_dm_id = _dm_people[0]['kandidaat_id'] if _dm_people else ''
+_dm_people2 = c.deduplicate(_db_main, _db_main_out / 'samenvoegen_correcties.csv')[1]
+check('Daan: kandidaatnummer blijft vast na volgende export',
+      len(_dm_people2) == 1 and _dm_people2[0]['kandidaat_id'] == _dm_id,
+      ([_dm_id], [p['kandidaat_id'] for p in _dm_people2]))
 
 # --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
 W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"

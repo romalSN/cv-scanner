@@ -95,9 +95,10 @@ def paren(n=300, seed=7):
             q['banen'][-1][3] = p['banen'][-1][3]
             q['banen'][-1][0] = p['banen'][-1][0] + 4
             uit.append(('anders', 'naamgenoot zelfde bedrijf andere jaren', tekst(p), tekst(q)))
-        elif soort == 13:  # zelfde naam en mail (gezamenlijk/oud adres) maar compleet andere loopbaan
+        elif soort == 13:  # zelfde naam en eigen mail: volgens gebruikersregel één kandidaat
             q = persoon(r); q.update(voor=p['voor'], achter=p['achter'])
-            uit.append(('anders', 'zelfde naam+mail, andere loopbaan', tekst(p), tekst(q, mail=p['mail'])))
+            uit.append(('zelfde', 'zelfde naam+persoonlijke mail, nieuwere cv-versie',
+                        tekst(p), tekst(q, mail=p['mail'])))
         elif soort == 14:  # Engelse versie + voorletter (moeilijk)
             uit.append(('zelfde', 'engels + voorletter', tekst(p), tekst(p, engels=True, naam=f"{p['voor'][0]}. {p['achter']}")))
         elif soort == 16:  # verhuisd/nieuw: ander mailadres én ander nummer, nieuwste baan erbij

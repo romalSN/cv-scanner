@@ -3300,6 +3300,26 @@ def naam_verzoenen(naam_a, naam_b, teksten):
     return ''
 
 
+def zelfde_naam_eigen_email(a, b):
+    """Eén kandidaat als de volledige naam exact gelijk is en in beide CV's
+    eenzelfde persoonlijk e-mailadres staat. Geen recruiter-, team- of
+    generiek adres. Deze expliciete gebruikersregel weegt bij meerdere
+    CV-versies zwaarder dan een veranderde opleiding of baan.
+    """
+    name_a, name_b = normalized_name(a['name']), normalized_name(b['name'])
+    if not name_a or name_a != name_b or len(name_a.split()) < 2:
+        return False
+    try:
+        shared = set(json.loads(a['emails'] or '[]')) & set(json.loads(b['emails'] or '[]'))
+    except (ValueError, TypeError):
+        return False
+    return any(
+        e not in BUREAU_CONTACT and not GENERIC_EMAIL.match(e)
+        and email_matches_name(a['name'], e)
+        for e in shared
+    )
+
+
 def harde_blokkade(a, b):
     """Redenen waarom twee cv's NOOIT dezelfde persoon kunnen zijn (ook niet als de AI 'zelfde' zegt)."""
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
@@ -3351,6 +3371,11 @@ def safe_pair(a, b):
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
+    # Zelfde persoonsnaam en hetzelfde eigen e-mailadres => één kandidaat,
+    # ook als oudere en nieuwe CV verschillende studies of werkgevers noemen.
+    # Andere namen en recruiter-adressen komen niet door deze uitzondering.
+    if zelfde_naam_eigen_email(a, b):
+        return True, False, 'zelfde volledige naam en persoonlijk e-mailadres: één kandidaat; nieuwste CV wint'
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
     if blok:
@@ -4819,7 +4844,7 @@ def deduplicate(db, merge_file=None):
         for x in leden[ra]:
             for y in leden[rb]:
                 blokkade = harde_blokkade(docs[x], docs[y])
-                if not blokkade:
+                if not blokkade or zelfde_naam_eigen_email(docs[x], docs[y]):
                     continue
                 if (blokkade.startswith('tegenstrijdige opleiding')
                         and opleidingen_verzoend(docs[x], docs[y], alle)):
@@ -4911,8 +4936,28 @@ def deduplicate(db, merge_file=None):
         if not rec and not (f'/{CV_FOLDER}/' in str(d['path']).replace('\\', '/')):
             rec = (d['received_ns'] if 'received_ns' in d.keys() else 0) or 0
         return max(d['mtime_ns'] or 0, rec)
+    def cv_versie_rang(d):
+        """Hoofdversie: meest recente werkPERIODE (laatste functie eerst),
+        daarna opleidingsPERIODE, daarna expliciete ICT-inhoud.
+        Alleen bij gelijkspel een betrouwbare bestandsdatum en SHA.
+        Een later gekopieerde oude CV mag geen nieuwere baan verdringen.
+        """
+        banen = werk_periodes(d)
+        studies = opleiding_periodes(d)
+        werk = max(((begin, eind) for _w, begin, eind in banen), default=(0, 0))
+        opleiding = max(((begin, eind) for _nv, _richting, _school,
+                          _plaats, begin, eind in studies), default=(0, 0))
+        inhoud = normalized_name(d['snippet'] or '')
+        it_termen = re.findall(
+            r'\b(?:python|java|javascript|typescript|sql|azure|aws|docker|'
+            r'kubernetes|linux|git|react|nodejs|csharp|dotnet|'
+            r'data engineering|cloud|software development|cybersecurity|'
+            r'netwerkbeheer|informatica|devops)\b', inhoud)
+        it = len(set(it_termen))
+        return (werk[0], werk[1], opleiding[0], opleiding[1],
+                it, newest(d), d['year'] or '', d['sha'] or '')
     for group in sorted(groups.values(), key=lambda g: min(d['sha'] for d in g)):
-        recent = sorted(group, key=lambda d:(inhoud_jaar(d), newest(d), d['year'] or ''), reverse=True)
+        recent = sorted(group, key=cv_versie_rang, reverse=True)
         all_emails = sorted(set(_fix_email(v) for d in group for v in json.loads(d['emails'])))
         all_phones = sorted(set(filter(None, (norm_phone(v) for d in group for v in json.loads(d['phones'])))))
         all_links = sorted(set(v for d in group for v in json.loads(d['links'])))
@@ -4942,9 +4987,9 @@ def deduplicate(db, merge_file=None):
         used_ids.add(ident)
         for d in group:
             id_map[d['sha']] = ident
-        first = sorted(group, key=lambda d:(inhoud_jaar(d), newest(d), d['year'] or ''), reverse=True)[0]
-        roles = [d['role'] for d in sorted(group,key=lambda d:d['mtime_ns'],reverse=True) if d['role']]
-        employers = [d['employer'] for d in sorted(group,key=lambda d:d['mtime_ns'],reverse=True) if d['employer']]
+        first = recent[0]     # dezelfde hoofdversie als alle andere gekozen velden
+        roles = [d['role'] for d in recent if d['role']]
+        employers = [d['employer'] for d in recent if d['employer']]
         distinct_shas = len({d['sha'] for d in group})
         def latest(field):
             for item in recent:
