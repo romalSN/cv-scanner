@@ -22,6 +22,8 @@ def meet_items(ds):
     url_ok = sum(1 for x in lijst if isinstance(x, dict) and ap.slug(x.get('linkedinUrl') or ''))
     pid = sum(1 for x in lijst if isinstance(x, dict) and x.get('publicIdentifier'))
     err = collections.Counter(str(x.get('error') or x.get('message') or '')[:60] for x in lijst if isinstance(x, dict) and (x.get('error') or x.get('message')))
+    oq = collections.Counter(type(x.get('originalQuery')).__name__ + ':' + (','.join(sorted(x['originalQuery'])) if isinstance(x.get('originalQuery'), dict) else '') for x in lijst if isinstance(x, dict))
+    print(f'::notice::originalQuery-vorm: {dict(oq)}')
     print(f'::notice::dataset: {len(lijst)} items | status {dict(st)} | linkedinUrl bruikbaar {url_ok} | publicIdentifier {pid} | '
           f'fouten {dict(err)} | velden: {", ".join(sleutels)}')
     return d

@@ -131,7 +131,14 @@ def ophalen(urls, cache, log=print, slaap=time.sleep, nu=time.time):
                 if p.get('error') or (p.get('status') not in (None, 200)):
                     cache[PREFIX + s_] = {'fout': str(p.get('error') or p.get('status'))[:80]}
                     continue
-                cache[PREFIX + s_] = {k: v for k, v in p.items() if k not in NEGEER_VELDEN}
+                schoon = {k: v for k, v in p.items() if k not in NEGEER_VELDEN}
+                cache[PREFIX + s_] = schoon
+                # Profiel kan onder een nieuwer adres terugkomen: ook bewaren onder het adres dat we vroegen.
+                oq = p.get('originalQuery')
+                vraag = slug(oq.get('url') or oq.get('query') or '') if isinstance(oq, dict) else slug(str(oq or ''))
+                if vraag and vraag != s_:
+                    cache[PREFIX + vraag] = schoon
+                    gezien.add(vraag)
                 binnen += 1
             for u in gevraagd:
                 if slug(u) not in gezien:
