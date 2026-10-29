@@ -1739,6 +1739,10 @@ def decide_status(text, filename, name, emails, phones, links, score, threshold=
         return 'review'
     if not name and (structure or (cv_header and len(heads)>=1)):
         return 'review'
+    # CV-bestand of CV-map met beperkte aanwijzingen, maar zonder sterk
+    # bewijs: niet goedkeuren en niet weggooien; alleen beoordelen.
+    if (cv_filename or in_cv_map) and heads and (betrouwbare_naam or len(heads) >= 2):
+        return 'review'
     return 'other'
 
 def textutil_extract(path):
