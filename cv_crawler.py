@@ -3222,6 +3222,16 @@ def safe_pair(a, b):
             # 'Johan Smit' / 'Johan Smits' met één gedeeld mailadres: misschien een typfout, misschien niet.
             # Alleen samen als ook telefoon of LinkedIn gelijk is; anders als mogelijk dubbel laten zien.
             return False, True, 'zelfde e-mail, achternaam net anders'
+    # Dezelfde naam + exact dezelfde volledige opleiding of specifieke werkgever met beginjaar:
+    # ook zonder dezelfde mail/telefoon kunnen dit verschillende CV-versies zijn.
+    if same_name and not strong:
+        opl = opleiding_overeenkomsten(a, b)
+        werk = zelfde_werk(a, b)
+        if opl and (werk or len(opl) >= 2):
+            return True, False, 'zelfde volledige opleiding (' + opl[0] + ')' + (
+                ' en werkgever (' + werk[0] + ')' if werk else ' (meerdere opleidingen)')
+        if werk and len(werk) >= 2:
+            return True, False, 'zelfde twee werkgevers met beginjaar (' + ', '.join(werk[:2]) + ')'
     if strong:
         return (True, False, 'zelfde e-mail, telefoon of LinkedIn én naam') if (an and bn and (name_sim >= .89 or contained)) \
             else (False, True, 'gedeelde contactgegevens; namen niet bevestigd')
@@ -4499,6 +4509,21 @@ def deduplicate(db, merge_file=None):
         elif review:
             reviews.append((a,b,reason))
     reviews = ai_dubbel_controle(docs, reviews, samenvoegen, out_dir)
+    # Bewaar per automatische koppeling de concrete reden in de exportmap.
+    # Geen namen of persoonsgegevens in de log: bestands-hashes en besluiten volstaan.
+    if out_dir:
+        try:
+            redenen = []
+            for i, j in sorted(candidates):
+                if dsu.find(i) != dsu.find(j):
+                    continue
+                auto, _rev, reden = safe_pair(docs[i], docs[j])
+                if auto:
+                    redenen.append(dict(cv_sha_1=docs[i]['sha'], cv_sha_2=docs[j]['sha'], reden=reden))
+            save_csv(out_dir / 'samenvoeg_redenen.csv', redenen,
+                     ['cv_sha_1', 'cv_sha_2', 'reden'])
+        except OSError:
+            pass
     # Extra samenvoegingen alleen als de gebruiker dit expliciet bevestigt in CSV.
     if merge_file and merge_file.exists():
         pre_groups = collections.defaultdict(list)
