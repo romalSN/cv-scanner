@@ -37,7 +37,8 @@ apart("zelfde naam/mail; andere schoolplaats", a, b)
 
 d = cv("Jan de Vries", "jan.devries@gmail.com", "+31611112222",
        "2004 - 2008 HBO Informatica Hogeschool Utrecht")
-apart("zelfde naam/mail/telefoon; ander studiejaar", a, d)
+assert not c.opleiding_botst(a, d), "een tweede bachelor in andere jaren kan gewoon"
+assert c.safe_pair(a, d)[0], "zelfde persoonlijk contact mag twee opleidingen combineren"
 
 e = cv("Jan de Vries", "jan.devries@gmail.com", "+31622223333",
        "2014 - 2016 Master Data Science Universiteit Utrecht")
@@ -49,4 +50,10 @@ f = cv("Jan de Vries", "jan.nieuw@gmail.com", "+31688887777",
        "2010 - 2014 HBO Informatica Hogeschool Utrecht",
        "Woonplaats Amsterdam")
 assert not c.opleiding_botst(a, f), "verhuizen mag niet tot blokkade leiden"
+# Zonder gedeelde contactgegevens: dezelfde opleiding met hetzelfde jaar én dezelfde werkervaring.
+g = cv("Jan de Vries", "jan.anders@outlook.com", "+31677776666",
+       "2010 - 2014 HBO Informatica Hogeschool Utrecht")
+assert c.opleiding_overeenkomsten(a, g), "exacte opleiding moet matchen"
+assert c.zelfde_werk(a, g), "zelfde werkgevers en jaren moeten matchen"
+assert c.safe_pair(a, g)[0], "sterke overeenkomst zonder gedeeld contact moet kunnen koppelen"
 print("OPLEIDINGSBOTSING OK")
