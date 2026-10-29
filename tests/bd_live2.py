@@ -17,6 +17,28 @@ try:
     print(f'::notice::eerdere snapshots (status, aantal): {rij}')
 except Exception as exc:
     print(f'::notice::snapshots-lijst: {type(exc).__name__} {str(exc)[:100]}')
+if os.environ.get('BD_BATCH') == 'velden':
+    # Klare snapshots opnieuw downloaden (gratis, 30 dagen bewaard) en velden tellen. Eén samenvatting.
+    import collections
+    st, raw = req('GET', f'/snapshots?dataset_id={bd.dataset_id()}')
+    d = json.loads(raw); lijst = d if isinstance(d, list) else d.get('snapshots', [])
+    prof = []
+    for x in lijst:
+        if x.get('status') == 'ready' and x.get('id', x.get('snapshot_id')):
+            try:
+                prof += [p for p in bd.download(x.get('id') or x.get('snapshot_id')) if isinstance(p, dict) and not p.get('error')]
+            except Exception:
+                pass
+    tel = collections.Counter()
+    for p in prof:
+        g = bd.gegevens(p)
+        for k, v in g.items():
+            if v: tel[k] += 1
+        tel['experience_null'] += not p.get('experience')
+    duur = [(x.get('collection_duration') or x.get('duration')) for x in lijst if x.get('status') == 'ready']
+    print(f'::notice::{len(prof)} profielen | gevuld: ' + ', '.join(f'{k} {v}' for k, v in sorted(tel.items())) +
+          f' | duur klare snapshots: {duur} | sleutels snapshot: {sorted(lijst[0].keys()) if lijst else []}')
+    sys.exit(0)
 if os.environ.get('BD_BATCH') == 'lijst':
     sys.exit(0)
 # 2. synchroon: 3 profielen
