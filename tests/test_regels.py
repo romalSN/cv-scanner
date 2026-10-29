@@ -807,6 +807,53 @@ check('vier parallelle opdrachten met sterk persoonlijk CV => review, nooit othe
       c.decide_status(_freelance, 'CV_Janneke_van_Buren.docx',
                       'Janneke van Buren', ['janneke.vanburen@gmail.com'], [], [], 90) == 'review')
 
+# --- Minimum naam in kandidaten + stagecontractsignalen ---
+_stage_agreement = (
+    'STAGEOVEREENKOMST\n'
+    'Student: Pieter van Leeuwen\n'
+    'Opleiding: HBO Informatica\n'
+    'Stagegever: Datawerk B.V.\n'
+    'Stageverlener: Pieter van Leeuwen\n'
+    'Artikel 1: De overeenkomst wordt aangegaan voor de periode 2023 - 2024.\n'
+    'Ondergetekenden verklaren akkoord te gaan.\n'
+    'Handtekening beide partijen:\n'
+    'Werkervaring\n2023 - 2024 stage bij Datawerk\n'
+    'Opleiding\nHBO Informatica')
+check('stageovereenkomst met naam en stageperiode blijft other',
+      c.is_stagecontract(_stage_agreement)
+      and c.decide_status(_stage_agreement, '24_Stageovereenkomst.rtf',
+                          'Pieter van Leeuwen', [], [], [], 99,
+                          source_path='/CVs/Micha') == 'other')
+_stage_dubbele_kop = (
+    'Curriculum Vitae\nPieter van Leeuwen\n'
+    'Profiel\nStagiair bij Datawerk\n'
+    'Werkervaring\n2023 - 2024 stage bij Datawerk\n'
+    'Opleiding\nHBO Informatica\n'
+    'Vaardigheden\nPython, Java\n'
+    'Ik heb een stageovereenkomst ondertekend.')
+check('echte cv met enkele verwijzing naar stageovereenkomst blijft cv',
+      not c.is_stagecontract(_stage_dubbele_kop)
+      and c.decide_status(_stage_dubbele_kop, 'CV_Pieter_van_Leeuwen.docx',
+                          'Pieter van Leeuwen', [], [], [], 75) == 'cv')
+_agreement_without_title = (
+    'Stageafspraken van Pieter van Leeuwen\n'
+    'Stagegever: Datawerk B.V.\n'
+    'De overeenkomst wordt aangegaan tussen de ondergetekenden.\n'
+    'Artikel 1: Start- en einddatum 2025 - 2026.\n'
+    'Datum ondertekening: 15-09-2025\n'
+    'Werkervaring\nOpleiding')
+check('ook zonder letterlijke titel stageovereenkomst is contract other',
+      c.is_stagecontract(_agreement_without_title)
+      and c.decide_status(_agreement_without_title, 'gegevens_student.docx',
+                          'Pieter van Leeuwen', [], [], [], 80) == 'other')
+check('stageperiode + naam + school op zichzelf maakt geen contract',
+      not c.is_stagecontract('Pieter van Leeuwen\nOpleiding HBO ICT\n'
+                             'Werkervaring\n2022 - 2023 Stagiair bij Datawerk\nPython'))
+# Werkelijke kandidatenquery krijgt alleen name_verified=1 en niet-lege naam.
+import inspect as _inspect
+check('kandidaatnummer: naam is verplicht in deduplicate-selectie',
+      "name_verified=1 AND name!=''" in _inspect.getsource(c.deduplicate))
+
 # --- Niet-CV documenten en template-leegte ---
 check('testpakketmap is geen CV-map',
       not c.cv_map_hint('/Download/CV_Scanner_Stresstest_Moeilijke_Bestanden/Projectplan.txt'))

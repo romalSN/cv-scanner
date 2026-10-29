@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 26
+CLASSIFIER_VERSION = 27
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -1838,7 +1838,8 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
         score = max(score, 75)
     ander_document = niet_cv_documentsoort(text, filename)
     vier_banen = gelijktijdige_werkgevers(text) >= 4
-    if is_template(text) or ander_document or vier_banen:
+    contract = is_stagecontract(text)
+    if is_template(text) or ander_document or vier_banen or contract:
         score = min(score, 20)
     if not name:
         score = min(score, 49)
@@ -1860,8 +1861,34 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0, source
               ('; vacature/inhuuraanvraag' if is_vacancy(text) else '') +
               (f'; niet-cv-document: {ander_document}' if ander_document else '') +
               ('; minstens 4 gelijktijdige werkgevers' if vier_banen else '') +
+              ('; stagecontract: 3+ contractsignalen' if contract else '') +
               ('; CV-map: ja' if in_cv_map else ''))
     return max(0,min(100,score)), reason
+
+
+STAGE_CONTRACT_MARKERS = (
+    re.compile(r'(?i)\b(?:stagegever|stageverlener|stagebedrijf|stagebegeleider)\b'),
+    re.compile(r'(?i)\b(?:ondergetekenden|ondertekende partijen|beide partijen|partijen verklaren)\b'),
+    re.compile(r'(?i)\b(?:stageovereenkomst|deze overeenkomst|de overeenkomst|stagecontract)\b'),
+    re.compile(r'(?i)\b(?:handtekening(?:en)?|ondertekening|ondertekend door)\b'),
+    re.compile(r'(?i)\b(?:artikel\s+\d+|art\.\s*\d+|contractduur|contractperiode)\b'),
+    re.compile(r'(?i)\b(?:namens de organisatie|ondertekend te|datum ondertekening)\b'),
+)
+
+
+def is_stagecontract(text):
+    """Stagecontract, geen CV: meerdere ONAFHANKELIJKE contractsignalen nodig.
+    Naam, school, stageperiode of het woord 'overeenkomst' alleen zijn
+    onvoldoende: ze kunnen ook in een echt CV staan.
+    """
+    top = (text or '')[:12000]
+    if not top.strip():
+        return False
+    markers = {i for i, rx in enumerate(STAGE_CONTRACT_MARKERS) if rx.search(top)}
+    if len(markers) < 3:
+        return False
+    # Een echte contractrelatie EN een handtekening/artikel/partijen.
+    return 2 in markers and bool(markers & {1, 3, 4, 5})
 
 
 def gelijktijdige_werkgevers(text):
@@ -1886,7 +1913,7 @@ def gelijktijdige_werkgevers(text):
 def decide_status(text, filename, name, emails, phones, links, score, threshold=70, source_path=''):
     if not text.strip():
         return 'other'        # gescand/afbeelding en ook de OCR vond niets: geen cv (staat wel in Bestanden en status)
-    if is_template(text) or is_vacancy(text) or niet_cv_documentsoort(text, filename):
+    if is_template(text) or is_vacancy(text) or niet_cv_documentsoort(text, filename) or is_stagecontract(text):
         return 'other'
     if gelijktijdige_werkgevers(text) >= 4:
         # Een persoonlijke consultant kan meerdere parallelle opdrachten hebben.
@@ -4885,7 +4912,7 @@ def deduplicate(db, merge_file=None):
         ai_model = ai_rechter.MODEL_ID
     except Exception:
         ai_model = 'geen'
-    docs = db.execute("SELECT * FROM docs WHERE status='cv' AND classifier_version=? AND name_verified=1 ORDER BY path", (CLASSIFIER_VERSION,)).fetchall()
+    docs = db.execute("SELECT * FROM docs WHERE status='cv' AND classifier_version=? AND name_verified=1 AND name!='' ORDER BY path", (CLASSIFIER_VERSION,)).fetchall()
     docs = [d for d in docs if in_scope(d['path'], d['sha'])]
     dsu = DSU(len(docs))
     by_sha, by_email, by_phone, by_link, by_name = (collections.defaultdict(list) for _ in range(5))
