@@ -893,6 +893,11 @@ check('lege kopjes en invulvelden zijn CV-sjabloon, geen CV',
       c.decide_status(_leeg, 'CV.docx', '', [], [], [], 99) == 'other')
 check('cv-kopjes zonder ingevulde inhoud zijn sjabloon',
       c.is_template('Curriculum Vitae\nProfiel\nWerkervaring\nOpleiding\nVaardigheden'))
+check('kort maar ingevuld HBO ICT en Python maken geen leeg sjabloon',
+      not c.is_template('Curriculum Vitae\nJanneke van Buren\n'
+                        'Werkervaring\n2020 - 2024 Consultant bij Appstone\n'
+                        'Opleiding\nHBO ICT\nVaardigheden\nPython'))
+
 # --- Naamloze mappen bewaren kopieën, originelen blijven staan ---
 import hashlib as _hashlib
 _nm_base = Path(tempfile.mkdtemp())

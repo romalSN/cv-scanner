@@ -1758,7 +1758,7 @@ def is_template(text):
         for n, ix in enumerate(sections):
             stop = sections[n+1] if n+1 < len(sections) else min(ix+6, len(lines))
             contents = [v.strip() for v in lines[ix+1:stop] if v.strip()]
-            useful = [v for v in contents if len(v) >= 10 and not re.search(
+            useful = [v for v in contents if len(v) >= 3 and not re.search(
                 r'(?i)(?:\b20xx\b|\bxxxx\b|\bvul\s+(?:hier|in)\b|'
                 r'\bin\s+te\s+vullen\b|\bvoorbeeld(?:naam|bedrijf|opleiding|werkgever)?\b|'
                 r'\bplaceholder\b|\benter\s+(?:your|here)\b|'
