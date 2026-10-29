@@ -921,6 +921,26 @@ _r = c.safe_pair(_cvdoc(_V1, 400), _cvdoc(_V2, 401))
 check('dubbel: zelfde naam+mail, opleiding in andere jaren = twijfel, niet samen', not _r[0] and _r[1], _r)
 _V3 = _V2.replace('2008 - 2012 HBO Informatica, Avans', '2001 - 2005 HBO Informatica, Saxion').replace('06 44593161', '06 58562055')
 check('dubbel: zelfde naam+mail+opleiding (nieuwere versie) = samen', c.safe_pair(_cvdoc(_V1, 402), _cvdoc(_V3, 403))[0])
+# Oud cv noemt alleen de bachelor (2006-2010), nieuw cv alleen de master (2010-2012): gewoon samen.
+_BA = ('Curriculum Vitae\nSevda Kaya\nsevda.kaya@gmail.com\n06 11223344\nWerkervaring\n2010 - heden Data analist bij Rivierdata. '
+       'Rapportages.\nOpleiding\n2006 - 2010 HBO Bedrijfskunde, Hogeschool Utrecht')
+_MA = ('Curriculum Vitae\nSevda Kaya\nsevda.kaya@gmail.com\n06 99887766\nWerkervaring\n2016 - heden Data scientist bij Polderlogic. '
+       'Modellen.\n2010 - 2016 Data analist bij Rivierdata. Rapportages.\nOpleiding\n2010 - 2012 Master Data Science, Universiteit Utrecht')
+_r = c.safe_pair(_cvdoc(_BA, 404), _cvdoc(_MA, 405))
+check('dubbel: oud cv alleen bachelor, nieuw cv alleen master (zelfde mail) = samen', _r[0], _r)
+_r = c.safe_pair(_cvdoc(_BA, 406), _cvdoc(_MA.replace('sevda.kaya@gmail.com\n06 99887766\n', ''), 407))
+check('dubbel: bachelor/master, nieuw cv zonder contact maar zelfde werkgever+jaar = mogelijk dubbel of samen, nooit apart', _r[0] or _r[1], _r)
+# Oud cv noemt alleen de bachelor, nieuw cv alleen de master: gewoon samen (ook met ander nummer).
+_BA = ('Curriculum Vitae\nSanne Hoekstra\nsanne.hoekstra@gmail.com\n06 11112222\nWerkervaring\n2010 - heden Data-analist bij '
+       'Rivierdata. Rapportages.\nOpleiding\n2006 - 2010 Bachelor Bedrijfskunde, Hogeschool Utrecht')
+_MA = ('Curriculum Vitae\nSanne Hoekstra\nsanne.hoekstra@gmail.com\n06 33334444\nWerkervaring\n2012 - heden Data scientist bij '
+       'Polderlogic. Modellen.\nOpleiding\n2010 - 2012 Master Data Science, Universiteit Utrecht')
+check('dubbel: oud cv bachelor 2006-2010, nieuw cv master 2010-2012, zelfde mail = samen', c.safe_pair(_cvdoc(_BA, 404), _cvdoc(_MA, 405))[0])
+# Bachelor en master met een gat ertussen, maar dezelfde baan met dezelfde jaren in beide cv's: samen.
+_MA2 = _MA.replace('2010 - 2012 Master', '2015 - 2017 Master').replace('2012 - heden Data scientist bij Polderlogic. Modellen.',
+                   '2017 - heden Data scientist bij Polderlogic. Modellen.\n2010 - 2017 Data-analist bij Rivierdata. Rapportages.')
+check('dubbel: bachelor + later master (gat), zelfde baan+jaren, zelfde mail = samen', c.safe_pair(_cvdoc(_BA, 406), _cvdoc(_MA2, 407))[0])
+
 
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))

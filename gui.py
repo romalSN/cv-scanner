@@ -1637,7 +1637,9 @@ class ScannerApp:
                       'Cv\'s in OneDrive/iCloud worden alleen GEKOPIEERD: het origineel blijft in je cloud.\n')
         if messagebox.askyesno('Cv\'s opschonen',
                                'Dit gaat er gebeuren:\n\n' + text + '\n\n'
-                               'De cv-bestanden worden VERPLAATST naar Alle_cvs (ook uit zips).\n' + cloud_line +
+                               'Per kandidaat komt alleen het NIEUWSTE cv in Alle_cvs (ook uit zips).\n'
+                               'Oudere versies en dubbele kopieën worden weggehaald (er blijft een kopie in cv_archief).\n'
+                               + cloud_line +
                                'Terugzetten kan altijd met de knop ‘Terugzetten’.\n\nDoorgaan?',
                                icon='warning', parent=self.root):
             self.launch(mode='opschonen')

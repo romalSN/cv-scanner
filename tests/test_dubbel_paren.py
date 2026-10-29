@@ -30,7 +30,7 @@ for k, (waar, soort, ta, tb) in enumerate(P):
     if not auto and review:
         st = c._bewijs_stukken(a, b)
         contact = any(x.startswith(('zelfde persoonlijk', 'zelfde telefoon', 'zelfde LinkedIn')) for x in st)
-        auto = bool(not c.harde_blokkade(a, b) and contact and c.zelfde_werk(a, b))
+        auto = bool(not c.harde_blokkade(a, b) and contact and c.zelfde_werk(a, b) and not c.opleiding_botst(a, b))
     uitkomst = 'samen' if auto else ('twijfel' if review else 'apart')
     per[soort][uitkomst] += 1
     if waar == 'anders' and auto:

@@ -3197,8 +3197,9 @@ def safe_pair(a, b):
             # Beide achternamen passen bij het adres -> zeker dezelfde persoon. Past er maar één ('Jan de Vries'
             # met jan.bakker@ – bv. een referentie), dan alleen samen als ook het telefoonnummer gelijk is.
             if (a_in and b_in) or (ap & bp):
-                if opleiding_botst(a, b):
-                    # Zelfde (gedeeld/oud) mailadres, maar een heel andere opleiding in andere jaren: niet blind samen.
+                if opleiding_botst(a, b) and not (ap & bp):
+                    # Zelfde mailadres, maar dezelfde soort opleiding in heel andere jaren (geen vervolgstudie) en een
+                    # ander nummer: niet blind samen, als mogelijk dubbel laten zien.
                     return False, True, 'zelfde e-mailadres, maar andere opleiding in andere jaren'
                 return True, False, 'zelfde persoonlijk e-mailadres en voornaam'
     aw0, bw0 = set(an.split()), set(bn.split())
@@ -3648,8 +3649,8 @@ def run_cleanup(db, out, dry_run=False):
     zipc = sum(1 for _o, _t, k in plan if k == 'uit zip')
     cloudc = sum(1 for _o, _t, k in plan if k == 'kopie uit cloud')
     extra = ', '.join(f'{n} {k}' for k, n in skipped.items())
-    print(f'OPSCHOON-PLAN: {moves} nieuwste cv\'s naar {cv_folder(out)}, {older} oudere versies naar '
-          f'{OLDER_DIR}, {dubbel} dubbele kopieën naar dubbel, {zipc} cv\'s uit zips gehaald, '
+    print(f'OPSCHOON-PLAN: {moves} nieuwste cv\'s naar {cv_folder(out)}, {older} oudere versies en '
+          f'{dubbel} dubbele kopieën weggehaald (bewaard in cv_archief, terugzetten kan), {zipc} cv\'s uit zips gehaald, '
           f'{cloudc} cv\'s uit OneDrive/iCloud gekopieerd'
           + (f'; overgeslagen: {extra}' if extra else ''), flush=True)
     if dry_run or not plan:
@@ -3675,7 +3676,15 @@ def run_cleanup(db, out, dry_run=False):
                     if target.exists() and kind in ('verplaatsen', 'oudere versie'):
                         target.unlink()       # oude kopie; het origineel komt ervoor in de plaats
                     sha = (db.execute('SELECT sha FROM docs WHERE path=?', (str(old),)).fetchone() or [''])[0]
-                    if kind == 'kopie uit cloud':
+                    arch = out / 'cv_archief' / f'{sha}{old.suffix.lower()}' if sha else None
+                    if (kind in ('oudere versie', 'dubbel') and arch and arch.exists()
+                            and arch.stat().st_size == old.stat().st_size):
+                        # Samengevoegde kandidaat: alleen het nieuwste cv blijft. Oudere versie / exacte kopie weg;
+                        # er staat een kopie in cv_archief, dus 'Terugzetten' kan hem terugzetten.
+                        old.unlink()
+                        db.execute('DELETE FROM docs WHERE path=?', (str(old),))
+                        kind, target = 'verwijderd: ' + kind, arch
+                    elif kind == 'kopie uit cloud':
                         # Origineel blijft in OneDrive/iCloud staan; alleen een kopie in de cv-map.
                         if target.exists():
                             target.unlink()
@@ -3694,7 +3703,7 @@ def run_cleanup(db, out, dry_run=False):
             f.flush()
             done += 1
     save_register(out, reg)
-    print(f'OPGESCHOOND: {done} bestanden verplaatst of gekopieerd. Terugzetten kan met "Opschonen terugzetten" '
+    print(f'OPGESCHOOND: {done} bestanden verplaatst, gekopieerd of (als oudere versie/dubbel) weggehaald. Terugzetten kan met "Opschonen terugzetten" '
           f'(zie {CLEAN_LOG}).', flush=True)
     return done
 
@@ -3735,6 +3744,20 @@ def undo_cleanup(db, out):
                 done += 1
             except OSError as exc:
                 print('TERUGZETTEN (zip) mislukt:', zpath, '-', exc, flush=True)
+                keep.append(r)
+            continue
+        if (r.get('soort') or '').startswith('verwijderd'):
+            # Weggehaalde oudere versie / dubbele kopie: terugzetten uit cv_archief.
+            old, bron = Path(r['oude_plek']), Path(r['nieuwe_plek'])
+            try:
+                if not old.exists() and bron.exists():
+                    old.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(bron, old)
+                    done += 1
+                elif not bron.exists():
+                    keep.append(r)
+            except OSError as exc:
+                print('TERUGZETTEN mislukt:', old, '-', exc, flush=True)
                 keep.append(r)
             continue
         old, new = Path(r['oude_plek']), Path(r['nieuwe_plek'])
@@ -4083,6 +4106,25 @@ def loopbaan_botst(a, b):
     pa, pb = werk_periodes(a), werk_periodes(b)
     if not pa or not pb or len(pa) + len(pb) < 3:
         return False
+    # 'heden' in een OUD cv betekent 'tot het cv geschreven werd', niet 'tot vandaag'. Oud cv: '2010 - heden bij
+    # Rivierdata'; nieuw cv: 'Rivierdata 2012-2016, Polderlogic 2016-heden' is geen botsing maar een nieuwere versie.
+    def tot_cv_jaar(lijst, ander):
+        nu = dt.date.today().year
+        laatste = max(y1 for _w, y1, _e in lijst)
+        laatste_ander = max(y1 for _w, y1, _e in ander)
+        if laatste >= laatste_ander:
+            return lijst                          # dit is het nieuwste cv: 'heden' blijft heden
+        # Alleen als die 'heden'-werkgever in het nieuwere cv ook staat (met een einde): baan is daar afgesloten.
+        # En alleen als ALLE banen uit het oude cv ook in het nieuwe staan (zelfde werkgever, beginjaar ±1 jaar):
+        # dan is het oude cv echt een eerdere versie van het nieuwe.
+        def staat_erin(w, y1):
+            return any(w == w2 and abs(y1 - z1) <= 1 for w2, z1, _e in ander)
+        afgesloten = [(w, y1) for w, y1, e in ander if e < nu]
+        if not all(staat_erin(w, y1) for w, y1, _e in lijst):
+            return lijst
+        return [(w, y1, min(e, laatste + 1) if e >= nu and any(w == w2 and abs(y1 - z1) <= 1 for w2, z1 in afgesloten)
+                 else e) for w, y1, e in lijst]
+    pa, pb = tot_cv_jaar(pa, pb), tot_cv_jaar(pb, pa)
     def ook_daar(lijst, w, b, e):
         # Staat werkgever w in het andere cv in (ongeveer) dezelfde jaren? (1 jaar speling)
         return any(x == w and min(e, y2) - max(b, y1) >= 0 for x, y1, y2 in lijst)
@@ -4101,17 +4143,47 @@ OPL_WOORD = re.compile(r' (?:hbo|mbo|wo|bachelor|master|bsc|msc|universiteit|uni
                        r'opleiding|studie|propedeuse|informatica) ')
 
 
+def _opl_niveau(venster):
+    v = ' ' + ' '.join(venster.split()[:6]) + ' '
+    if re.search(r' (?:master|msc|ma|mba|wo master|postdoc|phd) ', v):
+        return 'master'
+    if re.search(r' (?:hbo|bachelor|bsc|ba|b tech|btech|propedeuse) ', v):
+        return 'bachelor'
+    if re.search(r' mbo ', v):
+        return 'mbo'
+    return ''
+
+
 def opleiding_botst(a, b):
-    """Beide cv's noemen een opleiding met jaartallen, maar geen enkele opleiding begint of eindigt in hetzelfde
-    jaar ('HBO Informatica, Saxion 2001-2005' tegenover 'HBO Informatica, Avans 2008-2012'). Versies van hetzelfde
-    cv houden hun opleidingsjaren; dit is dus geen bewijs van 'anders', wel reden om niet blind samen te voegen."""
+    """Beide cv's noemen een opleiding van HETZELFDE niveau (bv. allebei HBO/bachelor) die niet kan kloppen:
+    - in andere jaren: 'HBO Informatica, Saxion 2001-2005' tegenover 'HBO Informatica, Avans 2008-2012';
+    - of in dezelfde jaren in een andere plaats: 'Hogeschool Utrecht 2006-2010' tegenover 'Hogeschool van Amsterdam
+      2006-2010'.
+    Een ander niveau (oud cv alleen bachelor 2006-2010, nieuw cv alleen master 2010-2012) is GEEN botsing."""
     def opl(d):
-        return [(bm // 12, em // 12) for bm, em, v, _x, _vo in periodes_uit_cv(d['snippet'] or '')
-                if OPL_WOORD.search(' ' + ' '.join(v.split()[:6]) + ' ')]
+        uit = collections.defaultdict(list)
+        for bm, em, v, _x, _vo in periodes_uit_cv(d['snippet'] or ''):
+            kop = ' ' + ' '.join(v.split()[:6]) + ' '
+            if OPL_WOORD.search(kop):
+                niveau = _opl_niveau(v)
+                if niveau:
+                    uit[niveau].append((bm // 12, em // 12, _plaats_in(kop, NL_PLACES | BE_PLACES)))
+        return uit
     pa, pb = opl(a), opl(b)
-    if not pa or not pb:
-        return False
-    return not ({x for x, _ in pa} & {x for x, _ in pb}) and not ({y for _, y in pa} & {y for _, y in pb})
+    for niveau in set(pa) & set(pb):
+        la, lb = pa[niveau], pb[niveau]
+        if not ({x for x, _y, _p in la} & {x for x, _y, _p in lb}) and not ({y for _x, y, _p in la} & {y for _x, y, _p in lb}):
+            return True
+        for x1, y1, p1 in la:
+            for x2, y2, p2 in lb:
+                if (x1, y1) == (x2, y2) and p1 and p2 and p1 != p2:
+                    return True
+    return False
+
+
+MAAND_WOORDEN = {'jan', 'januari', 'january', 'feb', 'februari', 'february', 'mrt', 'maart', 'mar', 'march', 'apr', 'april',
+                 'mei', 'may', 'jun', 'juni', 'june', 'jul', 'juli', 'july', 'aug', 'augustus', 'august', 'sep', 'sept',
+                 'september', 'okt', 'oktober', 'oct', 'october', 'nov', 'november', 'dec', 'december'}
 
 
 def zelfde_werk(a, b):
@@ -4122,8 +4194,17 @@ def zelfde_werk(a, b):
     # werkgever uit het ene cv in het andere cv bij een periode met precies hetzelfde beginjaar?
     def vensters(d):
         # 'Tulpnet – Azure consultant (aug 2015 – heden)': werkgever kan ook vlak vóór de periode staan.
-        return [(bm // 12, ' ' + ' '.join(vo.split() + v.split()[:14]) + ' ')
-                for bm, _em, v, _x, vo in periodes_uit_cv(d['snippet'] or '', voor_n=6)]
+        # Alleen als de periode zelf geen 'bij/at X' heeft; anders is wat ervoor staat de vorige baan.
+        uit = []
+        for bm, _em, v, _x, vo in periodes_uit_cv(d['snippet'] or '', voor_n=6):
+            na = v.split()[:14]
+            voor = [w for w in vo.split()]
+            while voor and voor[-1] in MAAND_WOORDEN:
+                voor.pop()                         # 'Tulpnet, consultant (mar 2019': maand eraf
+            if re.search(r' (?:bij|at|@) ', ' ' + ' '.join(na[:6]) + ' '):
+                voor = []
+            uit.append((bm // 12, ' ' + ' '.join(voor[-4:] + na) + ' '))
+        return uit
     for lijst, ander in ((pa, b), (pb, a)):
         vs = vensters(ander)
         for w, y1, _e in lijst:
@@ -4200,7 +4281,8 @@ def ai_dubbel_controle(docs, reviews, samenvoegen, out_dir):
         da, db_ = docs[a], docs[b]
         st = _bewijs_stukken(da, db_)
         contact = any(x.startswith(('zelfde persoonlijk', 'zelfde telefoon', 'zelfde LinkedIn')) for x in st)
-        if not harde_blokkade(da, db_) and contact and zelfde_werk(da, db_) and samenvoegen(a, b):
+        if (not harde_blokkade(da, db_) and contact and zelfde_werk(da, db_) and not opleiding_botst(da, db_)
+                and samenvoegen(a, b)):
             continue
         rest.append((a, b, reason))
     reviews = rest
@@ -4396,13 +4478,18 @@ def deduplicate(db, merge_file=None):
         rec = d['received_ns'] if 'received_ns' in d.keys() else 0
         if d['sha'] and rec and f'/{CV_FOLDER}/' not in str(d['path']).replace('\\', '/'):
             first_seen[d['sha']] = min(first_seen.get(d['sha'], rec), rec)
+    def inhoud_jaar(d):
+        # Nieuwste cv = het cv met de recentste loopbaan (laatste beginjaar in de tekst). Een oud cv dat vandaag
+        # is gedownload of gekopieerd wordt daardoor niet 'nieuwer'. Geen jaartallen: dan telt de bestandsdatum.
+        jaren = [bm // 12 for bm, _e, _v, _x, _vo in periodes_uit_cv(d['snippet'] or '')]
+        return max(jaren) if jaren else 0
     def newest(d):
         rec = first_seen.get(d['sha']) or 0
         if not rec and not (f'/{CV_FOLDER}/' in str(d['path']).replace('\\', '/')):
             rec = (d['received_ns'] if 'received_ns' in d.keys() else 0) or 0
         return max(d['mtime_ns'] or 0, rec)
     for group in sorted(groups.values(), key=lambda g: min(d['sha'] for d in g)):
-        recent = sorted(group, key=lambda d:(newest(d), d['year'] or ''), reverse=True)
+        recent = sorted(group, key=lambda d:(inhoud_jaar(d), newest(d), d['year'] or ''), reverse=True)
         all_emails = sorted(set(_fix_email(v) for d in group for v in json.loads(d['emails'])))
         all_phones = sorted(set(filter(None, (norm_phone(v) for d in group for v in json.loads(d['phones'])))))
         all_links = sorted(set(v for d in group for v in json.loads(d['links'])))
@@ -4432,7 +4519,7 @@ def deduplicate(db, merge_file=None):
         used_ids.add(ident)
         for d in group:
             id_map[d['sha']] = ident
-        first = sorted(group, key=lambda d:(newest(d), d['year'] or ''), reverse=True)[0]
+        first = sorted(group, key=lambda d:(inhoud_jaar(d), newest(d), d['year'] or ''), reverse=True)[0]
         roles = [d['role'] for d in sorted(group,key=lambda d:d['mtime_ns'],reverse=True) if d['role']]
         employers = [d['employer'] for d in sorted(group,key=lambda d:d['mtime_ns'],reverse=True) if d['employer']]
         distinct_shas = len({d['sha'] for d in group})
