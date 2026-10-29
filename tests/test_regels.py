@@ -1119,10 +1119,17 @@ for _i, _cv in enumerate((_old, _new)):
                       json.dumps(_em), '[]', '[]', 1000 + _i, 1000 + _i,
                       '', '', '', c.opleidingen_from(_cv), '', 'nl'))
 _db_main.commit()
+check('Daan testdatabase bevat precies twee geverifieerde CV-versies',
+      _db_main.execute("SELECT COUNT(*) FROM docs WHERE status='cv' AND name_verified=1 "
+                       "AND classifier_version=?", (c.CLASSIFIER_VERSION,)).fetchone()[0] == 2,
+      [(r['status'],r['name_verified'],r['classifier_version'])
+       for r in _db_main.execute('SELECT * FROM docs')])
 # Test uitsluitend de ontdubbeling en kandidaat-ID's, niet de onafhankelijke
-# taal-, verblijf- en woonplaatsfilter. Die heeft eigen uitgebreide tests.
+# taal-, verblijf-, woonplaats- of mapkeuzefilters van eerdere tests.
 _filter_orig = c.filter_kandidaat
+_scope_orig = c.SCOPE
 try:
+    c.SCOPE = []
     c.filter_kandidaat = lambda *args, **kwargs: ('ok', '')
     _dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(
         _db_main, _db_main_out / 'samenvoegen_correcties.csv')
@@ -1138,6 +1145,7 @@ try:
           ([_dm_id], [p['kandidaat_id'] for p in _dm_people2]))
 finally:
     c.filter_kandidaat = _filter_orig
+    c.SCOPE = _scope_orig
 
 # --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
 W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"
