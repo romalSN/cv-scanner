@@ -73,6 +73,9 @@ jobs:
       - name: Test - opleidingsconflict is apart (geen twijfel); bachelor/master blijft mogelijk
         run: python tests/test_opleiding_conflict.py
 
+      - name: Test - CV-map, CV-kop, naam uit bestandsnaam en vacature-uitsluiting
+        run: python tests/test_cv_context.py
+
       - name: Test - samenvoegen + opschonen (nieuwste cv blijft, oudere versie en kopie weg, terugzetten)
         run: python tests/test_opschonen_dubbel.py
 

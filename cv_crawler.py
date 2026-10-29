@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 20
+CLASSIFIER_VERSION = 21
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -496,7 +496,7 @@ BESTANDSNAAM_RUIS = {'cv', 'resume', 'curriculum', 'vitae', 'nl', 'en', 'eng', '
                      'het', 'ter', 'ten', 'la', 'le', 'el', 'da', 'di', 'du', 'del', 'von', 'mei', 'jan', 'feb'}
 
 
-def naam_uit_bestandsnaam(path_or_stem, snippet):
+def naam_uit_bestandsnaam(path_or_stem, snippet, zonder_tekst=False):
     """Naam uit de bestandsnaam, ALLEEN als die naam ook in het cv zelf staat.
     'denBulck Tom HQ00000869 (U).txt' -> 'Tom den Bulck'; '20250325_CV_Rick_van_der_Kraan_NL (1)' -> 'Rick van der Kraan'.
     Geeft '' als de bestandsnaam geen (bevestigde) persoonsnaam bevat."""
@@ -525,7 +525,9 @@ def naam_uit_bestandsnaam(path_or_stem, snippet):
             or not clean_person_name(' '.join(w[:1].upper() + w[1:] for w in kern))):
         return ''
     tekst = ' ' + (snippet or '')[:4000] + ' '
-    if not all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2):
+    gewone_match = all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2)
+    aaneen_match = bool(kern) and f' {''.join(normalized_name(w) for w in kern)} ' in tekst
+    if not (gewone_match or aaneen_match or zonder_tekst):
         return ''
     # Volgorde zoals in het cv ('Tom den Bulck'), anders de bestandsnaam ('Bulck Tom' -> achternaam eerst).
     n = normalized_name(kandidaat).split()
@@ -627,6 +629,17 @@ def _guess_name(text, filename, emails, links=()):
     uit_bestand = naam_uit_bestandsnaam(filename, normalized_snippet(text))
     if uit_bestand:
         return uit_bestand
+    # Bij 'cv_MarcHorstmanNL_2026' kan de naam in de uitgelezen tekst ontbreken
+    # of aaneengeplakt zijn. Alleen bij expliciete CV-bestandsnaam + meerdere echte
+    # CV-kopjes een veilige naamkandidaat uit de bestandsnaam gebruiken.
+    if cv_bestandsnaam_hint(filename) and len(text.strip()) >= 60:
+        h, _header, _file, non_cv, enormous, _periods = cv_signals(text, filename)
+        if ('opleiding' in h and h & {'werkervaring', 'profiel', 'vaardigheden'}
+                and not non_cv and not enormous and not is_template(text) and not is_vacancy(text)):
+            kandidaat = naam_uit_bestandsnaam(filename, '', zonder_tekst=True)
+            if kandidaat and not any(email_owner_mismatch(kandidaat, e) for e in emails
+                                     if not GENERIC_EMAIL.match(e)):
+                return kandidaat
     candidate = re.sub(r'(?i)^(cv|resume|curriculum[ _-]*vitae)[ _-]+', '', filename)
     if candidate != filename:
         candidate = re.sub(r'(?i)[ _-]+(?:final|versie|nieuw|new|updated|definitief|lang|kort|nl|en|eng|uk)\b.*$', '', candidate)
@@ -1461,6 +1474,21 @@ def experience_periods(lines):
     return list(dict.fromkeys(spans))[:5]
 
 
+def cv_bestandsnaam_hint(filename):
+    """Een losse CV-aanduiding in de bestandsnaam, ook 'C.V. Jacques ...'."""
+    base = str(filename or '').replace('\\', '/').rsplit('/', 1)[-1]
+    return bool(re.search(r'(?i)(?:^|[\s_.-])(?:c\.?v\.?|resume|résumé|curriculum[\s_-]*vitae)'
+                          r'(?=$|[\s_.-])', base))
+
+
+def cv_map_hint(source_path):
+    """CV-map in een echt bestandspad; niet blind 'cv' ergens midden in een woord."""
+    path = str(source_path or '').replace('\\', '/')
+    folders = path.split('/')[:-1]
+    return any(re.search(r"(?i)(?:^|[\s_.-])(?:cv|cvs|cv['’]s|c\.?v\.?|resumes?|curriculum[\s_-]*vitae)"
+                         r"(?=$|[\s_.-])", folder) for folder in folders)
+
+
 def cv_signals(text, filename):
     lines = [' '.join(line.strip().split()) for line in text[:160000].splitlines()]
     heads = set()
@@ -1472,7 +1500,7 @@ def cv_signals(text, filename):
             if expression.fullmatch(clean):
                 heads.add(kind)
     cv_header = any(CV_HEADER.fullmatch(line.strip()) for line in lines[:9])
-    cv_filename = bool(re.search(r'(?i)(?:^|[_\s-])(?:cv|resume|curriculum[_\s-]*vitae)(?:[_\s-]|$)', filename))
+    cv_filename = cv_bestandsnaam_hint(filename)
     non_cv = sum(bool(NON_CV_LINES.search(line)) for line in lines[:80])
     enormous = len(text) > 50000
     periods = experience_periods(lines) if 'werkervaring' in heads else []
@@ -1595,7 +1623,7 @@ def personal_contact(emails, phones, links):
     return any(not GENERIC_EMAIL.match(e) for e in emails) or bool(phones or links)
 
 
-def classify(text, filename, name, emails, phones, links, layout_bonus=0):
+def classify(text, filename, name, emails, phones, links, layout_bonus=0, source_path=''):
     if not text.strip():
         return 0, 'geen leesbare tekst; OCR of handmatige controle nodig'
     heads, cv_header, cv_filename, non_cv, enormous, periods = cv_signals(text, filename)
@@ -1603,9 +1631,11 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0):
     structure = ('werkervaring' in heads and
                  ('opleiding' in heads or 'vaardigheden' in heads or 'profiel' in heads))
     rich = len(heads) >= 3 and 'werkervaring' in heads
-    explicit = cv_header or cv_filename
+    in_cv_map = cv_map_hint(source_path)
+    explicit = cv_header or cv_filename or in_cv_map
     score = 12 * len(heads) + 17 * bool(name) + 14 * contact + 10 * cv_header + 5 * cv_filename
     score += 10 if structure else 0
+    score += 8 if in_cv_map and structure else 0
     score += min(18, 9*len(periods)) if structure and name else 0
     score += min(5, max(0, layout_bonus)) if structure else 0
     score -= 30 if non_cv else 0
@@ -1631,14 +1661,23 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0):
               ('; mogelijk andere documentsoort' if non_cv or enormous else '') +
               ('; cv zonder kopjes (naam, contact en periodes)' if loose and not structure else '') +
               ('; leeg sjabloon' if is_template(text) else '') +
-              ('; vacature/inhuuraanvraag' if is_vacancy(text) else ''))
+              ('; vacature/inhuuraanvraag' if is_vacancy(text) else '') +
+              ('; CV-map: ja' if in_cv_map else ''))
     return max(0,min(100,score)), reason
 
 
-def decide_status(text, filename, name, emails, phones, links, score, threshold=70):
+def decide_status(text, filename, name, emails, phones, links, score, threshold=70, source_path=''):
     if not text.strip():
         return 'other'        # gescand/afbeelding en ook de OCR vond niets: geen cv (staat wel in Bestanden en status)
     if is_template(text) or is_vacancy(text):
+        return 'other'
+    # Vacatures/inhuuraanvragen zijn géén twijfel-cv's. Een expliciete
+    # vacaturekop of bestandsnaam wordt ook zonder drie losse trefwoorden afgewezen.
+    if re.match(r'(?i)^\s*(?:vacature|vacancy|inhuuraanvraag|job opening)\b',
+                str(filename or '').replace('\\', '/').rsplit('/', 1)[-1]):
+        return 'other'
+    if any(re.match(r'(?i)^\s*(?:vacature|vacancy|inhuuraanvraag|job opening)\b', line)
+           for line in text.splitlines()[:8]):
         return 'other'
     _h, _hdr, _fn, _nc, _en, _p = cv_signals(text, filename)
     strong_cv = ('werkervaring' in _h and 'opleiding' in _h
@@ -1646,6 +1685,30 @@ def decide_status(text, filename, name, emails, phones, links, score, threshold=
     if is_school_doc(text, filename, strong_cv) and not CV_HEADER.search('\n'.join(text.splitlines()[:9])):
         return 'other'
     heads, cv_header, cv_filename, non_cv, enormous, periods = cv_signals(text,filename)
+    contact = personal_contact(emails, phones, links) or (bool(name) and own_site_in(text, name))
+    # Echte CV-signalen moeten zwaarder wegen dan de afwezigheid van een
+    # e-mailadres of datum. Minimaal twee inhoudelijke kopjes, waarvan Opleiding,
+    # plus een CV-kop, een CV-bestandsnaam of een CV-map.
+    in_cv_map = cv_map_hint(source_path)
+    cv_context = cv_header or cv_filename or in_cv_map
+    edu_met_inhoud = 'opleiding' in heads and bool(heads & {'werkervaring', 'profiel', 'vaardigheden'})
+    betrouwbare_naam = bool(name and reasonable_name(name))
+    if not non_cv and not enormous:
+        # Jacques van Nes: 'Curriculum Vitae' in de tekst + naam + contact;
+        # ook als afzonderlijke kopjes niet leesbaar uit een PDF komen.
+        if betrouwbare_naam and cv_header and contact:
+            return 'cv'
+        # Ook zonder contact: Opleiding + Werkervaring/Profiel/Vaardigheden
+        # en een herkenbare naam in een duidelijke CV-context is voldoende.
+        if betrouwbare_naam and cv_context and edu_met_inhoud:
+            return 'cv'
+        # Een écht CV-document zonder gevonden kandidaatnaam. Geen naam raden:
+        # het bestand is een CV, maar gaat NIET als geverifieerde kandidaat
+        # de ontdubbeling in voordat er een persoonsnaam is gevonden.
+        if (not betrouwbare_naam and cv_context and contact
+                and {'opleiding', 'werkervaring'} <= heads and len(heads) >= 3
+                and len(periods) >= 2):
+            return 'cv'
     if score >= threshold and headingless_cv(text, name, emails, phones, links, non_cv, enormous):
         return 'cv'
     contact = personal_contact(emails, phones, links) or (bool(name) and own_site_in(text, name))
@@ -2780,8 +2843,9 @@ def ingest(args, db, out, roots=None, label=None):
                 note = ' | '.join(t for t in (note, lightweight_pdf_warning(p,stat)) if t)
                 emails, phones, links = emails_in(text), phones_in(text), linkedins_in(text)
                 name = guess_name(text, p.stem, emails, links)
-                score, reason = classify(text, p.stem, name, emails, phones, links, layout)
-                status = decide_status(text, p.stem, name, emails, phones, links, score, args.threshold)
+                score, reason = classify(text, p.stem, name, emails, phones, links, layout, source_path=str(p))
+                status = decide_status(text, p.stem, name, emails, phones, links, score, args.threshold,
+                                       source_path=str(p))
                 if p.suffix.lower() == '.pdf' and not text.strip():
                     status = 'other'   # gescand en ook OCR vond geen tekst: geen cv
                 dst = ''
@@ -2983,8 +3047,9 @@ def process_document(real_file, path_str, stem, ext, stat, args, db, archive, la
                                             timeout_seconds=args.reader_timeout)
     emails, phones, links = emails_in(text), phones_in(text), linkedins_in(text)
     name = guess_name(text, stem, emails, links)
-    score, reason = classify(text, stem, name, emails, phones, links, layout)
-    status = decide_status(text, stem, name, emails, phones, links, score, args.threshold)
+    score, reason = classify(text, stem, name, emails, phones, links, layout, source_path=path_str)
+    status = decide_status(text, stem, name, emails, phones, links, score, args.threshold,
+                           source_path=path_str)
     if ext == '.pdf' and not text.strip():
         status = 'other'
     dst = ''
