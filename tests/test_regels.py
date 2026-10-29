@@ -1111,13 +1111,13 @@ for _i, _cv in enumerate((_old, _new)):
     _em = c.emails_in(_cv)
     _db_main.execute("INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
                      "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
-                     "opleiding,opleidingen,woonplaats,taal) "
-                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     "opleidingen,woonplaats,taal) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                      (str(_db_main_out / ('daan_' + str(_i) + '.txt')), _sha,
                       'Daan Vijverman', 1, 'cv', c.CLASSIFIER_VERSION,
                       c.normalized_snippet(_cv), json.dumps(c.signature(_cv)),
                       json.dumps(_em), '[]', '[]', 1000 + _i, 1000 + _i,
-                      '', '', '', '', c.opleidingen_from(_cv), '', 'nl'))
+                      '', '', '', c.opleidingen_from(_cv), '', 'nl'))
 _db_main.commit()
 # Verificatie van één unieke persoon, gekozen hoofd-CV en blijvend kandidaatnummer.
 _dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(

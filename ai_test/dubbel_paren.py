@@ -77,9 +77,16 @@ def paren(n=300, seed=7):
             g = r.choice(GROOT)
             p['banen'][0][3] = g; q['banen'][0][3] = g
             uit.append(('anders', 'naamgenoot groot bedrijf', tekst(p), tekst(q)))
-        elif soort == 9:  # referentie: mail van p staat in cv van q (zelfde voornaam)
+        elif soort == 9:  # gedeeld contact van referentie; alleen andere achternaam is bewijsbaar anders
             q = persoon(r); q.update(voor=p['voor'])
-            uit.append(('anders', 'referentie-mail', tekst(p), tekst(q, mail=p['mail'])))
+            if q['achter'] == p['achter']:
+                # Zelfde volledige naam en zelfde e-mail is zonder verdere labels
+                # niet van een nieuwe CV-versie te onderscheiden. Gebruikersregel:
+                # één kandidaat in dit expliciete, identieke geval.
+                uit.append(('zelfde', 'zelfde naam+persoonlijke mail (referentie niet bewijsbaar)',
+                            tekst(p), tekst(q, mail=p['mail'])))
+            else:
+                uit.append(('anders', 'referentie-mail', tekst(p), tekst(q, mail=p['mail'])))
         elif soort == 10:  # broer/zus: zelfde achternaam en vaste nummer
             q = persoon(r); q.update(achter=p['achter'])
             if q['voor'] == p['voor']:
