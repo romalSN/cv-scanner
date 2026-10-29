@@ -744,6 +744,46 @@ for a, b, m, ta, tb, verwacht in C:
     _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
     check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
+# --- Excel: tabblad Naamloze cv's alleen na alle checks, niet tussen kandidaten ---
+def _naamloze_testdoc(path, status, name, verified, reason, sha):
+    return {'path': '/in/CV_Stresstest/' + path, 'sha': sha, 'status': status,
+            'name': name, 'name_verified': verified, 'reason': reason,
+            'classifier_version': c.CLASSIFIER_VERSION,
+            'score': 49, 'archive': '', 'year': '', 'note': ''}
+_naamloze_proef = [
+    _naamloze_testdoc('anoniem_cv.docx', 'cv', '', 0,
+                      'kopjes: opleiding, profiel, vaardigheden, werkervaring; werkperiodes: 2', 'nam1'),
+    _naamloze_testdoc('nog_te_controleren.pdf', 'review', '', 0,
+                      'kopjes: opleiding, profiel, vaardigheden, werkervaring; werkperiodes: 2', 'nam2'),
+    _naamloze_testdoc('handleiding.pdf', 'review', '', 0,
+                      'kopjes: opleiding, werkervaring; werkperiodes: 0', 'nam3'),
+    _naamloze_testdoc('vacature.docx', 'other', '', 0,
+                      'kopjes: opleiding, profiel, werkervaring; werkperiodes: 3; vacature', 'nam4'),
+    _naamloze_testdoc('onzeker_rapport.pdf', 'review', '', 0,
+                      'kopjes: opleiding, profiel, werkervaring; werkperiodes: 2; mogelijk andere documentsoort', 'nam5'),
+    _naamloze_testdoc('echte_kandidaat.pdf', 'cv', 'Jasmijn Koster', 1,
+                      'kopjes: opleiding, werkervaring; werkperiodes: 2', 'nam6'),
+    _naamloze_testdoc('onbevestigde_naam.docx', 'cv', 'Voorbeeld Persoon', 0,
+                      'kopjes: opleiding, werkervaring; werkperiodes: 2', 'nam7'),
+]
+_naamloze_rows = c.naamloze_cv_rijen(_naamloze_proef)
+check('naamloze cv-tabblad: alleen anoniem, sterke review en onbevestigde naam',
+      {r['sha256'] for r in _naamloze_rows} == {'nam1', 'nam2', 'nam7'}, _naamloze_rows)
+check('naamloze cv-tabblad: review niet automatisch goedgekeurd',
+      next(r for r in _naamloze_rows if r['sha256'] == 'nam2')['beoordeling'] == 'Mogelijk CV, naam ontbreekt')
+check('naamloze cv-tabblad: kandidaten krijgen geen extra persoon',
+      all(r['sha256'] != 'nam6' for r in _naamloze_rows))
+_naamloze_export = Path(tempfile.mkdtemp()) / 'naamloos_test.xlsx'
+c.xlsx_export(_naamloze_export, [
+    ('Unieke personen', ['naam'], [{'naam': 'Jasmijn Koster'}]),
+    ("Naamloze cv's", ['cv_id','beoordeling'], _naamloze_rows)])
+with zipfile.ZipFile(_naamloze_export) as _zl:
+    check('Excel-tabblad Naamloze cvs werkelijk in xlsx',
+          "Naamloze cv&#x27;s" in _zl.read('xl/workbook.xml').decode('utf-8') or
+          "Naamloze cv&#39;s" in _zl.read('xl/workbook.xml').decode('utf-8') or
+          "Naamloze cv's" in _zl.read('xl/workbook.xml').decode('utf-8'))
+
+
 # --- Naam uitsluitend uit eigen bestandsnaam, nooit uit cv-/recruitermap ---
 _marthijn_bestand = 'Marthijn_vanRheenen-SCOM_OMS_Consultant.docx'
 _marthijn_pad = r'C:\CVs\Micha\Marthijn_vanRheenen-SCOM_OMS_Consultant.docx'

@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 24
+CLASSIFIER_VERSION = 25
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -5315,6 +5315,59 @@ def twijfel_overzicht(db):
         print(f'  {n:>5}  {ext:<6} {key}', flush=True)
 
 
+def naamloze_cv_rijen(docs):
+    """Alleen sterke naamloze CV-kandidaten, na de normale scan en AI.
+
+    Een 'review' uit een willekeurige CV-map is niet genoeg: een rapport,
+    functie-eis of handleiding met CV-kopjes hoort hier niet automatisch thuis.
+    Bevestigde kandidaten komen uitsluitend op het tabblad 'Unieke personen'.
+    """
+    result = []
+    for source in docs:
+        d = dict(source)
+        status = d.get('status', '')
+        reason = d.get('reason') or ''
+        if status not in ('cv', 'review') or (d.get('classifier_version') or 0) != CLASSIFIER_VERSION:
+            continue
+        if d.get('path') in EXCLUDED or reason.startswith('niet meegenomen:'):
+            continue
+        name = (d.get('name') or '').strip()
+        verified = bool(d.get('name_verified'))
+        if status == 'cv':
+            if verified and name:
+                continue       # Hoort al bij een echte kandidaat
+            state = 'CV, naam niet bevestigd' if name else 'CV, naam ontbreekt'
+        else:
+            if name:
+                continue       # Onzekere documentsoort, niet per se een naamloos CV
+            match = re.search(r'kopjes:\s*([^;]+)', reason, re.I)
+            heads = {h.strip().lower() for h in match.group(1).split(',')} if match else set()
+            periods = re.search(r'werkperiodes:\s*(\d+)', reason, re.I)
+            nperiods = int(periods.group(1)) if periods else 0
+            # Minimaal drie sterke kopjes inclusief Opleiding en Werkervaring,
+            # én 2 concrete perioden. Zo vallen de test-handleidingen,
+            # offertes en lege CV-sjablonen niet in deze verzameling.
+            if not (len(heads) >= 3 and {'opleiding', 'werkervaring'} <= heads
+                    and nperiods >= 2 and 'andere documentsoort' not in reason.lower()
+                    and 'sjabloon' not in reason.lower() and 'vacature' not in reason.lower()
+                    and 'AI: geen cv' not in reason):
+                continue
+            state = 'Mogelijk CV, naam ontbreekt'
+        result.append(dict(
+            cv_id=cv_id_of(d.get('sha') or ''),
+            naam_onbevestigd=name if not verified else '',
+            beoordeling=state,
+            cv_score=d.get('score') or 0,
+            oorspronkelijk_bestand=d.get('path') or '',
+            archiefkopie=d.get('archive') or '',
+            sha256=d.get('sha') or '',
+            jaar=d.get('year') or '',
+            toelichting=(d.get('note') or reason or 'Naam na controle nog niet betrouwbaar vastgesteld'),
+        ))
+    result.sort(key=lambda r: (r['beoordeling'], (r['oorspronkelijk_bestand'] or '').lower()))
+    return result
+
+
 def build_exports(db, out):
     remove_vanished(db)
     merges = out/'samenvoegen_correcties.csv'
@@ -5397,6 +5450,12 @@ def build_exports(db, out):
         print(f'NIET MEEGENOMEN: {weg_personen} cv(\'s) (taal, woonplaats of verblijfsduur); '
               'zie ‘Bestanden en status’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
+    # Naamloze CV's apart tonen, nooit als kandidaten of als dubbelpaar.
+    # De AI-stap is al afgerond voordat build_exports wordt aangeroepen.
+    naamloze = naamloze_cv_rijen(all_docs)
+    naamloos_cols = ['cv_id','naam_onbevestigd','beoordeling','cv_score',
+                     'oorspronkelijk_bestand','archiefkopie','sha256','jaar','toelichting']
+    save_csv(out/'naamloze_cvs.csv',naamloze,naamloos_cols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
     error_cols = ['categorie','bestand','extensie','status','omschrijving']
     categories = collections.Counter(item['categorie'] for item in error_details)
@@ -5446,7 +5505,9 @@ def build_exports(db, out):
                    'werkervaring', 'opleidingen', 'certificeringen', 'vaardigheden', 'over', 'locatie',
                    'email_openbaar', 'telefoon_openbaar']
         xlsx_export(temporary, [
-            ('Unieke personen',vcols,view),('Bestanden en status',*as_kid(fcols,files))]
+            ('Unieke personen',vcols,view),
+            ("Naamloze cv's",*as_kid(naamloos_cols,naamloze)),
+            ('Bestanden en status',*as_kid(fcols,files))]
             + ([('LinkedIn-gegevens', li_cols, li_rijen)] if li_rijen else []))
         # Controle nodig, leesfouten en online-details staan alleen nog in de CSV-bestanden in de exportmap.
         with zipfile.ZipFile(temporary) as z:
@@ -5469,6 +5530,7 @@ def build_exports(db, out):
         if temporary.exists():
             temporary.unlink()
     print(f'EXPORT: {len(people)} unieke persoonsrecords, {len(docs)} CV-bestandslocaties, {len(checks)} controlepunten')
+    print(f"NAAMLOZE CV'S: {len(naamloze)} apart op het Excel-tabblad; niet in de kandidatenlijst.")
     print(f'LET OP: alleen documenten die met herkenning V{CLASSIFIER_VERSION} zijn beoordeeld, tellen mee als bevestigd CV.')
     print('EXPORT-CONTROLE: ' + ', '.join(f'{v} {k}' for k,v in categories.most_common())
           if categories else 'EXPORT-CONTROLE: geen leesfouten of online-only bestanden')
