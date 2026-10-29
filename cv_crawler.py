@@ -5720,6 +5720,9 @@ def naamloze_cv_rijen(docs):
 
 
 def build_exports(db, out):
+    # Vorige export nooit als nieuw rapporteren wanneer opbouwen mislukt.
+    # De XLSX zelf mag voor herstel blijven staan; alleen de geldigheidsstempel vervalt.
+    (out / 'excel_export_geldig.json').unlink(missing_ok=True)
     remove_vanished(db)
     merges = out/'samenvoegen_correcties.csv'
     if not merges.exists():
@@ -5876,8 +5879,19 @@ def build_exports(db, out):
                   final.name, flush=True)
             print('Tip: sluit Excel voor je scant, dan wordt CV_Crawler_Resultaten.xlsx gewoon bijgewerkt.',
                   flush=True)
-        (out/'laatste_excel.txt').write_text(str(final), encoding='utf-8')
         save_kandidaten_json(out, vcols, view)
+        # Stempel pas NA de volledige, gevalideerde XLSX én bijbehorende export.
+        # Bij falen: geen stempel -> Open Excel toont nooit een vorige versie.
+        _stat = final.stat()
+        _ready = dict(schema=1, filename=final.name, bytes=_stat.st_size,
+                      mtime_ns=_stat.st_mtime_ns, classifier_version=CLASSIFIER_VERSION)
+        _ready_tmp = out / 'excel_export_geldig.bezig.json'
+        try:
+            _ready_tmp.write_text(json.dumps(_ready), encoding='utf-8')
+            os.replace(_ready_tmp, out / 'excel_export_geldig.json')
+        finally:
+            _ready_tmp.unlink(missing_ok=True)
+        (out/'laatste_excel.txt').write_text(str(final), encoding='utf-8')
     finally:
         if temporary.exists():
             temporary.unlink()
