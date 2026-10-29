@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 23
+CLASSIFIER_VERSION = 24
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -605,6 +605,17 @@ def _guess_name(text, filename, emails, links=()):
     # Meerdere kandidaten (bv. 'Jak Verhuur' en 'Lisa Groen')? Dan de regel die bij het eigen e-mailadres past.
     top = []
     for line in lines[:7]:
+        # Een cv kan een kop met functietermen hebben zoals
+        # 'SCOM OMS Consultant profiel en opdrachten'. Het oude afknippen
+        # tot 'Scom Oms' leek op een persoonsnaam, maar is een acroniem.
+        # Alleen de echte bestandsnaam wordt later eventueel gebruikt.
+        raw_words = line.split()
+        if (len(raw_words) >= 4 and len(raw_words[0]) <= 6 and len(raw_words[1]) <= 6
+                and raw_words[0].isupper() and raw_words[1].isupper()
+                and any(re.search(r'(?i)\b' + re.escape(term) + r'\b', line)
+                        for term in ('consultant', 'developer', 'engineer', 'profiel',
+                                     'profile', 'werkervaring', 'opdrachten', 'skills'))):
+            continue
         line = clean_person_name(line)
         if not line:
             continue
@@ -6937,7 +6948,8 @@ def ai_naam_bevestigd(ai_naam, doc):
     aanvullend bewijs uit kop/naamveld, eigen e-mail of eigen BESTANDSNAAM.
     Niets uit een bovenliggende map wordt ooit gebruikt als persoonsnaam.
     """
-    naam = tidy_name(clean_person_name(ai_naam or ''))
+    # Gebruik hoofdletters zoals bij gewone naamherkenning, niet 'Jasmijn koster'.
+    naam = tidy_name(clean_person_name(tidy_name(ai_naam or '')))
     if not naam or not reasonable_name(naam):
         return ''
     snippet = ' '.join((doc['snippet'] or '').lower().split())
@@ -6954,6 +6966,10 @@ def ai_naam_bevestigd(ai_naam, doc):
         r'curriculum vitae|voornaam)\s+' + re.escape(norm) + r'\b',
         snippet[:3500]))
     bestandsnaam = naam_uit_bestandsnaam(doc['path'], '', zonder_tekst=True)
+    # 'CV_Jeroen_Bos.docx' mag geen AI-naam 'Jasmijn Koster' krijgen,
+    # ook al staat die naam toevallig elders in de uitgelezen tekst.
+    if bestandsnaam and normalized_name(bestandsnaam) != norm:
+        return ''
     bestand_klopt = normalized_name(bestandsnaam) == norm
     try:
         e_mails = json.loads(doc['emails'] or '[]')
@@ -7014,7 +7030,11 @@ def ai_twijfel(db, out):
                       or 'cv-kop: ja' in rs or (m and int(m.group(1)) > 0))
         # Een door de regels al herkend cv blijft een cv. AI mag alleen het
         # LEGE NAAMVELD aanvullen, nooit zo'n cv alsnog weggooien.
+        # Onbevestigde namen (ook als die eerder al waren ingevuld) moeten
+        # door dezelfde onafhankelijke controle als nieuwe AI-namen.
         name = r['name'] or ''
+        if r['status'] == 'cv' and not r['name_verified'] and name:
+            name = ai_naam_bevestigd(name, r)
         if not name and res.get('naam'):
             name = ai_naam_bevestigd(res['naam'], r)
         if r['status'] == 'cv':
@@ -7040,9 +7060,13 @@ def ai_twijfel(db, out):
                             ' – zelf kijken', r['path']))
                 counts['onzeker'] += 1
         elif res['soort'] == 'geen_cv':
-            # De AI mag documenten met aantoonbare cv-opbouw niet alleen op
-            # eigen oordeel afwijzen; een vacature-/sjabloonregel beslist wel.
-            if cv_kenmerk and not ('vacature' in rs or 'sjabloon' in rs):
+            # Een duidelijke sollicitatiebrief mag niet op review blijven
+            # alleen omdat een oud score-etiket 'Werkervaring' suggereerde.
+            # Bij echte cv-kenmerken mag AI nooit alleen beslissen.
+            brief = bool(re.search(
+                r'\b(?:geachte(?: heer| mevrouw)?|met vriendelijke groet|dear sir|dear madam)\b',
+                r['snippet'] or ''))
+            if cv_kenmerk and not brief and not ('vacature' in rs or 'sjabloon' in rs):
                 db.execute("UPDATE docs SET reason=? WHERE path=?",
                            ((r['reason'] or '') + '; AI: geen cv, maar cv-signalen; controle nodig', r['path']))
                 counts['onzeker'] += 1

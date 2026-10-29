@@ -405,6 +405,8 @@ check('AI vult alleen bewezen naam op bestaand cv aan',
       _ai_rows['CV_Jasmijn_Koster.docx'] == ('cv', 'Jasmijn Koster', 1), _ai_rows)
 check('AI mag naam uit ander bestandsnaam-conflict niet verzinnen',
       _ai_rows['CV_Jeroen_Bos.docx'] == ('cv', '', 0), _ai_rows)
+check('AI controle: andere naam in bestandsnaam blokkeert bevestiging',
+      c.ai_naam_bevestigd('Jasmijn Koster', {'snippet': 'naam jasmijn koster', 'path': '/cv/CV_Jeroen_Bos.docx', 'emails': '[]'}) == '')
 check('AI laat naam leeg zonder controleerbaar bewijs',
       _ai_rows['bedrijfsnaam.docx'] == ('cv', '', 0), _ai_rows)
 check('AI-leeg cv blijft buiten unieke kandidaten',
@@ -768,6 +770,8 @@ check('een map met naam Micha maakt van een hash geen persoonsnaam',
       c.naam_uit_bestandsnaam('/u/CV Micha/1234567890.pdf', '', zonder_tekst=True) == '')
 check('een hash-bestand verzint geen naam op basis van map',
       c.guess_name(_marthijn_cv, 'ab88123ed5da', _marthijn_em) == '')
+check('SCOM OMS is functietaal, geen naam uit de cv-tekst',
+      c._guess_name(_marthijn_cv, 'ab88123ed5da', []) == '')
 check('bij één los kopje leidt bestandsnaam nooit tot aangenomen kandidaat',
       c.guess_name('Vaardigheden\nSAP consultancy en advisering.',
                    _marthijn_bestand, []) == '')
