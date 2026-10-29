@@ -3088,6 +3088,11 @@ def harde_blokkade(a, b):
         return 'andere voornaam'
     if loopbaan_botst(a, b):
         return 'andere loopbaan (andere werkgevers in dezelfde jaren)'
+    # Een aantoonbaar tegenstrijdige opleiding betekent twee afzonderlijke kandidaten, niet 'mogelijk dubbel'.
+    # Zelfde naam, mail, telefoon of AI-akkoord mogen dit niet opheffen. Bachelor -> master is geen botsing;
+    # een andere woonplaats zonder opleidingsconflict evenmin.
+    if opleiding_botst(a, b):
+        return 'tegenstrijdige opleiding (niveau, jaren of opleidingsplaats)'
     aw, bw = [w for w in an.split() if w not in NAME_FILLERS], [w for w in bn.split() if w not in NAME_FILLERS]
     if len(aw) >= 2 and len(bw) >= 2 and not _zelfde_naam_andere_volgorde(an, bn):
         la, lb = aw[-1], bw[-1]
