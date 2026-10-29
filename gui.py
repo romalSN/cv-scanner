@@ -282,6 +282,11 @@ def parse_progress(line: str) -> dict[str, str]:
     return output
 
 
+def extra_scan_args() -> list[str]:
+    """Nieuwe scan: vorige Excel en index tellen niet als 'al bekeken'."""
+    return ['--force']
+
+
 def choose_python() -> str:
     """Gebruik de base interpreter die de GUI draait voor de eigen venv."""
     return sys.executable
@@ -791,6 +796,7 @@ class ScannerApp:
                 raise InterruptedError('Geadviseerd om te stoppen.')
             cmd = ([str(python), '--backend'] if FROZEN else [str(python), '-u', str(BACKEND)]) + ['--output', str(self.output)]
             if scan:
+                cmd += extra_scan_args()
                 if options['root']:
                     cmd += ['--root', options['root']]
                 elif options['volumes']:

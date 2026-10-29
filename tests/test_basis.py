@@ -56,4 +56,5 @@ with tempfile.TemporaryDirectory() as out:
     assert gui.parse_progress('TWIJFEL-OVERZICHT (8 documenten, zonder namen of paden):').get('twijfel') == '8'
     hergebruikt = gui.parse_progress("Scan afgerond: {'gevonden_ondersteund': 129, 'hergebruikt': 129, 'fouten': 2}")
     assert 'twijfel' not in hergebruikt
+    assert gui.extra_scan_args() == ['--force']
 print('BASIS OK')

@@ -3000,6 +3000,9 @@ def ingest(args, db, out, roots=None, label=None):
     if not roots:
         raise RuntimeError('Geen bestaande mappen opgegeven')
     print(label or ('Zoekt in: ' + ', '.join(map(str, roots))), flush=True)
+    if not label and getattr(args, 'force', False):
+        print('Vorige sessie telt niet mee: elk bestand wordt opnieuw bekeken (geen hergebruik van Excel of eerdere scan).',
+              flush=True)
     for d in mac_access_check():
         print('TOEGANG GEWEIGERD: ' + d, flush=True)
     print(crypto_status_text(), flush=True)
