@@ -4691,9 +4691,10 @@ def opleiding_periodes(d):
             # 'Hogeschool van Amsterdam' -> Amsterdam; 'Hogeschool Utrecht' -> Utrecht.
             # 'Woonplaats Amsterdam' na 'Hogeschool Utrecht' mag deze plaats niet vervangen.
             na = kort[m.end():].split()
-            na = [w for w in na if w not in ('van', 'de', 'het', 'der')][:3]
+            na = [w for w in na if w not in ('van', 'de', 'het', 'der', 'technical', 'skills', 'skill',
+                                             'profiel', 'profile', 'vaardigheden') and not w.isdigit()][:3]
             plaats = _plaats_in(' ' + ' '.join(na) + ' ', NL_PLACES | BE_PLACES)
-            school = kort[:m.end()].split()[-1] + ' ' + ' '.join(na[:2])
+            school = kort[:m.end()].split()[-1] + ' ' + ' '.join(na[:1])
             school = school.strip()
         else:
             # Ook Fontys, Avans of Saxion tellen als opleiding; locatie is dan onbekend.
@@ -5018,6 +5019,9 @@ def deduplicate(db, merge_file=None):
                     continue
                 if (blokkade.startswith('tegenstrijdige opleiding')
                         and opleidingen_verzoend(docs[x], docs[y], alle)):
+                    continue
+                # Zelfde studie, maar de lastige CV noemt een andere werkgever: één persoon.
+                if blokkade.startswith('andere loopbaan') and opleiding_overeenkomsten(docs[x], docs[y]):
                     continue
                 return True
         return False
