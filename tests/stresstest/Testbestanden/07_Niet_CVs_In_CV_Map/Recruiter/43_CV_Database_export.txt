@@ -1,0 +1,11 @@
+Export kandidaten-database
+Persoons-ID: 8844
+Naam: Noor Vermeer
+Profiel
+Noor Vermeer | developer
+Werkervaring
+2015 - 2019 Werkgever
+Opleiding
+HBO
+Persoons-ID: 8845
+Naam: Sven de Moor

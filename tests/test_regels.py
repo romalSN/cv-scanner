@@ -338,7 +338,8 @@ _db.commit()
 c.ai_twijfel(_db, _out)
 st = {r['path'].rsplit('/', 1)[-1].rsplit('\\', 1)[-1]: (r['status'], r['name']) for r in _db.execute('select path,status,name from docs')}
 check('AI twijfel: cv + naam uit tekst + contact = cv', st['a.docx'] == ('cv', 'Henk Winters'), st)
-check('AI twijfel: brief = geen cv', st['b.docx'][0] == 'other', st)
+check('AI twijfel: brief met AI-oordeel = geen cv, maar geen sterke cv-bewijzen',
+      st['b.docx'][0] == 'other', st)
 check('AI twijfel: cv zonder contact blijft twijfel', st['c.docx'][0] == 'review', st)
 _ar.available, _ar.classify = _o
 
@@ -365,7 +366,7 @@ check('zelfde bedrijf bij 3 kandidaten = bureau', c.bedrijf_soort('Voorbeeld Exp
 check('onduidelijk = onbekend', c.bedrijf_soort('Voorbeeld Experts BV', 'Lisa Groen', ['lisa@gmail.com'])[1] == 'onbekend')
 check('werkgever in werkervaring is geen leverancier', c.leverancier_from("Lisa Groen\nWerkervaring\n2019 - heden Consultant, Codewerk BV") == '')
 
-# --- Geen persoonsnaam te vinden: AI zegt cv -> eigen bedrijfsnaam als naam ---
+# --- Geen persoonsnaam: AI mag nooit bedrijfsnaam verzinnen of gebruiken ---
 _ar.available = lambda: True; _ar.TWIJFEL_AAN = True
 _ar.classify = lambda t: {'soort': 'cv', 'naam': '', 'reden': 'lijkt een cv'}
 _out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
@@ -376,8 +377,40 @@ _db.execute("insert into docs(path,name,status,snippet,sha,emails,phones,links,r
 _db.commit(); (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
 c.ai_twijfel(_db, _out)
 rw = _db.execute('select status,name,reason from docs').fetchone()
-check('geen persoonsnaam: bedrijfsnaam wordt de naam (AI zegt cv)', rw[0] == 'cv' and rw[1] == 'Jansen IT Consultancy BV', tuple(rw))
-check('bedrijfsnaam-cv wordt niet elke scan opnieuw gelezen', c.keep_cv_name(rw[1], rw[2]) == 'Jansen IT Consultancy BV')
+check('geen persoonsnaam: AI mag geen bedrijfsnaam als kandidaat opnemen',
+      rw[0] == 'review' and not rw[1], tuple(rw))
+check('oude bedrijfsnaam wordt niet behouden bij nieuwe scan',
+      c.keep_cv_name('Jansen IT Consultancy BV', 'naam = bedrijfsnaam (geen persoonsnaam gevonden)') == '')
+_ar.available, _ar.classify = _o
+
+# AI draait na gewone herkenning voor naamloze cv's. Alleen bewezen namen in CV.
+_ar.available = lambda: True; _ar.TWIJFEL_AAN = True
+_ar.classify = lambda t: {'soort': 'cv', 'naam': 'jasmijn koster', 'reden': 'cv'}
+_out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
+def _ai_cv(path, name, snippet, sha):
+    _db.execute("INSERT INTO docs(path,name,status,name_verified,snippet,sha,emails,phones,links,reason,classifier_version) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (str(_out / path), name, 'cv', 0, snippet, sha, '[]', '[]', '[]',
+                 'kopjes: opleiding, profiel, werkervaring; naam: nee; contact: nee', c.CLASSIFIER_VERSION))
+_ai_cv('CV_Jasmijn_Koster.docx', '', 'curriculum vitae naam jasmijn koster profiel developer '
+       'werkervaring 2019 heden opleiding hbo informatica', 'ai_gevonden')
+_ai_cv('CV_Jeroen_Bos.docx', '', 'naam jasmijn koster profiel developer werkervaring 2019 heden '
+       'opleiding informatica', 'ai_conflict')
+_ai_cv('bedrijfsnaam.docx', '', 'profiel sap consultant vaardigheden sap opleiding mbo', 'ai_leeg')
+_db.commit(); (_out / c.DECISIONS_FILE).write_text('{}', encoding='utf-8')
+c.ai_twijfel(_db, _out)
+_ai_rows = {Path(r['path']).name: (r['status'], r['name'], r['name_verified'])
+            for r in _db.execute('SELECT path,status,name,name_verified FROM docs')}
+check('AI vult alleen bewezen naam op bestaand cv aan',
+      _ai_rows['CV_Jasmijn_Koster.docx'] == ('cv', 'Jasmijn Koster', 1), _ai_rows)
+check('AI mag naam uit ander bestandsnaam-conflict niet verzinnen',
+      _ai_rows['CV_Jeroen_Bos.docx'] == ('cv', '', 0), _ai_rows)
+check('AI controle: andere naam in bestandsnaam blokkeert bevestiging',
+      c.ai_naam_bevestigd('Jasmijn Koster', {'snippet': 'naam jasmijn koster', 'path': '/cv/CV_Jeroen_Bos.docx', 'emails': '[]'}) == '')
+check('AI laat naam leeg zonder controleerbaar bewijs',
+      _ai_rows['bedrijfsnaam.docx'] == ('cv', '', 0), _ai_rows)
+check('AI-leeg cv blijft buiten unieke kandidaten',
+      _db.execute("SELECT COUNT(*) FROM docs WHERE status='cv' AND name_verified=1").fetchone()[0] == 1)
 _ar.available, _ar.classify = _o
 
 _es = ("Juan Garcia\nDatos personales: telefono, correo\nExperiencia laboral\n2018 - actualidad Desarrollador de software en Empresa "
@@ -711,6 +744,266 @@ for a, b, m, ta, tb, verwacht in C:
     _r = c.safe_pair(_d(a, m, ta), _d(b, m, tb))
     check(f'dubbel: {a} + {b} ({(m or ["tel"])[0]}) = {"samen" if verwacht else "apart"}', _r[0] == verwacht, _r)
 
+# --- Titels, recruiterprofiel, gelijktijdige werkgevers ---
+for _filename in (
+    '12_Recruiter_profiel.docx', '09_Recruiter_Profile.pdf',
+    '06_CV_Checklist_werkervaring.rtf', 'jan_2026_handleiding.docx',
+    'CV_Naam_2024_jaarverslag.pdf', 'CV_salaris_2025.pdf',
+    'CV_factuur_2026.docx', 'CV_facturatie_2026.pdf',
+    'CV_rapportage_2023.rtf', 'CV_verslag_2026.docx',
+    'CV_voortgangsverslag_2026.docx', '01_projectrapportage.pdf',
+    'CV_stageverslag.docx', 'eindverslag.txt',
+    '2026_cv_salarisoverzicht.pdf', 'CV_controlelijst.pdf',
+    'CV_notulen.pdf', '24_Stageovereenkomst.rtf'
+):
+    _tekst = 'Werkervaring\nOpleiding\nVaardigheden\nVereisten voor de kandidaat.'
+    check('niet-cv-bestandsnaam: ' + _filename,
+          bool(c.niet_cv_documentsoort(_tekst, _filename)),
+          c.niet_cv_documentsoort(_tekst, _filename))
+    check('niet-cv wordt other: ' + _filename,
+          c.decide_status(_tekst, _filename, '', [], [], [], 90) == 'other')
+for _rol in ('Senior_Recruiter', 'Software_Engineer', 'Data_Analyst',
+             'Salarisadministrateur', 'Projectmanager', 'Consultant',
+             'IT_Architect', 'Recruitment_Consultant'):
+    _f = 'CV_Janneke_van_Buren_' + _rol + '.docx'
+    _cv = ('Curriculum Vitae\nJanneke van Buren\njanneke.vanburen@gmail.com\n'
+           'Opleiding\nHBO Informatica\nProfiel\nErvaren consultant')
+    check('functie in cv-bestandsnaam blijft toegestaan: '+_rol,
+          not c.niet_cv_documentsoort(_cv, _f)
+          and c.decide_status(_cv, _f, 'Janneke van Buren',
+                              ['janneke.vanburen@gmail.com'], [], [], 80) == 'cv')
+_profiel = ('Recruiter Profiel\nGewenste opleiding: HBO ICT\n'
+            'Minimaal 5 jaar ervaring vereist\nWerkervaring\nOpleiding\n'
+            'Vaardigheden\nMust have: Python en SQL')
+check('recruiterprofiel met cv-kopjes is other',
+      c.decide_status(_profiel, '12_Recruiter_profiel.docx', '', [], [], [], 90,
+                      source_path='/werk/CVs/Micha') == 'other')
+_vier = ('Overzicht functies\nWerkervaring\n'
+         '2020 - 2024 Developer bij Appstone\n'
+         '2020 - 2024 Analyst bij Bytefield\n'
+         '2020 - 2024 Manager bij Cloudhouse\n'
+         '2020 - 2024 Specialist bij Datahavens\n'
+         'Opleiding\nGewenst HBO niveau')
+check('vier werkgevers tegelijk worden herkend',
+      c.gelijktijdige_werkgevers(_vier) >= 4, c.gelijktijdige_werkgevers(_vier))
+check('vier gelijktijdige werkgevers zonder persoon = other',
+      c.decide_status(_vier, 'profielen.docx', '', [], [], [], 90) == 'other')
+_twee = ('Curriculum Vitae\nJanneke van Buren\njanneke.vanburen@gmail.com\n'
+         'Werkervaring\n2020 - 2024 Developer bij Appstone\n'
+         '2020 - 2024 Analyst bij Bytefield\n'
+         'Opleiding\n2018 - 2020 HBO ICT\nVaardigheden\nPython en SQL')
+check('twee parallelle banen van echte kandidaat blijven cv',
+      c.gelijktijdige_werkgevers(_twee) < 4
+      and c.decide_status(_twee, 'CV_Janneke_van_Buren.docx',
+                          'Janneke van Buren', ['janneke.vanburen@gmail.com'], [], [], 80) == 'cv')
+_freelance = ('Curriculum Vitae\nJanneke van Buren\n'
+              'janneke.vanburen@gmail.com\nWerkervaring\n'
+              '2020 - 2024 Consultant bij Appstone\n'
+              '2020 - 2024 Consultant bij Bytefield\n'
+              '2020 - 2024 Consultant bij Cloudhouse\n'
+              '2020 - 2024 Consultant bij Datahavens\n'
+              'Opleiding\nHBO ICT\nVaardigheden\nPython')
+check('vier parallelle opdrachten met sterk persoonlijk CV => review, nooit other',
+      c.decide_status(_freelance, 'CV_Janneke_van_Buren.docx',
+                      'Janneke van Buren', ['janneke.vanburen@gmail.com'], [], [], 90) == 'review')
+
+# --- Minimum naam in kandidaten + stagecontractsignalen ---
+_stage_agreement = (
+    'STAGEOVEREENKOMST\n'
+    'Student: Pieter van Leeuwen\n'
+    'Opleiding: HBO Informatica\n'
+    'Stagegever: Datawerk B.V.\n'
+    'Stageverlener: Pieter van Leeuwen\n'
+    'Artikel 1: De overeenkomst wordt aangegaan voor de periode 2023 - 2024.\n'
+    'Ondergetekenden verklaren akkoord te gaan.\n'
+    'Handtekening beide partijen:\n'
+    'Werkervaring\n2023 - 2024 stage bij Datawerk\n'
+    'Opleiding\nHBO Informatica')
+check('stageovereenkomst met naam en stageperiode blijft other',
+      c.is_stagecontract(_stage_agreement)
+      and c.decide_status(_stage_agreement, '24_Stageovereenkomst.rtf',
+                          'Pieter van Leeuwen', [], [], [], 99,
+                          source_path='/CVs/Micha') == 'other')
+_stage_dubbele_kop = (
+    'Curriculum Vitae\nPieter van Leeuwen\n'
+    'Profiel\nStagiair bij Datawerk\n'
+    'Werkervaring\n2023 - 2024 stage bij Datawerk\n'
+    'Opleiding\nHBO Informatica\n'
+    'Vaardigheden\nPython, Java\n'
+    'Ik heb een stageovereenkomst ondertekend.')
+check('echte cv met enkele verwijzing naar stageovereenkomst blijft cv',
+      not c.is_stagecontract(_stage_dubbele_kop)
+      and c.decide_status(_stage_dubbele_kop, 'CV_Pieter_van_Leeuwen.docx',
+                          'Pieter van Leeuwen', [], [], [], 75) == 'cv')
+_agreement_without_title = (
+    'Stageafspraken van Pieter van Leeuwen\n'
+    'Stagegever: Datawerk B.V.\n'
+    'De overeenkomst wordt aangegaan tussen de ondergetekenden.\n'
+    'Artikel 1: Start- en einddatum 2025 - 2026.\n'
+    'Datum ondertekening: 15-09-2025\n'
+    'Werkervaring\nOpleiding')
+check('ook zonder letterlijke titel stageovereenkomst is contract other',
+      c.is_stagecontract(_agreement_without_title)
+      and c.decide_status(_agreement_without_title, 'gegevens_student.docx',
+                          'Pieter van Leeuwen', [], [], [], 80) == 'other')
+check('stageperiode + naam + school op zichzelf maakt geen contract',
+      not c.is_stagecontract('Pieter van Leeuwen\nOpleiding HBO ICT\n'
+                             'Werkervaring\n2022 - 2023 Stagiair bij Datawerk\nPython'))
+# Werkelijke kandidatenquery krijgt alleen name_verified=1 en niet-lege naam.
+import inspect as _inspect
+check('kandidaatnummer: naam is verplicht in deduplicate-selectie',
+      "name_verified=1 AND name!=''" in _inspect.getsource(c.deduplicate))
+
+# --- Niet-CV documenten en template-leegte ---
+check('testpakketmap is geen CV-map',
+      not c.cv_map_hint('/Download/CV_Scanner_Stresstest_Moeilijke_Bestanden/Projectplan.txt'))
+check('echte cv-map blijft CV-context',
+      c.cv_map_hint("/Inkoop/cv's/cv's Micha/Jan_Smit.docx"))
+check('CV-kop is sterke aanwijzing: Jacques',
+      c.decide_status('Curriculum Vitae\nJacques van Nes\njacques@gmail.com\n'
+                      '06 11223344\nOpleiding\nHBO Informatica\nProfiel\nErvaren consultant',
+                      'C.V. Jacques van Nes.pdf', 'Jacques van Nes',
+                      ['jacques@gmail.com'], ['+31611223344'], [], 40) == 'cv')
+for _title in ('Rapport', 'Rapportage', 'Onderzoeksrapport', 'Interviewsamenvatting',
+               'Vacature', 'Vacatur', 'Factuur', 'Facturatie', 'Invoice',
+               'Handleiding', 'Gebruikershandleiding', 'Manual',
+               'Projectplan Digitalisering', 'Stageovereenkomst', 'Kandidatenoverzicht',
+               'Job Description', 'CV Template', 'Cursusmateriaal', 'Privacybeleid'):
+    _body = _title + '\nWerkervaring\nOpleiding\nVaardigheden\nDat zijn de vereiste competenties.'
+    _file = '21_CV_' + _title.replace(' ', '_') + '.docx'
+    check('niet-cv-titel herkend: ' + _title,
+          bool(c.niet_cv_documentsoort(_body, _file)), c.niet_cv_documentsoort(_body, _file))
+    check('niet-cv-titel onmiddellijk other: ' + _title,
+          c.decide_status(_body, _file, 'Jan Jansen',
+                          ['jan@gmail.com'], [], [], 90,
+                          source_path="/Download/cv's") == 'other')
+_werk_cv = ('Curriculum Vitae\nRoos van Aalst\nroos@example.com\n'
+            'Opleiding\nHBO ICT\nVaardigheden\nPython en SQL\nWerkervaring\n'
+            '2018 - 2022 Consultant bij een projectplan digitalisering.\n'
+            '2022 - heden Handleidingen en onderzoeksrapportages geschreven.')
+check('cv met rapportage/handleiding in werkervaring blijft cv',
+      not c.niet_cv_documentsoort(_werk_cv, 'CV_Roos_van_Aalst.docx') and
+      c.decide_status(_werk_cv, 'CV_Roos_van_Aalst.docx', 'Roos van Aalst',
+                      ['roos@example.com'], [], [], 80) == 'cv')
+_leeg = ('Curriculum Vitae\nProfiel\nVul hier jouw profiel in.\n'
+         'Werkervaring\n20XX-20XX Voorbeeldwerkgever.\n'
+         'Opleiding\n[Vul opleiding in]\nVaardigheden\n______')
+check('lege kopjes en invulvelden zijn CV-sjabloon, geen CV',
+      c.is_template(_leeg) and
+      c.decide_status(_leeg, 'CV.docx', '', [], [], [], 99) == 'other')
+check('cv-kopjes zonder ingevulde inhoud zijn sjabloon',
+      c.is_template('Curriculum Vitae\nProfiel\nWerkervaring\nOpleiding\nVaardigheden'))
+check('kort maar ingevuld HBO ICT en Python maken geen leeg sjabloon',
+      not c.is_template('Curriculum Vitae\nJanneke van Buren\n'
+                        'Werkervaring\n2020 - 2024 Consultant bij Appstone\n'
+                        'Opleiding\nHBO ICT\nVaardigheden\nPython'))
+
+# --- Naamloze mappen bewaren kopieën, originelen blijven staan ---
+import hashlib as _hashlib
+_nm_base = Path(tempfile.mkdtemp())
+_nm_out = _nm_base / 'export'; _nm_out.mkdir()
+_nm_orig = _nm_base / 'originele_cv.txt'
+_nm_orig.write_text('Curriculum Vitae\nOpleiding HBO Informatica\nWerkervaring 2019-2024\n', encoding='utf-8')
+_nm_sha = _hashlib.sha256(_nm_orig.read_bytes()).hexdigest()
+_nm_record = [{'sha256': _nm_sha, 'oorspronkelijk_bestand': str(_nm_orig)}]
+check('naamloze CV kopie in eigen map zonder origineel te verplaatsen',
+      c.kopieer_naamloze_cvs(_nm_out, _nm_record) == 1 and
+      _nm_orig.exists() and len(list(c.naamloze_cv_folder(_nm_out).glob('*.txt'))) == 1)
+check('zelfde naamloze CV kopie niet nogmaals aangemaakt',
+      c.kopieer_naamloze_cvs(_nm_out, _nm_record) == 0)
+check('naamloze map wordt bij een nieuwe scan overgeslagen',
+      not any(c.naamloze_cv_folder(_nm_out) in p.parents
+              for p in c.iter_files([_nm_base], _nm_out)))
+_nm_zip = _nm_base / 'bron.zip'
+_nm_zipped = b'Curriculum Vitae\nOpleiding HBO\nWerkervaring 2018-2024\n'
+with zipfile.ZipFile(_nm_zip, 'w') as _z:
+    _z.writestr('cvs/naamloos_uit_zip.txt', _nm_zipped)
+_nm_zip_sha = _hashlib.sha256(_nm_zipped).hexdigest()
+check('naamloos CV uit ZIP kopieren zonder ZIP te veranderen',
+      c.kopieer_naamloze_cvs(_nm_out, [{
+          'sha256': _nm_zip_sha, 'oorspronkelijk_bestand': str(_nm_zip) + c.ZIP_SEP + 'cvs/naamloos_uit_zip.txt'
+      }]) == 1 and _nm_zip.exists() and len(zipfile.ZipFile(_nm_zip).namelist()) == 1)
+check('naamloze map staat naast Alle_cvs',
+      c.naamloze_cv_folder(_nm_out).parent == c.cv_folder(_nm_out).parent)
+
+# --- Excel: tabblad Naamloze cv's alleen na alle checks, niet tussen kandidaten ---
+def _naamloze_testdoc(path, status, name, verified, reason, sha):
+    return {'path': '/in/CV_Stresstest/' + path, 'sha': sha, 'status': status,
+            'name': name, 'name_verified': verified, 'reason': reason,
+            'classifier_version': c.CLASSIFIER_VERSION,
+            'score': 49, 'archive': '', 'year': '', 'note': ''}
+_naamloze_proef = [
+    _naamloze_testdoc('anoniem_cv.docx', 'cv', '', 0,
+                      'kopjes: opleiding, profiel, vaardigheden, werkervaring; werkperiodes: 2', 'nam1'),
+    _naamloze_testdoc('nog_te_controleren.pdf', 'review', '', 0,
+                      'kopjes: opleiding, profiel, vaardigheden, werkervaring; werkperiodes: 2', 'nam2'),
+    _naamloze_testdoc('handleiding.pdf', 'review', '', 0,
+                      'kopjes: opleiding, werkervaring; werkperiodes: 0', 'nam3'),
+    _naamloze_testdoc('vacature.docx', 'other', '', 0,
+                      'kopjes: opleiding, profiel, werkervaring; werkperiodes: 3; vacature', 'nam4'),
+    _naamloze_testdoc('onzeker_rapport.pdf', 'review', '', 0,
+                      'kopjes: opleiding, profiel, werkervaring; werkperiodes: 2; mogelijk andere documentsoort', 'nam5'),
+    _naamloze_testdoc('echte_kandidaat.pdf', 'cv', 'Jasmijn Koster', 1,
+                      'kopjes: opleiding, werkervaring; werkperiodes: 2', 'nam6'),
+    _naamloze_testdoc('onbevestigde_naam.docx', 'cv', 'Voorbeeld Persoon', 0,
+                      'kopjes: opleiding, werkervaring; werkperiodes: 2', 'nam7'),
+]
+_naamloze_rows = c.naamloze_cv_rijen(_naamloze_proef)
+check('naamloze cv-tabblad: alleen anoniem, sterke review en onbevestigde naam',
+      {r['sha256'] for r in _naamloze_rows} == {'nam1', 'nam2', 'nam7'}, _naamloze_rows)
+check('naamloze cv-tabblad: review niet automatisch goedgekeurd',
+      next(r for r in _naamloze_rows if r['sha256'] == 'nam2')['beoordeling'] == 'Mogelijk CV, naam ontbreekt')
+check('naamloze cv-tabblad: kandidaten krijgen geen extra persoon',
+      all(r['sha256'] != 'nam6' for r in _naamloze_rows))
+_naamloze_export = Path(tempfile.mkdtemp()) / 'naamloos_test.xlsx'
+c.xlsx_export(_naamloze_export, [
+    ('Unieke personen', ['naam'], [{'naam': 'Jasmijn Koster'}]),
+    ("Naamloze cv's", ['cv_id','beoordeling'], _naamloze_rows)])
+with zipfile.ZipFile(_naamloze_export) as _zl:
+    check('Excel-tabblad Naamloze cvs werkelijk in xlsx',
+          "Naamloze cv&#x27;s" in _zl.read('xl/workbook.xml').decode('utf-8') or
+          "Naamloze cv&#39;s" in _zl.read('xl/workbook.xml').decode('utf-8') or
+          "Naamloze cv's" in _zl.read('xl/workbook.xml').decode('utf-8'))
+
+
+# --- Naam uitsluitend uit eigen bestandsnaam, nooit uit cv-/recruitermap ---
+_marthijn_bestand = 'Marthijn_vanRheenen-SCOM_OMS_Consultant.docx'
+_marthijn_pad = r'C:\CVs\Micha\Marthijn_vanRheenen-SCOM_OMS_Consultant.docx'
+check('Windows-pad: naam Marthijn van Rheenen, niet map Micha of SCOM/OMS',
+      c.naam_uit_bestandsnaam(_marthijn_pad, '', zonder_tekst=True) == 'Marthijn van Rheenen',
+      c.naam_uit_bestandsnaam(_marthijn_pad, '', zonder_tekst=True))
+check('aan elkaar geplakte tekst MarthijnvanRheenen wordt naam',
+      c.naam_uit_bestandsnaam(_marthijn_bestand,
+                              c.normalized_snippet('MarthijnvanRheenen')) == 'Marthijn van Rheenen')
+_marthijn_cv = ('Curriculum Vitae\nVaardigheden\nSAP en procesoptimalisatie.\n'
+                'Werkervaring\n2018 - 2022 Consultant bij Stadsprojecten.\n'
+                '06 12345678\nSCOM OMS Consultant profiel en opdrachten.')
+_marthijn_em, _marthijn_ph = c.emails_in(_marthijn_cv), c.phones_in(_marthijn_cv)
+_marthijn_naam = c.guess_name(_marthijn_cv, _marthijn_bestand, _marthijn_em)
+check('Marthijn naam uit alleen bestandsnaam + twee cv-kopjes en echte cv-kop',
+      _marthijn_naam == 'Marthijn van Rheenen', _marthijn_naam)
+_marthijn_score, _ = c.classify(_marthijn_cv, _marthijn_bestand,
+                                _marthijn_naam, _marthijn_em, _marthijn_ph, [])
+check('Marthijn met eigen bestandsnaam: cv, niet review',
+      c.decide_status(_marthijn_cv, _marthijn_bestand, _marthijn_naam,
+                      _marthijn_em, _marthijn_ph, [], _marthijn_score,
+                      source_path=_marthijn_pad) == 'cv')
+check('een map met naam Micha maakt van een hash geen persoonsnaam',
+      c.naam_uit_bestandsnaam('/u/CV Micha/1234567890.pdf', '', zonder_tekst=True) == '')
+check('een hash-bestand verzint geen naam op basis van map',
+      c.guess_name(_marthijn_cv, 'ab88123ed5da', _marthijn_em) == '')
+check('SCOM OMS is functietaal, geen naam uit de cv-tekst',
+      c._guess_name(_marthijn_cv, 'ab88123ed5da', []) == '')
+check('bij één los kopje leidt bestandsnaam nooit tot aangenomen kandidaat',
+      c.guess_name('Vaardigheden\nSAP consultancy en advisering.',
+                   _marthijn_bestand, []) == '')
+check('expliciete persoonsnaam in document gaat vóór kandidaat uit bestandsnaam',
+      c.guess_name('Naam: Jeroen Bos\n' + _marthijn_cv,
+                   _marthijn_bestand, []) == 'Jeroen Bos')
+check('bestandsnaam met alleen functietitel is geen persoonsnaam',
+      c.naam_uit_bestandsnaam('/cv/CV Java Developer.pdf', '',
+                              zonder_tekst=True) == '')
+
 # --- Bureau-cv's: naam in bestandsnaam vs recruiter bovenaan ---
 _sn = c.normalized_snippet('Elmer van den Heuvel\nJRecruit\naplitrakmail@broadbean.net\nCurriculum Vitae\nTom den Bulck\nWerkervaring')
 check('bestandsnaam: denBulck Tom HQ… -> Tom den Bulck', c.naam_uit_bestandsnaam('/u/JR/D/denBulck Tom HQ00000869 (U).txt', _sn) == 'Tom den Bulck')
@@ -882,6 +1175,256 @@ _N = ('CV – Randy Vaessen\nLoopbaan\nmrt 2019 – heden\nTulpnet – Servicede
       'jan 2012 – mrt 2019\nDijkstra Systems – Beheerder\nWerkzaamheden: beheer.')
 check('dubbel: naamgenoot met 1 zelfde werkgever+jaar = niet samen', not c.safe_pair(_cvdoc(_A, 300), _cvdoc(_N, 301))[0])
 
+# --- Zelfde naam + eigen e-mail: nieuwe cv-versie vs. aantoonbaar andere loopbaan ---
+_daan_a = ('Curriculum Vitae\nDaan Vijverman\nE-mail: daan.vijverman@example.com\n'
+           'Werkervaring\n2022 - 2025 Java ontwikkelaar bij Netwerkhof\n'
+           'Opleiding\n2013 - 2017 WO Informatica Universiteit Westberg')
+_daan_b = ('Curriculum Vitae\nDaan Vijverman\nE-mail: daan.vijverman@example.com\n'
+           'Werkervaring\n2022 - 2025 Arts bij Fictief Medisch Centrum\n'
+           'Opleiding\n2013 - 2017 WO Geneeskunde Universiteit Zuidzicht')
+_da, _db = _cvdoc(_daan_a, 6801), _cvdoc(_daan_b, 6802)
+check('Daan: zelfde naam/mail maar tegenstrijdige studie in dezelfde jaren',
+      c.opleiding_botst(_da, _db), (c.opleiding_periodes(_da), c.opleiding_periodes(_db)))
+check('Daan en Sasha-patroon: zelfde naam en mail, andere studie én andere baan = apart',
+      not c.safe_pair(_da, _db)[0], c.safe_pair(_da, _db))
+_sasha_a = ('Curriculum Vitae\nSasha van Kessel\nE-mail: sasha.van.kessel@example.com\n'
+            'Werkervaring\n2016 - 2022 Technisch beheer bij Wolkenpad Digitaal\n'
+            'Opleiding\n2000 - 2004 HBO Informatica Hogeschool Fictiva Zuid')
+_sasha_b = ('Curriculum Vitae\nSasha van Kessel\nE-mail: sasha.van.kessel@example.com\n'
+            'Werkervaring\n2019 - 2024 Verpleegkundige bij Zorgveld\n'
+            'Opleiding\n2012 - 2016 HBO Verpleegkunde Hogeschool Fictiva Noord')
+check('Sasha: zelfde naam en mail, andere studie én andere baan = apart',
+      not c.safe_pair(_cvdoc(_sasha_a, 6803), _cvdoc(_sasha_b, 6804))[0])
+# Aanvullingen van dezelfde persoon: geen gedeelde werkgever is geen splitsing.
+_switch_oud = ('Curriculum Vitae\nNoor Vermeer\nnoor.vermeer@gmail.com\n06 10000001\n'
+               'Werkervaring\n2014 - 2020 Java ontwikkelaar bij AlfaSoft\n'
+               'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht')
+_switch_nieuw = ('Curriculum Vitae\nNoor Vermeer\nnoor.vermeer@gmail.com\n06 10000001\n'
+                 'Werkervaring\n2020 - heden Scrum master bij BetaGroep\n'
+                 'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht')
+check('carrièreswitch: andere baan na de vorige, zelfde studie = één kandidaat',
+      c.safe_pair(_cvdoc(_switch_oud, 6831), _cvdoc(_switch_nieuw, 6832))[0])
+_overdracht = ('Curriculum Vitae\nNoor Vermeer\nnoor.vermeer@gmail.com\n'
+               'Werkervaring\n2018 - heden Scrum master bij BetaGroep\n'
+               'Opleiding\n2016 - 2020 HBO Bedrijfskunde Hogeschool Rotterdam')
+check('carrièreswitch met overdracht en latere studie = één kandidaat',
+      c.safe_pair(_cvdoc(_switch_oud, 6833), _cvdoc(_overdracht, 6834))[0])
+_baan_a = ('Curriculum Vitae\nMila Nieuwveld\nmila.nieuwveld@gmail.com\n'
+           'Werkervaring\n2018 - heden Developer bij AlfaSoft\n'
+           'Opleiding\n2012 - 2016 HBO Informatica Hogeschool Utrecht')
+_baan_b = ('Curriculum Vitae\nMila Nieuwveld\nmila.nieuwveld@gmail.com\n'
+           'Werkervaring\n2019 - heden Docent bij Schoolhof\n'
+           'Opleiding\n2012 - 2016 HBO Informatica Hogeschool Utrecht')
+check('twee gelijktijdige banen, zelfde studie = één kandidaat',
+      c.safe_pair(_cvdoc(_baan_a, 6841), _cvdoc(_baan_b, 6842))[0])
+_studie_een = ('Curriculum Vitae\nFinn de Groot\nfinn.degroot@gmail.com\n'
+               'Werkervaring\n2016 - 2022 Analist bij Tuinnet\n'
+               'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht')
+_studie_twee = ('Curriculum Vitae\nFinn de Groot\nfinn.degroot@gmail.com\n'
+                'Werkervaring\n2022 - heden Data engineer bij Nieuwbedrijf\n'
+                '2016 - 2022 Analist bij Tuinnet\n'
+                'Opleiding\n2014 - 2016 Master Data Science Universiteit Utrecht\n'
+                '2010 - 2014 HBO Informatica Hogeschool Utrecht')
+check('meerdere studies en een extra baan = één kandidaat',
+      c.safe_pair(_cvdoc(_studie_een, 6851), _cvdoc(_studie_twee, 6852))[0])
+_versie_extra = ('Curriculum Vitae\nOmar El Idrissi\nomar.elidrissi@gmail.com\n'
+                 'Werkervaring\n2015 - 2021 Tester bij Datafabriek\n'
+                 'Opleiding\n2011 - 2015 HBO Informatica Avans')
+_versie_nieuw = ('Curriculum Vitae\nOmar El Idrissi\nomar.elidrissi@gmail.com\n'
+                 'Werkervaring\n2021 - heden Test engineer bij Datafabriek\n'
+                 '2015 - 2021 Tester bij Datafabriek\n'
+                 '2019 - 2020 Stage bij Kleinlab\n'
+                 'Opleiding\n2011 - 2015 HBO Informatica Avans')
+check('nieuwe cv-versie met extra stage = één kandidaat',
+      c.safe_pair(_cvdoc(_versie_extra, 6861), _cvdoc(_versie_nieuw, 6862))[0])
+_jaar_oud = ('Curriculum Vitae\nSara Beekman\nsara.beekman@gmail.com\n'
+             'Werkervaring\n2017 - 2023 Consultant bij VoorbeeldBV\n'
+             'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
+_jaar_nieuw = ('Curriculum Vitae\nSara Beekman\nsara.beekman@gmail.com\n'
+               'Werkervaring\n2023 - heden Adviseur bij AndereZaak\n'
+               'Opleiding\n2011 - 2015 HBO Informatica Hogeschool Utrecht')
+check('klein jaartalverschil en andere werkgever = één kandidaat',
+      c.safe_pair(_cvdoc(_jaar_oud, 6871), _cvdoc(_jaar_nieuw, 6872))[0])
+check('Daan: niet automatisch samen bij gedeeld algemeen bureauadres',
+      not c.zelfde_naam_eigen_email(dict(_da, emails=json.dumps(['info@voorbeeld.nl'])),
+                                    dict(_db, emails=json.dumps(['info@voorbeeld.nl']))))
+check('Daan: twee dezelfde namen met verschillende e-mail en botsende studie blijven apart',
+      not c.safe_pair(dict(_da, emails=json.dumps(['daan.a@gmail.com'])),
+                      dict(_db, emails=json.dumps(['daan.b@gmail.com'])))[0])
+# Een echte nieuwe versie met dezelfde naam, hetzelfde e-mailadres en
+# aanvullend werk: één kandidaat. De oudste versie blijft wel beschikbaar.
+_versie_oud = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
+               'Werkervaring\n2018 - 2022 Data-analist bij Tuinnet\n'
+               'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
+_versie_nieuw = ('Curriculum Vitae\nLara van Diest\nlara.vandiest@gmail.com\n'
+                 'Werkervaring\n2023 - heden Data engineer bij Tuinnet\n'
+                 '2018 - 2022 Data-analist bij Tuinnet\n'
+                 'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
+check('zelfde naam + persoonlijke e-mail; echte nieuwe cv-versie wordt gekoppeld',
+      c.safe_pair(_cvdoc(_versie_oud, 6811), _cvdoc(_versie_nieuw, 6812))[0])
+_adam_vol = ('Curriculum Vitae\nAdam El Hani\nadam.el.hani@example.com\n+31600000027\n'
+             'Werkervaring\n2020 - heden Consultant bij Voorbeeld BV\nOpleiding\nHBO Informatica')
+_adam_kaal = ('Curriculum Vitae\nAdam El Hani\nVaardigheden\nPython, SQL\nOpleiding\nHBO Informatica')
+check('zelfde naam; één CV met mail/nummer, de andere zonder = één kandidaat',
+      c.safe_pair(_cvdoc(_adam_vol, 6821), _cvdoc(_adam_kaal, 6822))[0])
+# Lastige CV zonder mail + echte CV met mail, andere opleidingsjaren: toch één persoon.
+_adam_lastig = ('Curriculum Vitae\nAdam El Hani\nWerkervaring\n2020 - heden Consultant bij Voorbeeld BV\n'
+                'Opleiding\n2014 - 2018 HBO Informatica, Hogeschool Utrecht')
+_adam_echt = ('Curriculum Vitae\nAdam El Hani\nadam.el.hani@example.com\n+31600000027\n'
+              'Werkervaring\n2020 - heden Consultant bij Voorbeeld BV\n'
+              'Opleiding\n2018 - 2022 HBO Bedrijfskunde, Hogeschool van Amsterdam')
+check('zelfde naam; lastige CV zonder mail, andere opleiding = één kandidaat',
+      c.safe_pair(_cvdoc(_adam_lastig, 6823), _cvdoc(_adam_echt, 6824))[0])
+_eva_a = ('Curriculum Vitae\nEva El Amrani\njobs@bureauvoorbeeld.nl\n020 1234567\n'
+          'Werkervaring\n2018 - heden Java developer bij Codewerk. Verantwoordelijk voor de backend.\n'
+          '2014 - 2018 Tester bij Datafabriek. Verantwoordelijk voor testautomatisering.\n'
+          'Opleiding\n2010 - 2014 HBO Informatica, Hogeschool Utrecht')
+_eva_b = ('Curriculum Vitae\nEva El Amrani\njobs@bureauvoorbeeld.nl\n020 1234567\n'
+          'Werkervaring\n2019 - heden Scrum master bij Tulpsoft. Verantwoordelijk voor de migratie.\n'
+          '2013 - 2019 Data analist bij Havenbouw. Verantwoordelijk voor rapportages.\n'
+          'Opleiding\n2009 - 2013 HBO Informatica, Saxion')
+check('zelfde naam; alleen bureau-mail en andere loopbaan = niet samen',
+      not c.safe_pair(_cvdoc(_eva_a, 6825), _cvdoc(_eva_b, 6826))[0])
+
+# Selectie van 1 hoofd-CV op werk, opleiding, daarna IT en stabiele tie-break.
+import types as _types
+def _docrank(text, n, sha, when=1000):
+    d = dict(_cvdoc(text, n))
+    d.update(mtime_ns=when, received_ns=when, year='', role='',
+             employer='', sha=sha, status='cv')
+    return d
+# Hoofdversie-test is end-to-end via deduplicate() hieronder, met echte sqlite docs.
+_db_main_out = Path(tempfile.mkdtemp())
+_db_main = c.db_open(_db_main_out)
+_old = ('Curriculum Vitae\nDaan Vijverman\ndaan.vijverman@example.com\n'
+        'Werkervaring\n2018 - 2022 Java ontwikkelaar bij Netwerkhof\n'
+        'Opleiding\n2013 - 2017 WO Informatica Universiteit Westberg')
+_new = ('Curriculum Vitae\nDaan Vijverman\ndaan.vijverman@example.com\n'
+        'Werkervaring\n2022 - 2025 Arts bij Fictief Medisch Centrum\n'
+        'Opleiding\n2013 - 2017 WO Geneeskunde Universiteit Zuidzicht')
+for _i, _cv in enumerate((_old, _new)):
+    _sha = ('a' if _i == 0 else 'b') * 64
+    _em = c.emails_in(_cv)
+    _db_main.execute("INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+                     "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+                     "opleidingen,woonplaats,taal) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (str(_db_main_out / ('daan_' + str(_i) + '.txt')), _sha,
+                      'Daan Vijverman', 1, 'cv', c.CLASSIFIER_VERSION,
+                      c.normalized_snippet(_cv), json.dumps(c.signature(_cv)),
+                      json.dumps(_em), '[]', '[]', 1000 + _i, 1000 + _i,
+                      '', '', '', c.opleidingen_from(_cv), '', 'nl'))
+_db_main.commit()
+check('Daan testdatabase bevat precies twee geverifieerde CV-versies',
+      _db_main.execute("SELECT COUNT(*) FROM docs WHERE status='cv' AND name_verified=1 "
+                       "AND classifier_version=?", (c.CLASSIFIER_VERSION,)).fetchone()[0] == 2,
+      [(r['status'],r['name_verified'],r['classifier_version'])
+       for r in _db_main.execute('SELECT * FROM docs')])
+# Een derde cv met alleen dezelfde naam en hetzelfde mailadres mag A en B niet aan elkaar knopen.
+_brug = 'Curriculum Vitae\nDaan Vijverman\ndaan.vijverman@example.com\n06 11112222\n'
+_sha_brug = 'c' * 64
+_db_main.execute("INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+                 "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+                 "opleidingen,woonplaats,taal) "
+                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (str(_db_main_out / 'daan_2.txt'), _sha_brug,
+                  'Daan Vijverman', 1, 'cv', c.CLASSIFIER_VERSION,
+                  c.normalized_snippet(_brug), json.dumps(c.signature(_brug)),
+                  json.dumps(c.emails_in(_brug)), '[]', '[]', 1002, 1002,
+                  '', '', '', c.opleidingen_from(_brug), '', 'nl'))
+_db_main.commit()
+# Test uitsluitend de ontdubbeling en kandidaat-ID's, niet de onafhankelijke
+# taal-, verblijf-, woonplaats- of mapkeuzefilters van eerdere tests.
+_filter_orig = c.filter_kandidaat
+_scope_orig = c.SCOPE
+try:
+    c.SCOPE = []
+    c.filter_kandidaat = lambda *args, **kwargs: ('ok', '')
+    _dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(
+        _db_main, _db_main_out / 'samenvoegen_correcties.csv')
+    _pad_a = str(_db_main_out / 'daan_0.txt')
+    _pad_b = str(_db_main_out / 'daan_1.txt')
+    _ida, _idb = _dm_to.get(_pad_a), _dm_to.get(_pad_b)
+    check('Daan: andere studie én andere baan blijven twee kandidaten',
+          _ida and _idb and _ida != _idb,
+          (len(_dm_people), _ida, _idb, [(p['naam'], p['kandidaat_id']) for p in _dm_people]))
+    check('Daan: een derde cv met alleen dezelfde mail koppelt de twee personen niet',
+          _ida != _idb, (_dm_to.get(str(_db_main_out / 'daan_2.txt')), _ida, _idb))
+    _ids = sorted(x for x in (_ida, _idb) if x)
+    _dm_to2 = c.deduplicate(_db_main, _db_main_out / 'samenvoegen_correcties.csv')[2]
+    _ids2 = sorted(x for x in (_dm_to2.get(_pad_a), _dm_to2.get(_pad_b)) if x)
+    check('Daan: kandidaatnummers blijven vast na volgende export',
+          _ids2 == _ids and len(_ids2) == 2, (_ids, _ids2))
+finally:
+    c.filter_kandidaat = _filter_orig
+    c.SCOPE = _scope_orig
+
+# Nieuwste cv is de basis. Oudere cv's vullen alleen een leeg veld, nooit een bestaand nummer of adres.
+_contact_out = Path(tempfile.mkdtemp())
+_contact_db = c.db_open(_contact_out)
+
+def _contact_cv(tekst, sha, naam, mail, tel, link):
+    _contact_db.execute(
+        "INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+        "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+        "opleidingen,woonplaats,taal) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (str(_contact_out / (sha[:12] + '.txt')), sha, naam, 1, 'cv', c.CLASSIFIER_VERSION,
+         c.normalized_snippet(tekst), json.dumps(c.signature(tekst)),
+         json.dumps(mail), json.dumps(tel), json.dumps(link),
+         1000, 1000, '', '', '', c.opleidingen_from(tekst), '', 'nl'))
+
+_contact_cv('Curriculum Vitae\nNoor Vermeer\nWerkervaring\n2016 - 2022 Analist bij Tuinnet\n'
+            'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht',
+            '1' * 64, 'Noor Vermeer', ['noor.vermeer@gmail.com'], ['06 33334444'],
+            ['https://www.linkedin.com/in/noor-oud'])
+_contact_cv('Curriculum Vitae\nNoor Vermeer\nWerkervaring\n2023 - heden Data engineer bij Nieuwbedrijf\n'
+            'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht',
+            '2' * 64, 'Noor Vermeer', ['noor.vermeer@gmail.com'], ['06 11112222'],
+            ['https://www.linkedin.com/in/noorvermeer'])
+_contact_cv('Curriculum Vitae\nMila Nieuwveld\nWerkervaring\n2015 - 2021 Tester bij Datafabriek\n'
+            'Opleiding\n2011 - 2015 HBO Informatica Avans',
+            '3' * 64, 'Mila Nieuwveld', ['mila.nieuwveld@gmail.com'], ['06 55556666'],
+            ['https://www.linkedin.com/in/mila-oud'])
+_contact_cv('Curriculum Vitae\nMila Nieuwveld\nWerkervaring\n2022 - heden Tester bij Datafabriek\n'
+            'Opleiding\n2011 - 2015 HBO Informatica Avans',
+            '4' * 64, 'Mila Nieuwveld', ['mila.nieuwveld@gmail.com'], [],
+            [])
+_contact_db.commit()
+_filter_contact = c.filter_kandidaat
+_scope_contact = c.SCOPE
+try:
+    c.SCOPE = []
+    c.filter_kandidaat = lambda *args, **kwargs: ('ok', '')
+    _contact_people = c.deduplicate(_contact_db, _contact_out / 'samenvoegen_correcties.csv')[1]
+finally:
+    c.filter_kandidaat = _filter_contact
+    c.SCOPE = _scope_contact
+_noor = next(p for p in _contact_people if p['naam'] == 'Noor Vermeer')
+_mila = next(p for p in _contact_people if p['naam'] == 'Mila Nieuwveld')
+check('nieuwste cv houdt zijn telefoon; het oude nummer komt er niet bij',
+      _noor['telefoon'] == c.norm_phone('06 11112222')
+      and c.norm_phone('06 33334444') not in _noor['alle_telefoons']
+      and _noor['linkedin'] == 'https://www.linkedin.com/in/noorvermeer'
+      and 'noor-oud' not in _noor['alle_linkedin'],
+      (_noor['telefoon'], _noor['alle_telefoons'], _noor['linkedin'], _noor['alle_linkedin']))
+check('ontbrekend telefoonnummer wordt aangevuld vanuit het oudere cv van dezelfde persoon',
+      _mila['telefoon'] == c.norm_phone('06 55556666') and _mila['email'] == 'mila.nieuwveld@gmail.com',
+      (_mila['telefoon'], _mila['email'], _mila['alle_telefoons']))
+_bureau_was = set(c.BUREAU_CONTACT)
+try:
+    c.BUREAU_CONTACT.add(c.norm_phone('020 1234567'))
+    _ref_a = _cvdoc('Curriculum Vitae\nPiet Jansen\npiet.jansen@gmail.com\n020 1234567\n'
+                    'Werkervaring\n2018 - heden Java developer bij Codewerk\nOpleiding\nHBO Informatica', 6901)
+    _ref_b = _cvdoc('Curriculum Vitae\nMarie Jansen\nmarie.jansen@gmail.com\n020 1234567\n'
+                    'Werkervaring\n2019 - heden Scrum master bij Tulpsoft\nOpleiding\nHBO Bedrijfskunde', 6902)
+    _ref_a['phones'] = json.dumps([c.norm_phone('020 1234567')])
+    _ref_b['phones'] = json.dumps([c.norm_phone('020 1234567')])
+    check('recruiternummer is geen bewijs om twee kandidaten samen te voegen',
+          not c.safe_pair(_ref_a, _ref_b)[0], c.safe_pair(_ref_a, _ref_b))
+finally:
+    c.BUREAU_CONTACT.clear()
+    c.BUREAU_CONTACT.update(_bureau_was)
+
 # --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
 W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"
 L=[
@@ -912,13 +1455,13 @@ for t, want in L + [("Profiel\nIk ben Gedreven En Flexibel.\n" + W, '')]:
     g = c.guess_name(t, 'cv', c.emails_in(t))
     check(f'naam uit opmaak: {t.splitlines()[0][:30]!r}', c.normalized_name(g) == c.normalized_name(want), g)
 
-# Zelfde naam + zelfde (gedeeld/oud) mailadres, maar opleiding in heel andere jaren: niet blind samen (twijfel).
+# Zelfde naam en een oud/gedeeld mailadres, maar per cv één andere HBO-opleiding: apart, geen twijfel.
 _V1 = ('Curriculum Vitae\nMohamed Vos\nmohamed.vos47@gmail.com\n06 58562055\nWerkervaring\n2007 - heden Functioneel beheerder '
        'bij Spaarnedata. Testautomatisering.\n2005 - 2007 Frontend developer bij Testlab. Beheer.\nOpleiding\n2001 - 2005 HBO Informatica, Saxion')
 _V2 = ('Curriculum Vitae\nMohamed Vos\nmohamed.vos47@gmail.com\n06 44593161\nWerkervaring\n2017 - heden Frontend developer bij '
        'Spaarnedata. Dashboards.\n2012 - 2017 Projectleider bij Spaarnedata. Migratie.\nOpleiding\n2008 - 2012 HBO Informatica, Avans')
 _r = c.safe_pair(_cvdoc(_V1, 400), _cvdoc(_V2, 401))
-check('dubbel: zelfde naam+mail, opleiding in andere jaren = twijfel, niet samen', not _r[0] and _r[1], _r)
+check('dubbel: zelfde naam+persoonlijke mail, nieuwe CV-versie bij afwijkende opleiding = samen', _r[0] and not _r[1], _r)
 _V3 = _V2.replace('2008 - 2012 HBO Informatica, Avans', '2001 - 2005 HBO Informatica, Saxion').replace('06 44593161', '06 58562055')
 check('dubbel: zelfde naam+mail+opleiding (nieuwere versie) = samen', c.safe_pair(_cvdoc(_V1, 402), _cvdoc(_V3, 403))[0])
 # Oud cv noemt alleen de bachelor (2006-2010), nieuw cv alleen de master (2010-2012): gewoon samen.

@@ -1,0 +1,10 @@
+Curriculum Vitae
+Robin Zilvermeer
+E-mail: robin.zilvermeer@example.com
+Werkervaring
+2022 - heden Engineer bij Fictiva Software BV
+2018 - 2022 Support bij Netwerkhof
+Opleiding
+2014 - 2018 HBO Informatica Hogeschool Fictiva
+Vaardigheden
+Python, SQL

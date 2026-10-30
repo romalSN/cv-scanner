@@ -15,6 +15,7 @@ import queue
 import re
 import sqlite3
 import unicodedata
+import zipfile
 import shutil
 import signal
 import subprocess
@@ -221,6 +222,35 @@ class Tooltip:
             self.tip.destroy()
             self.tip = None
 
+def list_twijfel(output: Path) -> list[dict]:
+    """Zelfde selectie als het venster Twijfelgevallen: unieke sha, huidige herkenning, laatste scan."""
+    dbp = output / 'cv_index.sqlite'
+    if not dbp.exists():
+        return []
+    con = sqlite3.connect(str(dbp))
+    con.row_factory = sqlite3.Row
+    try:
+        ver = con.execute('SELECT MAX(classifier_version) FROM docs').fetchone()[0] or 0
+        try:
+            start = json.loads((output / 'laatste_scan.json').read_text(encoding='utf-8'))['start_ns']
+        except (OSError, ValueError, KeyError):
+            start = 0
+        cols_now = {c[1] for c in con.execute('PRAGMA table_info(docs)')}
+        seen_col = 'gezien_ns' if 'gezien_ns' in cols_now else '0 AS gezien_ns'
+        rows = con.execute(f"SELECT path, name, reason, note, sha, archive, status, {seen_col} FROM docs WHERE status='review' "
+                           "AND classifier_version=? ORDER BY path", (ver,)).fetchall()
+    finally:
+        con.close()
+    seen, items = set(), []
+    for r in rows:
+        if start and (r['gezien_ns'] or 0) < start:
+            continue
+        if r['sha'] and r['sha'] not in seen:
+            seen.add(r['sha'])
+            items.append(dict(r))
+    return items
+
+
 def parse_progress(line: str) -> dict[str, str]:
     """Bepaalt de status uit de voortgangsregels van de crawler."""
     output: dict[str, str] = {}
@@ -236,6 +266,9 @@ def parse_progress(line: str) -> dict[str, str]:
     control = re.match(r'EXPORT-CONTROLE:\s*(.*)', line)
     if control:
         output['fouten'] = str(sum(int(n) for n in re.findall(r'(\d+) [A-Za-z]', control.group(1))))
+    twijfel_end = re.search(r'TWIJFEL-OVERZICHT \((\d+) documenten', line)
+    if twijfel_end:
+        output['twijfel'] = twijfel_end.group(1)
     if line.startswith('Scan afgerond:'):
         try:
             summary = ast.literal_eval(line.split(':', 1)[1].strip())
@@ -247,6 +280,11 @@ def parse_progress(line: str) -> dict[str, str]:
         except (ValueError, SyntaxError):
             pass
     return output
+
+
+def extra_scan_args() -> list[str]:
+    """Nieuwe scan: vorige Excel en index tellen niet als 'al bekeken'."""
+    return ['--force']
 
 
 def choose_python() -> str:
@@ -262,6 +300,37 @@ def prepare_runtime(post, stopping: threading.Event) -> Path:
         raise RuntimeError('Het pakket is onvolledig uitgepakt. Pak het volledige ZIP-bestand uit en probeer opnieuw.')
     post('log', 'PDF- en RTF-lezers zitten al in de download. Geen installatie of internet nodig.')
     return Path(sys.executable)
+
+
+EXCEL_READY_MARKER = 'excel_export_geldig.json'
+
+
+def geldige_excel_export(output):
+    """Open alleen een aantoonbaar volledig gemaakte Excel uit de huidige export.
+    Geen fallback naar oude xlsx-bestanden of verouderde laatste_excel.txt.
+    """
+    try:
+        out = Path(output).resolve()
+        meta = json.loads((out / EXCEL_READY_MARKER).read_text(encoding='utf-8'))
+        if meta.get('schema') != 1:
+            return None
+        name = meta.get('filename')
+        if not isinstance(name, str) or not re.fullmatch(
+                r'CV_Crawler_Resultaten(?:_\d{4}-\d{2}-\d{2}_\d{6})?\.xlsx', name):
+            return None
+        p = out / name
+        if not p.is_file() or p.is_symlink() or p.resolve().parent != out:
+            return None
+        stat = p.stat()
+        if stat.st_size < 300 or stat.st_size != meta.get('bytes') or stat.st_mtime_ns != meta.get('mtime_ns'):
+            return None
+        # Een oud/afgebroken bestand kan een .xlsx-extensie hebben maar geen Excel zijn.
+        with zipfile.ZipFile(p) as z:
+            if 'xl/workbook.xml' not in z.namelist() or z.testzip() is not None:
+                return None
+        return p
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
+        return None
 
 
 class ScannerApp:
@@ -648,6 +717,7 @@ class ScannerApp:
         self.folder_button.configure(state='disabled' if active else 'normal')
         self.stop_button.configure(state='normal' if active else 'disabled')
         self.refresh_button.configure(state='disabled' if active else 'normal')
+        self.excel_button.configure(state='disabled' if active else 'normal')
         for b in ('clean_button', 'undo_button', 'doubt_button', 'confirm_button'):
             if hasattr(self, b):
                 getattr(self, b).configure(state='disabled' if active else 'normal')
@@ -692,6 +762,15 @@ class ScannerApp:
                     return
                 self.online_fresh = bool(answer)
         self.stopping.clear()
+        # Vanaf het begin van een nieuwe export is een eerdere Excel NIET meer actueel.
+        # Bij een crash blijft de oude XLSX op schijf voor herstel, maar Open Excel toont hem niet.
+        if mode in ('scan', 'export', 'online', 'opschonen', 'terugzetten'):
+            try:
+                (self.output / EXCEL_READY_MARKER).unlink(missing_ok=True)
+            except OSError as exc:
+                messagebox.showerror('Excel-uitvoer', f'De vorige Excel-status kan niet worden gewist: {exc}',
+                                     parent=self.root)
+                return
         self.last_mode = mode
         if scan:
             for key, var in self.metrics.items():
@@ -717,6 +796,7 @@ class ScannerApp:
                 raise InterruptedError('Geadviseerd om te stoppen.')
             cmd = ([str(python), '--backend'] if FROZEN else [str(python), '-u', str(BACKEND)]) + ['--output', str(self.output)]
             if scan:
+                cmd += extra_scan_args()
                 if options['root']:
                     cmd += ['--root', options['root']]
                 elif options['volumes']:
@@ -861,6 +941,10 @@ class ScannerApp:
                             self.metrics[key].set(value)
                 elif kind == 'finished':
                     self.set_running(False)
+                    try:
+                        self.metrics['twijfel'].set(str(len(list_twijfel(self.output))))
+                    except Exception:
+                        pass
                     rc, stopped, recovered = payload
                     if getattr(self, 'last_mode', '') == 'plan':
                         self.status.set('Klaar om op te schonen.')
@@ -872,8 +956,10 @@ class ScannerApp:
                         self.status.set('Scan gestopt. Excel met bewaarde gegevens gemaakt.' if recovered else
                                         'Scan gestopt. Eerder opgeslagen werk blijft behouden.')
                     elif rc == 0:
-                        self.status.set('Klaar! Je Excel-overzicht staat klaar.' if excel_exists
-                                        else 'Klaar. Er is nog geen Excel-bestand gevonden.')
+                        self.status.set('Klaar! De NIEUWE Excel is gevalideerd en staat klaar.' if excel_exists
+                                        else 'Export niet geldig: geen nieuwe Excel beschikbaar.')
+                        if not excel_exists:
+                            self.write_log('FOUT: exportproces klaar zonder geldig nieuw Excel-overzicht; oude Excel niet openen.')
                     else:
                         self.status.set('Scan onderbroken, maar Excel met bewaarde gegevens gemaakt.' if recovered else
                                         'Scan onverwacht gestopt. Bekijk de laatste regels bij Activiteit.'
@@ -916,16 +1002,8 @@ class ScannerApp:
                 pass
 
     def latest_excel(self):
-        """Nieuwste export: volgt laatste_excel.txt, anders het nieuwste xlsx-bestand."""
-        try:
-            pointer = (self.output / 'laatste_excel.txt').read_text(encoding='utf-8').strip()
-            if pointer and Path(pointer).is_file():
-                return Path(pointer)
-        except OSError:
-            pass
-        files = [f for f in self.output.glob('CV_Crawler_Resultaten*.xlsx')
-                 if not f.name.startswith('~$') and '.bezig.' not in f.name]
-        return max(files, key=lambda f: f.stat().st_mtime) if files else None
+        """Alleen de laatst BEWEZEN geslaagde export, nooit een oude XLSX-fallback."""
+        return geldige_excel_export(self.output)
 
     def open_results(self):
         self.output.mkdir(parents=True, exist_ok=True)
@@ -937,21 +1015,28 @@ class ScannerApp:
             messagebox.showinfo('Resultaten', str(self.output), parent=self.root)
 
     def open_excel(self):
+        if self.running:
+            messagebox.showinfo('Excel wordt bijgewerkt',
+                                'Er wordt nog een nieuw Excel-overzicht gemaakt. Oude exports worden niet geopend.',
+                                parent=self.root)
+            return
         excel = self.latest_excel()
         if excel is None:
-            if (self.output / 'cv_index.sqlite').exists() and not self.running:
-                self.open_when_ready = True
-                self.launch(mode='export')
+            messagebox.showinfo('Geen actuele Excel',
+                'Er is geen nieuwe, geslaagde Excel-export beschikbaar.\n\n'
+                'Klik op ‘Excel bijwerken’ om een nieuw overzicht te maken. '
+                'Bij een fout blijft de oude Excel gesloten; zie ‘Activiteit’ voor de oorzaak.',
+                parent=self.root)
+            return
+        try:
+            if sys.platform == 'win32':
+                os.startfile(str(excel))
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', str(excel)])
             else:
-                messagebox.showinfo('Nog geen Excel',
-                    'Er staat nog geen export klaar. Heb je al gescand? Klik dan op Excel bijwerken. ' +
-                    'Als de scan nog bezig is, wacht dan even tot deze klaar is.', parent=self.root)
-        elif sys.platform == 'win32':
-            os.startfile(str(excel))
-        elif sys.platform == 'darwin':
-            subprocess.Popen(['open', str(excel)])
-        else:
-            messagebox.showinfo('Excel', str(excel), parent=self.root)
+                messagebox.showinfo('Excel', str(excel), parent=self.root)
+        except OSError as exc:
+            messagebox.showerror('Excel openen mislukt', str(exc), parent=self.root)
 
     def open_candidates(self):
         """Kandidaten als nette tabel in de scanner. Alleen de belangrijke kolommen zichtbaar;
@@ -1264,31 +1349,10 @@ class ScannerApp:
     def open_doubts(self):
         if self.running:
             return
-        dbp = self.output / 'cv_index.sqlite'
-        if not dbp.exists():
+        items = list_twijfel(self.output)
+        if not items and not (self.output / 'cv_index.sqlite').exists():
             messagebox.showinfo('Eerst scannen', 'Start eerst een scan.', parent=self.root)
             return
-        con = sqlite3.connect(str(dbp))
-        con.row_factory = sqlite3.Row
-        try:
-            ver = con.execute('SELECT MAX(classifier_version) FROM docs').fetchone()[0] or 0
-            try:
-                start = json.loads((self.output / 'laatste_scan.json').read_text(encoding='utf-8'))['start_ns']
-            except (OSError, ValueError, KeyError):
-                start = 0
-            cols_now = {c[1] for c in con.execute('PRAGMA table_info(docs)')}
-            seen_col = 'gezien_ns' if 'gezien_ns' in cols_now else '0 AS gezien_ns'
-            rows = con.execute(f"SELECT path, name, reason, note, sha, archive, status, {seen_col} FROM docs WHERE status='review' "
-                               "AND classifier_version=? ORDER BY path", (ver,)).fetchall()
-        finally:
-            con.close()
-        seen, items = set(), []
-        for r in rows:
-            if start and (r['gezien_ns'] or 0) < start:
-                continue      # alleen wat in de LAATSTE scan is gezien; oude mislukkingen niet tonen
-            if r['sha'] and r['sha'] not in seen:
-                seen.add(r['sha'])
-                items.append(dict(r))
         if not items:
             messagebox.showinfo('Twijfelgevallen', 'Er zijn geen twijfelgevallen.', parent=self.root)
             return

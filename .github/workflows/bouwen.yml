@@ -10,6 +10,11 @@ on:
 env:
   CV_AI: '0'      # tests en bouwtest: geen echt AI-model (2,4 GB) ophalen; de AI-test gebruikt een eigen testmodel
 
+# Houd per branch alleen de nieuwste build over als er toch kort na elkaar wordt gepusht.
+concurrency:
+  group: cv-scanner-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bouwen:
     strategy:
@@ -65,6 +70,12 @@ jobs:
       - name: Test - 8 personen met 2 cv-versies (1 zonder contact, andere opmaak, bureau-cv) + naamgenoten
         run: python tests/test_dubbel_versies.py
 
+      - name: Test - opleidingsconflict is apart (geen twijfel); bachelor/master blijft mogelijk
+        run: python tests/test_opleiding_conflict.py
+
+      - name: Test - CV-map, CV-kop, naam uit bestandsnaam en vacature-uitsluiting
+        run: python tests/test_cv_context.py
+
       - name: Test - samenvoegen + opschonen (nieuwste cv blijft, oudere versie en kopie weg, terugzetten)
         run: python tests/test_opschonen_dubbel.py
 
@@ -73,6 +84,9 @@ jobs:
 
       - name: Test - alle afgesproken regels (matching, plaatsen, typfouten, cloud, sleutels, Pages)
         run: python tests/test_regels.py
+
+      - name: Stresstest - verkeerde samenvoegingen, gemiste cv's en twijfel
+        run: python tests/test_stresstest.py
 
       - name: Test - Mac leest oude Word-bestanden met verkeerde extensie
         if: runner.os == 'macOS'

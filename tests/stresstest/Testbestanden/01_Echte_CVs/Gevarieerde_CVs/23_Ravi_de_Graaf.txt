@@ -1,0 +1,10 @@
+Ravi de Graaf
+Curriculum Vitae
+E-mail: ravi.de.graaf@example.com
+Telefoon: 06 0000 0022
+Profiel
+Afgestudeerde starter met analytisch vermogen en praktijkgerichte interesse.
+Opleiding
+2014 - 2018 HBO Informatica, Hogeschool Fictiva 7
+Vaardigheden
+Python, SQL, Git en Linux

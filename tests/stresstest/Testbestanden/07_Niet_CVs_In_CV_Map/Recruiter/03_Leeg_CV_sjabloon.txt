@@ -1,0 +1,11 @@
+Curriculum Vitae
+Naam: [naam kandidaat]
+E-mail: [email]
+Profiel
+[Schrijf hier een profiel]
+Werkervaring
+[Bedrijf en periode]
+Opleiding
+[School]
+Vaardigheden
+[Vaardigheden]

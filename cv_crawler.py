@@ -31,7 +31,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-CLASSIFIER_VERSION = 20
+CLASSIFIER_VERSION = 27
 # Al beoordeelde cv's en geen-cv's vanaf deze versie worden bij een nieuwere herkenning NIET opnieuw
 # gelezen (scheelt uren bij 15.000 bestanden); alleen twijfelgevallen en fouten worden opnieuw gelezen.
 # Alleen verhogen als een wijziging ook voor al gevonden cv's nodig is.
@@ -54,7 +54,7 @@ def keep_cv_name(name, reason=''):
     """Al gevonden cv: mag het blijven staan zonder opnieuw lezen? Alleen als de naam (opgeschoond) klopt.
     Geeft de opgeschoonde naam terug, of '' = opnieuw lezen."""
     if 'naam = bedrijfsnaam' in (reason or ''):
-        return name or ''                          # bewust de bedrijfsnaam (geen persoonsnaam te vinden)
+        return ''    # Een bedrijf mag nooit als naam van een kandidaat blijven staan.
     return tidy_name(clean_person_name(name or ''))
 SUPPORTED = {'.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.pages'}
 # Zip-archieven worden alleen gelezen, nooit uitgepakt in de map of gewijzigd.
@@ -496,12 +496,14 @@ BESTANDSNAAM_RUIS = {'cv', 'resume', 'curriculum', 'vitae', 'nl', 'en', 'eng', '
                      'het', 'ter', 'ten', 'la', 'le', 'el', 'da', 'di', 'du', 'del', 'von', 'mei', 'jan', 'feb'}
 
 
-def naam_uit_bestandsnaam(path_or_stem, snippet):
-    """Naam uit de bestandsnaam, ALLEEN als die naam ook in het cv zelf staat.
-    'denBulck Tom HQ00000869 (U).txt' -> 'Tom den Bulck'; '20250325_CV_Rick_van_der_Kraan_NL (1)' -> 'Rick van der Kraan'.
-    Geeft '' als de bestandsnaam geen (bevestigde) persoonsnaam bevat."""
-    stem = Path(str(path_or_stem).split(ZIP_SEP)[-1]).stem if ('/' in str(path_or_stem) or '\\' in str(path_or_stem)
-                                                              or ZIP_SEP in str(path_or_stem)) else str(path_or_stem)
+def naam_uit_bestandsnaam(path_or_stem, snippet, zonder_tekst=False):
+    """Haal een mogelijke persoonsnaam UITSLUITEND uit de eigen bestandsnaam.
+    De bovenliggende mappen kunnen van recruiters of andere kandidaten zijn.
+    Normaal moet de naam ook in de cv-tekst staan; zonder_tekst wordt alleen
+    gebruikt na een aparte controle op sterke CV-kenmerken."""
+    # PosixPath(...).stem snijdt op een Windows-pad de map niet af.
+    basis = str(path_or_stem or '').split(ZIP_SEP)[-1].replace('\\', '/').rsplit('/', 1)[-1]
+    stem = re.sub(r'(?i)\.(?:pdf|docx?|txt|rtf|odt|pages)$', '', basis)
     stem = re.sub(r'\([^)]*\)', ' ', stem)
     stem = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', stem)              # denBulck -> den Bulck
     stem = re.sub(r'\b[A-Za-z]{0,4}\d+[A-Za-z0-9]*\b', ' ', stem)        # HQ00000869, v2, 2024
@@ -525,7 +527,14 @@ def naam_uit_bestandsnaam(path_or_stem, snippet):
             or not clean_person_name(' '.join(w[:1].upper() + w[1:] for w in kern))):
         return ''
     tekst = ' ' + (snippet or '')[:4000] + ' '
-    if not all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2):
+    gewone_match = all(f' {normalized_name(w)} ' in tekst for w in kern if len(normalized_name(w)) >= 2)
+    # Bij een aan elkaar geplakte naam hoort het tussenvoegsel er ook bij:
+    # 'marthijnvanrheenen' is 'Marthijn van Rheenen'.
+    aaneen_match = bool(kern) and any(
+        f' {vorm} ' in tekst for vorm in (
+            ''.join(normalized_name(w) for w in kern),
+            ''.join(normalized_name(w) for w in naam_w)))
+    if not (gewone_match or aaneen_match or zonder_tekst):
         return ''
     # Volgorde zoals in het cv ('Tom den Bulck'), anders de bestandsnaam ('Bulck Tom' -> achternaam eerst).
     n = normalized_name(kandidaat).split()
@@ -596,6 +605,17 @@ def _guess_name(text, filename, emails, links=()):
     # Meerdere kandidaten (bv. 'Jak Verhuur' en 'Lisa Groen')? Dan de regel die bij het eigen e-mailadres past.
     top = []
     for line in lines[:7]:
+        # Een cv kan een kop met functietermen hebben zoals
+        # 'SCOM OMS Consultant profiel en opdrachten'. Het oude afknippen
+        # tot 'Scom Oms' leek op een persoonsnaam, maar is een acroniem.
+        # Alleen de echte bestandsnaam wordt later eventueel gebruikt.
+        raw_words = line.split()
+        if (len(raw_words) >= 4 and len(raw_words[0]) <= 6 and len(raw_words[1]) <= 6
+                and raw_words[0].isupper() and raw_words[1].isupper()
+                and any(re.search(r'(?i)\b' + re.escape(term) + r'\b', line)
+                        for term in ('consultant', 'developer', 'engineer', 'profiel',
+                                     'profile', 'werkervaring', 'opdrachten', 'skills'))):
+            continue
         line = clean_person_name(line)
         if not line:
             continue
@@ -627,6 +647,27 @@ def _guess_name(text, filename, emails, links=()):
     uit_bestand = naam_uit_bestandsnaam(filename, normalized_snippet(text))
     if uit_bestand:
         return uit_bestand
+    # Sommige Word/PDF-lezers missen de zichtbare naam, maar in de eigen
+    # bestandsnaam staat bijv. 'Marthijn_vanRheenen-SCOM_OMS_Consultant'.
+    # Probeer dit pas na de normale naamherkenning in de cv-tekst, en NOOIT
+    # met een naam afkomstig uit bovenliggende mappen (bijv. 'Micha').
+    if len(text.strip()) >= 60:
+        h, hdr, cv_file, non_cv, enormous, periods = cv_signals(text, filename)
+        twee_inhoudelijke_kopjes = (
+            ('opleiding' in h and bool(h & {'werkervaring', 'profiel', 'vaardigheden'}))
+            or ('werkervaring' in h and bool(h & {'profiel', 'vaardigheden'})))
+        contact = personal_contact(emails, phones_in(text), links)
+        context = hdr or cv_file or contact or (len(h) >= 3 and len(periods) >= 2)
+        if (twee_inhoudelijke_kopjes and context and not non_cv and not enormous
+                and not is_template(text) and not is_vacancy(text)
+                and not is_school_doc(text, filename, strong_cv=bool(
+                    'werkervaring' in h and 'opleiding' in h and contact))):
+            kandidaat = naam_uit_bestandsnaam(filename, '', zonder_tekst=True)
+            # Een e-mailadres van aantoonbaar iemand anders kan een bureaureferentie
+            # zijn: neem dan niet blind de naam uit de bestandsnaam over.
+            if kandidaat and not any(email_owner_mismatch(kandidaat, e) for e in emails
+                                     if not GENERIC_EMAIL.match(e)):
+                return kandidaat
     candidate = re.sub(r'(?i)^(cv|resume|curriculum[ _-]*vitae)[ _-]+', '', filename)
     if candidate != filename:
         candidate = re.sub(r'(?i)[ _-]+(?:final|versie|nieuw|new|updated|definitief|lang|kort|nl|en|eng|uk)\b.*$', '', candidate)
@@ -1424,6 +1465,139 @@ CV_SECTION_PATTERNS = {
                           r'algemene gegevens|personal details|personal information|personal data|samenvatting|'
                           r'persoonlijke intro|kandidaatprofiel|profielschets)\s*:?$')
 }
+# Een documenttitel is sterker dan losse CV-kopjes.
+# Geen generieke trefwoordencheck op de hele tekst: een échte kandidaat mag
+# rapportages/handleidingen schrijven, facturatie doen of op vacatures werken.
+NIET_CV_TITELS = [
+    ('vacature', re.compile(
+        r'(?i)^(?:vacature(?:tekst)?|vacatur|vacancy|job\s+(?:posting|advertisement|description|requirements|opening)|'
+        r'functie(?:omschrijving|eisen|profiel)|inhuuraanvraag|aanvraag\s+(?:inhuur|personeel)|'
+        r'eisen\s+en\s+wensen|opdrachtomschrijving)(?:\b[\s:–-]+.{0,80})?$')),
+    ('factuur / administratie', re.compile(
+        r'(?i)^(?:factuur|facturatie|facturering|invoice|billing|creditnota|credit\s+note|'
+        r'betalingsherinnering|declaratie(?:formulier)?|onkostendeclaratie|'
+        r'urenstaat|urenregistratie|kostenoverzicht)(?:\b[\s:–-]+.{0,80})?$')),
+    ('handleiding / instructie', re.compile(
+        r'(?i)^(?:(?:gebruikers|installatie|beheer|werk|service|praktijk)?handleiding|'
+        r'gebruiksaanwijzing|user\s+(?:manual|guide)|instruction\s+manual|'
+        r'werkinstructie|werkwijze|stappenplan|installatiegids|manual|'
+        r'instructiedocument|instructies\s+voor|how\s+to)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+    ('rapport / rapportage', re.compile(
+        r'(?i)^(?:(?:onderzoeks|project|jaar|eind|voortgangs|advies|evaluatie|'
+        r'beoordelings|management|stage|sollicitatie|salaris|loopbaanadvies|'
+        r'kwaliteit|audit|marktonderzoeks|klant|hr[\s_-]*)?'
+        r'(?:rapport|rapportage|verslag)(?:en|s)?|'
+        r'interviewsamenvatting|gespreksnotulen|gespreksverslag|'
+        r'kandidatenbeoordeling|evaluatieformulier|jaarverslag|'
+        r'auditrapport|research\s+report|report|reporting\s+document)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+    ('opdracht / eisen', re.compile(
+        r'(?i)^(?:werkopdracht|aanbesteding|bestek|projectplan|'
+        r'klantpresentatie|website[\s_-]*team|teamoverzicht|'
+        r'projectbrief|projectbeschrijving|requirements\s+document|'
+        r'specificatie|opdracht(?:beschrijving|bevestiging)|'
+        r'implementatieplan|plan\s+van\s+aanpak|adviesdocument)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+    ('contract / beleid', re.compile(
+        r'(?i)^(?:stageovereenkomst|arbeidsovereenkomst|werkovereenkomst|'
+        r'dienstverleningsovereenkomst|contract|privacybeleid|'
+        r'hr[\s_-]*privacybeleid|avg[\s_-]*beleid|'
+        r'intakeformulier|sollicitatieformulier|toestemmingsverklaring|'
+        r'verwerkersovereenkomst|algemene\s+voorwaarden|'
+        r'personeelsreglement)(?:\b[\s:–-]+.{0,80})?$')),
+    ('lijst / lesmateriaal', re.compile(
+        r'(?i)^(?:kandidatenlijst|kandidatenoverzicht|'
+        r'cv[\s_-]*(?:bestanden|overzicht|database|lijst)|'
+        r'overzicht\s+(?:van\s+)?(?:cv.?s|kandidaten|bestanden)|'
+        r'database[\s_-]*export|linkedin[\s_-]*resultaat|'
+        r'zoekresultaten|boekbespreking|lesmateriaal|'
+        r'cursusmateriaal|trainingsmateriaal|sollicitatietips|'
+        r'cv[\s_-]*checklist|checklist)(?:\b[\s:–-]+.{0,80})?$')),
+    ('cv-sjabloon', re.compile(
+        r'(?i)^(?:cv[\s_-]*(?:template|sjabloon|voorbeeld|voorbeeldbestand)|'
+        r'(?:template|sjabloon|voorbeeld)[\s_-]*(?:cv|curriculum\s+vitae)|'
+        r'curriculum\s+vitae[\s_-]*(?:template|sjabloon|voorbeeld)|'
+        r'resum[eé][\s_-]*(?:template|example)|sample[\s_-]*resume)'
+        r'(?:\b[\s:–-]+.{0,80})?$')),
+]
+
+# Extra niet-cv-documenten. Alleen een documenttitel of een apart woord in
+# de BESTANDSNAAM is een afwijssignaal, geen functie of losse werkbeschrijving.
+NIET_CV_TITELS.extend([
+    ('recruiterprofiel', re.compile(
+        r'(?i)^(?:recruiter[\s_-]*(?:profiel|profile|briefing|beoordeling)|'
+        r'recruitment[\s_-]*(?:profiel|briefing|rapport)|'
+        r'kandidaten[\s_-]*(?:profiel|advies|beoordeling)|'
+        r'gewenst[\s_-]*profiel)(?:[\s:–-]+.{0,80})?$')),
+    ('verslag / rapport', re.compile(
+        r'(?i)^(?:stageverslag|eindverslag|voortgangsverslag|'
+        r'functioneringsverslag|evaluatieverslag|adviesverslag|'
+        r'klantverslag|weekverslag|maandverslag|werkverslag|'
+        r'gespreksverslag|reflectieverslag|onderzoeksverslag|auditverslag|'
+        r'verslag|rapport|rapportage|report|'
+        r'jaarverslag|jaaroverzicht|maandrapportage|'
+        r'voortgangsrapportage|projectrapportage|notulen|'
+        r'meeting[\s_-]*minutes)(?:[\s:–-]+.{0,80})?$')),
+    ('checklist / instructie', re.compile(
+        r'(?i)^(?:checklist|controlelijst|afvinklijst|'
+        r'draaiboek|praktijkhandleiding|quick[\s_-]*start[\s_-]*guide|'
+        r'gebruikersgids|gebruikersinstructie)(?:[\s:–-]+.{0,80})?$')),
+    ('salaris / facturatie', re.compile(
+        r'(?i)^(?:salaris|salarisoverzicht|salarisstrook|loonstrook|'
+        r'loonlijst|payroll[\s_-]*report|payslip|salary[\s_-]*report|'
+        r'factuur|facturen|facturatie|factuur(?:overzicht|specificatie)|'
+        r'facturering|invoice|invoices|billing[\s_-]*statement)'
+        r'(?:[\s:–-]+.{0,80})?$')),
+])
+
+# Herken ook "CV_Jan_2026_jaarverslag.pdf", maar NIET "Senior
+# Recruiter" of "Salarisadministrateur": die woorden zijn geen genre.
+NIET_CV_BESTANDSNAAM_WORDEN = re.compile(
+    r'(?i)(?:^|[\s_.-])(?:'
+    r'checklist|controlelijst|afvinklijst|'
+    r'handleiding|gebruikershandleiding|werkinstructie|gebruiksaanwijzing|'
+    r'jaarverslag|jaaroverzicht|stageverslag|eindverslag|'
+    r'projectverslag|projectrapport|projectrapportage|'
+    r'onderzoeksrapport|onderzoeksverslag|evaluatieverslag|'
+    r'voortgangsverslag|voortgangsrapportage|gespreksverslag|'
+    r'rapport|rapportage|verslag|'
+    r'salarisrapport|salarisoverzicht|salarisstrook|'
+    r'factuur|facturen|facturatie|facturering|invoice|invoices|'
+    r'kandidatenbeoordeling|stageovereenkomst|'
+    r'cv[\s_.-]*(?:sjabloon|template|voorbeeld)'
+    r')(?:$|[\s_.-])'
+)
+
+
+def niet_cv_documentsoort(text, filename=''):
+    """Herken expliciet een ANDERE documentsoort aan de echte titel.
+
+    'Rapportage' als documenttitel => geen cv. 'Rapportages gemaakt' onder
+    Werkervaring => juist normaal op een cv. CV-mapcontext telt hier niet.
+    """
+    regels = [re.sub(r'\s+', ' ', line).strip(' :–—-\t')
+              for line in (text or '')[:5000].splitlines() if line.strip()][:5]
+    # Niet de functietitel direct na een echte CV-kop voor een documenttitel
+    # aanzien. Een echte CV-header is sterk bewijs, geen blind vrijbrief.
+    heeft_cv_kop = bool(regels and CV_HEADER.fullmatch(regels[0]))
+    titels = regels[:1] if heeft_cv_kop else regels[:2]
+    basis = str(filename or '').replace('\\', '/').rsplit('/', 1)[-1]
+    basis = re.sub(r'(?i)\.(?:pdf|docx?|txt|rtf|odt|pages)$', '', basis)
+    basis = re.sub(r'^(?:\d{1,5}[\s_.-]+)+', '', basis)
+    basis = re.sub(r'(?i)^(?:cv|c\.v\.)[\s_.-]+', '', basis)
+    basis = basis.replace('_', ' ').replace('-', ' ')
+    titels.append(basis.strip())
+    if NIET_CV_BESTANDSNAAM_WORDEN.search(basis):
+        # Bestandsnamen met een expliciete documentsoort hebben voorrang;
+        # een functienaam als 'Senior_Recruiter' geeft nooit deze match.
+        return 'niet-cv-bestandsnaam'
+    for soort, pattern in NIET_CV_TITELS:
+        if any(pattern.fullmatch(title.strip()) for title in titels if title.strip()):
+            return soort
+    return ''
+
+
 CV_HEADER = re.compile(r'(?i)^(?:europass\s+)?(?:curriculum vitae|resume|résumé|cv)'
                        r'(?:(?:\s*[-–—:]\s*|\s+(?:van|of|von|de)\s+|\s+)[a-zÀ-ÿ .-]{3,50})?$')
 NON_CV_LINES = re.compile(r'(?i)\b(?:wij zoeken|solliciteer nu|vacature|functieomschrijving|de kandidaat dient|stageovereenkomst|onderzoeksrapport|inhoudsopgave|algemene voorwaarden|referaat|studieboek)\b')
@@ -1461,6 +1635,25 @@ def experience_periods(lines):
     return list(dict.fromkeys(spans))[:5]
 
 
+def cv_bestandsnaam_hint(filename):
+    """Een losse CV-aanduiding in de bestandsnaam, ook 'C.V. Jacques ...'."""
+    base = str(filename or '').replace('\\', '/').rsplit('/', 1)[-1]
+    return bool(re.search(r'(?i)(?:^|[\s_.-])(?:c\.?v\.?|resume|résumé|curriculum[\s_-]*vitae)'
+                          r'(?=$|[\s_.-])', base))
+
+
+def cv_map_hint(source_path):
+    """CV-map in een echt bestandspad; niet blind 'cv' ergens midden in een woord."""
+    path = str(source_path or '').replace('\\', '/')
+    folders = path.split('/')[:-1]
+    # Een testpakket of scannermap heeft soms CV in de mapnaam zonder dat
+    # het een recruiter-map is. Alleen echte CV-mappen als hint gebruiken.
+    folders = [folder for folder in folders if not re.search(
+        r'(?i)(?:scanner|stresstest|testbestanden|testdata|testset|testcases)', folder)]
+    return any(re.search(r"(?i)(?:^|[\s_.-])(?:cv|cvs|cv['’]s|c\.?v\.?|resumes?|curriculum[\s_-]*vitae)"
+                         r"(?=$|[\s_.-])", folder) for folder in folders)
+
+
 def cv_signals(text, filename):
     lines = [' '.join(line.strip().split()) for line in text[:160000].splitlines()]
     heads = set()
@@ -1472,7 +1665,7 @@ def cv_signals(text, filename):
             if expression.fullmatch(clean):
                 heads.add(kind)
     cv_header = any(CV_HEADER.fullmatch(line.strip()) for line in lines[:9])
-    cv_filename = bool(re.search(r'(?i)(?:^|[_\s-])(?:cv|resume|curriculum[_\s-]*vitae)(?:[_\s-]|$)', filename))
+    cv_filename = cv_bestandsnaam_hint(filename)
     non_cv = sum(bool(NON_CV_LINES.search(line)) for line in lines[:80])
     enormous = len(text) > 50000
     periods = experience_periods(lines) if 'werkervaring' in heads else []
@@ -1551,7 +1744,35 @@ def is_template(text):
         return True
     lines = [l for l in (text or '')[:8000].splitlines() if l.strip()]
     blanks = sum(1 for l in lines if BLANK_FIELD.search(l))
-    return blanks >= 3 and blanks >= 0.2 * max(1, len(lines))
+    if blanks >= 3 and blanks >= 0.2 * max(1, len(lines)):
+        return True
+    # Lege cv-formulieren: drie of meer echte CV-kopjes, maar nagenoeg
+    # geen ingevulde sectie-inhoud (ook zonder [Naam]-placeholders).
+    sections = []
+    for i, line in enumerate(lines[:120]):
+        clean = line.strip(' \t:•*-')
+        if any(rx.fullmatch(clean) for rx in CV_SECTION_PATTERNS.values()):
+            sections.append(i)
+    if len(sections) >= 3:
+        empty = 0
+        for n, ix in enumerate(sections):
+            stop = sections[n+1] if n+1 < len(sections) else min(ix+6, len(lines))
+            contents = [v.strip() for v in lines[ix+1:stop] if v.strip()]
+            useful = [v for v in contents if len(v) >= 3 and not re.search(
+                r'(?i)(?:\b20xx\b|\bxxxx\b|\bvul\s+(?:hier|in)\b|'
+                r'\bin\s+te\s+vullen\b|\bvoorbeeld(?:naam|bedrijf|opleiding|werkgever)?\b|'
+                r'\bplaceholder\b|\benter\s+(?:your|here)\b|'
+                r'\b(?:your|jouw)\s+(?:name|naam|opleiding|werkervaring)\b|'
+                r'_{3,}|\.{5,})', v)]
+            if not useful:
+                empty += 1
+        if empty >= max(2, len(sections) - 1):
+            return True
+    if len(re.findall(r'(?i)\b(?:naam\s+voorbeeld|voorbeeldnaam|'
+                      r'vul\s+(?:hier|in)|20xx|voorbeeldwerkgever|'
+                      r'your\s+name\s+here|enter\s+your\s+name)\b', text[:8000])) >= 2:
+        return True
+    return False
 
 
 def name_on_top(text, name):
@@ -1595,7 +1816,7 @@ def personal_contact(emails, phones, links):
     return any(not GENERIC_EMAIL.match(e) for e in emails) or bool(phones or links)
 
 
-def classify(text, filename, name, emails, phones, links, layout_bonus=0):
+def classify(text, filename, name, emails, phones, links, layout_bonus=0, source_path=''):
     if not text.strip():
         return 0, 'geen leesbare tekst; OCR of handmatige controle nodig'
     heads, cv_header, cv_filename, non_cv, enormous, periods = cv_signals(text, filename)
@@ -1603,9 +1824,11 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0):
     structure = ('werkervaring' in heads and
                  ('opleiding' in heads or 'vaardigheden' in heads or 'profiel' in heads))
     rich = len(heads) >= 3 and 'werkervaring' in heads
-    explicit = cv_header or cv_filename
+    in_cv_map = cv_map_hint(source_path)
+    explicit = cv_header or cv_filename or in_cv_map
     score = 12 * len(heads) + 17 * bool(name) + 14 * contact + 10 * cv_header + 5 * cv_filename
     score += 10 if structure else 0
+    score += 8 if in_cv_map and structure else 0
     score += min(18, 9*len(periods)) if structure and name else 0
     score += min(5, max(0, layout_bonus)) if structure else 0
     score -= 30 if non_cv else 0
@@ -1613,7 +1836,10 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0):
     loose = headingless_cv(text, name, emails, phones, links, non_cv, enormous)
     if loose:
         score = max(score, 75)
-    if is_template(text):
+    ander_document = niet_cv_documentsoort(text, filename)
+    vier_banen = gelijktijdige_werkgevers(text) >= 4
+    contract = is_stagecontract(text)
+    if is_template(text) or ander_document or vier_banen or contract:
         score = min(score, 20)
     if not name:
         score = min(score, 49)
@@ -1627,18 +1853,83 @@ def classify(text, filename, name, emails, phones, links, layout_bonus=0):
         score = min(score, 49)
     reason = ('kopjes: ' + (', '.join(sorted(heads)) or 'geen') +
               f'; naam: {"ja" if name else "nee"}; contact: {"ja" if contact else "nee"}; '
-              f'CV-kop: {"ja" if explicit else "nee"}; werkperiodes: {len(periods)}' +
+              f'CV-kop: {"ja" if cv_header else "nee"}; werkperiodes: {len(periods)}' +
+              ('; CV-bestandsnaam: ja' if cv_filename else '') +
               ('; mogelijk andere documentsoort' if non_cv or enormous else '') +
               ('; cv zonder kopjes (naam, contact en periodes)' if loose and not structure else '') +
               ('; leeg sjabloon' if is_template(text) else '') +
-              ('; vacature/inhuuraanvraag' if is_vacancy(text) else ''))
+              ('; vacature/inhuuraanvraag' if is_vacancy(text) else '') +
+              (f'; niet-cv-document: {ander_document}' if ander_document else '') +
+              ('; minstens 4 gelijktijdige werkgevers' if vier_banen else '') +
+              ('; stagecontract: 3+ contractsignalen' if contract else '') +
+              ('; CV-map: ja' if in_cv_map else ''))
     return max(0,min(100,score)), reason
 
 
-def decide_status(text, filename, name, emails, phones, links, score, threshold=70):
+STAGE_CONTRACT_MARKERS = (
+    re.compile(r'(?i)\b(?:stagegever|stageverlener|stagebedrijf|stagebegeleider)\b'),
+    re.compile(r'(?i)\b(?:ondergetekenden|ondertekende partijen|beide partijen|partijen verklaren)\b'),
+    re.compile(r'(?i)\b(?:stageovereenkomst|deze overeenkomst|de overeenkomst|stagecontract)\b'),
+    re.compile(r'(?i)\b(?:handtekening(?:en)?|ondertekening|ondertekend door)\b'),
+    re.compile(r'(?i)\b(?:artikel\s+\d+|art\.\s*\d+|contractduur|contractperiode)\b'),
+    re.compile(r'(?i)\b(?:namens de organisatie|ondertekend te|datum ondertekening)\b'),
+)
+
+
+def is_stagecontract(text):
+    """Stagecontract, geen CV: meerdere ONAFHANKELIJKE contractsignalen nodig.
+    Naam, school, stageperiode of het woord 'overeenkomst' alleen zijn
+    onvoldoende: ze kunnen ook in een echt CV staan.
+    """
+    top = (text or '')[:12000]
+    if not top.strip():
+        return False
+    markers = {i for i, rx in enumerate(STAGE_CONTRACT_MARKERS) if rx.search(top)}
+    if len(markers) < 3:
+        return False
+    # Een echte contractrelatie EN een handtekening/artikel/partijen.
+    return 2 in markers and bool(markers & {1, 3, 4, 5})
+
+
+def gelijktijdige_werkgevers(text):
+    """Vier verschillende werkgevers met minimaal één volledig overlappend jaar.
+    Twee gelijktijdige banen / dezelfde startdag bewijzen NIET dat het geen cv is.
+    Alleen concrete 'bij X / at X' werkperiodes tellen mee.
+    """
+    jobs = werk_periodes({'snippet': normalized_snippet(text or '')})
+    jobs = {(w, start, end) for w, start, end in jobs if w and not w.startswith('*')}
+    if len({w for w, _, _ in jobs}) < 4:
+        return 0
+    # Vier verschillende werkgevers moeten écht tegelijk actief zijn;
+    # alleen vier verschillende functies in verschillende jaren is geen signaal.
+    years = {y for _, start, end in jobs for y in (start, end)}
+    for year in sorted(years):
+        active = {w for w, start, end in jobs if start <= year and end >= year + 1}
+        if len(active) >= 4:
+            return len(active)
+    return 0
+
+
+def decide_status(text, filename, name, emails, phones, links, score, threshold=70, source_path=''):
     if not text.strip():
         return 'other'        # gescand/afbeelding en ook de OCR vond niets: geen cv (staat wel in Bestanden en status)
-    if is_template(text) or is_vacancy(text):
+    if is_template(text) or is_vacancy(text) or niet_cv_documentsoort(text, filename) or is_stagecontract(text):
+        return 'other'
+    if gelijktijdige_werkgevers(text) >= 4:
+        # Een persoonlijke consultant kan meerdere parallelle opdrachten hebben.
+        # Bij een sterke CV-identiteit op review zetten; anders uitsluiten.
+        persoonlijk = (bool(name and reasonable_name(name))
+                       and any(CV_HEADER.fullmatch(line.strip()) for line in text.splitlines()[:7])
+                       and any(email_matches_name(name, e) and not GENERIC_EMAIL.match(e)
+                               for e in emails))
+        return 'review' if persoonlijk else 'other'
+    # Vacatures/inhuuraanvragen zijn géén twijfel-cv's. Een expliciete
+    # vacaturekop of bestandsnaam wordt ook zonder drie losse trefwoorden afgewezen.
+    if re.match(r'(?i)^\s*(?:vacature|vacancy|inhuuraanvraag|job opening)\b',
+                str(filename or '').replace('\\', '/').rsplit('/', 1)[-1]):
+        return 'other'
+    if any(re.match(r'(?i)^\s*(?:vacature|vacancy|inhuuraanvraag|job opening)\b', line)
+           for line in text.splitlines()[:8]):
         return 'other'
     _h, _hdr, _fn, _nc, _en, _p = cv_signals(text, filename)
     strong_cv = ('werkervaring' in _h and 'opleiding' in _h
@@ -1646,6 +1937,30 @@ def decide_status(text, filename, name, emails, phones, links, score, threshold=
     if is_school_doc(text, filename, strong_cv) and not CV_HEADER.search('\n'.join(text.splitlines()[:9])):
         return 'other'
     heads, cv_header, cv_filename, non_cv, enormous, periods = cv_signals(text,filename)
+    contact = personal_contact(emails, phones, links) or (bool(name) and own_site_in(text, name))
+    # Echte CV-signalen moeten zwaarder wegen dan de afwezigheid van een
+    # e-mailadres of datum. Minimaal twee inhoudelijke kopjes, waarvan Opleiding,
+    # plus een CV-kop, een CV-bestandsnaam of een CV-map.
+    in_cv_map = cv_map_hint(source_path)
+    cv_context = cv_header or cv_filename or in_cv_map
+    edu_met_inhoud = 'opleiding' in heads and bool(heads & {'werkervaring', 'profiel', 'vaardigheden'})
+    betrouwbare_naam = bool(name and reasonable_name(name))
+    if not non_cv and not enormous:
+        # Jacques van Nes: 'Curriculum Vitae' in de tekst + naam + contact;
+        # ook als afzonderlijke kopjes niet leesbaar uit een PDF komen.
+        if betrouwbare_naam and cv_header and contact:
+            return 'cv'
+        # Ook zonder contact: Opleiding + Werkervaring/Profiel/Vaardigheden
+        # en een herkenbare naam in een duidelijke CV-context is voldoende.
+        if betrouwbare_naam and cv_context and edu_met_inhoud:
+            return 'cv'
+        # Een écht CV-document zonder gevonden kandidaatnaam. Geen naam raden:
+        # het bestand is een CV, maar gaat NIET als geverifieerde kandidaat
+        # de ontdubbeling in voordat er een persoonsnaam is gevonden.
+        if (not betrouwbare_naam and cv_context and contact
+                and {'opleiding', 'werkervaring'} <= heads and len(heads) >= 3
+                and len(periods) >= 2):
+            return 'cv'
     if score >= threshold and headingless_cv(text, name, emails, phones, links, non_cv, enormous):
         return 'cv'
     contact = personal_contact(emails, phones, links) or (bool(name) and own_site_in(text, name))
@@ -1675,6 +1990,10 @@ def decide_status(text, filename, name, emails, phones, links, score, threshold=
     if name and (structure or cv_header or cv_filename) and (contact or len(heads)>=2 or periods):
         return 'review'
     if not name and (structure or (cv_header and len(heads)>=1)):
+        return 'review'
+    # CV-bestand of CV-map met beperkte aanwijzingen, maar zonder sterk
+    # bewijs: niet goedkeuren en niet weggooien; alleen beoordelen.
+    if (cv_filename or in_cv_map) and heads and (betrouwbare_naam or len(heads) >= 2):
         return 'review'
     return 'other'
 
@@ -2565,13 +2884,17 @@ def iter_files(roots, out, deep=False):
     visited = set()
     out = out.resolve()
     cvdir = cv_folder(out).resolve()
+    naamloosdir = naamloze_cv_folder(out).resolve()
     roots = list(roots) + ([cvdir] if cvdir.exists() else [])   # eigen cv-map altijd meenemen
     def excluded(d):
         r = d.resolve()
         in_out = r == out or out in r.parents
         in_cv = r == cvdir or cvdir in r.parents
-        return in_out and not in_cv
+        in_naamloos = r == naamloosdir or naamloosdir in r.parents
+        return in_naamloos or (in_out and not in_cv)
     for root in roots:
+        if excluded(root):
+            continue
         if root.is_file():
             if root.suffix.lower() in (SUPPORTED | ARCHIVES) and root != out:
                 yield root
@@ -2677,6 +3000,9 @@ def ingest(args, db, out, roots=None, label=None):
     if not roots:
         raise RuntimeError('Geen bestaande mappen opgegeven')
     print(label or ('Zoekt in: ' + ', '.join(map(str, roots))), flush=True)
+    if not label and getattr(args, 'force', False):
+        print('Vorige sessie telt niet mee: elk bestand wordt opnieuw bekeken (geen hergebruik van Excel of eerdere scan).',
+              flush=True)
     for d in mac_access_check():
         print('TOEGANG GEWEIGERD: ' + d, flush=True)
     print(crypto_status_text(), flush=True)
@@ -2725,8 +3051,7 @@ def ingest(args, db, out, roots=None, label=None):
                 summary['hergebruikt'] += 1
                 continue
             if (not retry_ocr and saved and saved['mtime_ns'] == stat.st_mtime_ns and saved['size'] == stat.st_size
-                    and ((saved['status'] == 'cv' and keep_cv_name(saved['name'], saved['reason']))
-                         or (saved['status'] == 'other' and not maybe_cv(saved['reason'])))
+                    and saved['status'] == 'other' and not maybe_cv(saved['reason'])
                     and (saved['classifier_version'] or 0) >= KEEP_FROM_VERSION
                     and not args.force):
                 # Nieuwere herkenning, maar dit document was al zeker cv of zeker geen cv: niet opnieuw lezen.
@@ -2780,8 +3105,9 @@ def ingest(args, db, out, roots=None, label=None):
                 note = ' | '.join(t for t in (note, lightweight_pdf_warning(p,stat)) if t)
                 emails, phones, links = emails_in(text), phones_in(text), linkedins_in(text)
                 name = guess_name(text, p.stem, emails, links)
-                score, reason = classify(text, p.stem, name, emails, phones, links, layout)
-                status = decide_status(text, p.stem, name, emails, phones, links, score, args.threshold)
+                score, reason = classify(text, p.stem, name, emails, phones, links, layout, source_path=str(p))
+                status = decide_status(text, p.stem, name, emails, phones, links, score, args.threshold,
+                                       source_path=str(p))
                 if p.suffix.lower() == '.pdf' and not text.strip():
                     status = 'other'   # gescand en ook OCR vond geen tekst: geen cv
                 dst = ''
@@ -2880,10 +3206,12 @@ def ingest_zip(zpath, zstat, args, db, archive, lang, summary, seen_paths):
     like = prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
     old = db.execute("SELECT path,mtime_ns,size,status,classifier_version,reason,name FROM docs WHERE path LIKE ? ESCAPE '\\'",
                      (like,)).fetchall()
-    if (old and not args.force and all(r['mtime_ns'] == zstat.st_mtime_ns and r['size'] == zstat.st_size
-            and (r['classifier_version'] == CLASSIFIER_VERSION and r['status'] not in ('error', 'deferred')
-                 or (r['classifier_version'] or 0) >= KEEP_FROM_VERSION
-                 and ((r['status'] == 'cv' and keep_cv_name(r['name'], r['reason'])) or (r['status'] == 'other' and not maybe_cv(r['reason']))))
+    if (old and not args.force and all(
+            r['mtime_ns'] == zstat.st_mtime_ns and r['size'] == zstat.st_size
+            and ((r['classifier_version'] == CLASSIFIER_VERSION
+                  and r['status'] not in ('error', 'deferred'))
+                 or ((r['classifier_version'] or 0) >= KEEP_FROM_VERSION
+                     and r['status'] == 'other' and not maybe_cv(r['reason'])))
             for r in old)):
         for r in old:
             seen_paths.add(r['path'])
@@ -2983,8 +3311,9 @@ def process_document(real_file, path_str, stem, ext, stat, args, db, archive, la
                                             timeout_seconds=args.reader_timeout)
     emails, phones, links = emails_in(text), phones_in(text), linkedins_in(text)
     name = guess_name(text, stem, emails, links)
-    score, reason = classify(text, stem, name, emails, phones, links, layout)
-    status = decide_status(text, stem, name, emails, phones, links, score, args.threshold)
+    score, reason = classify(text, stem, name, emails, phones, links, layout, source_path=path_str)
+    status = decide_status(text, stem, name, emails, phones, links, score, args.threshold,
+                           source_path=path_str)
     if ext == '.pdf' and not text.strip():
         status = 'other'
     dst = ''
@@ -3081,6 +3410,26 @@ def naam_verzoenen(naam_a, naam_b, teksten):
     return ''
 
 
+def zelfde_naam_eigen_email(a, b):
+    """Eén kandidaat als de volledige naam exact gelijk is en in beide CV's
+    eenzelfde persoonlijk e-mailadres staat. Geen recruiter-, team- of
+    generiek adres. Deze expliciete gebruikersregel weegt bij meerdere
+    CV-versies zwaarder dan een veranderde opleiding of baan.
+    """
+    name_a, name_b = normalized_name(a['name']), normalized_name(b['name'])
+    if not name_a or name_a != name_b or len(name_a.split()) < 2:
+        return False
+    try:
+        shared = set(json.loads(a['emails'] or '[]')) & set(json.loads(b['emails'] or '[]'))
+    except (ValueError, TypeError):
+        return False
+    return any(
+        e not in BUREAU_CONTACT and not GENERIC_EMAIL.match(e)
+        and email_matches_name(a['name'], e)
+        for e in shared
+    )
+
+
 def harde_blokkade(a, b):
     """Redenen waarom twee cv's NOOIT dezelfde persoon kunnen zijn (ook niet als de AI 'zelfde' zegt)."""
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
@@ -3088,6 +3437,11 @@ def harde_blokkade(a, b):
         return 'andere voornaam'
     if loopbaan_botst(a, b):
         return 'andere loopbaan (andere werkgevers in dezelfde jaren)'
+    # Een aantoonbaar tegenstrijdige opleiding betekent twee afzonderlijke kandidaten, niet 'mogelijk dubbel'.
+    # Zelfde naam, mail, telefoon of AI-akkoord mogen dit niet opheffen. Bachelor -> master is geen botsing;
+    # een andere woonplaats zonder opleidingsconflict evenmin.
+    if opleiding_botst(a, b):
+        return 'tegenstrijdige opleiding (niveau, jaren of opleidingsplaats)'
     aw, bw = [w for w in an.split() if w not in NAME_FILLERS], [w for w in bn.split() if w not in NAME_FILLERS]
     if len(aw) >= 2 and len(bw) >= 2 and not _zelfde_naam_andere_volgorde(an, bn):
         la, lb = aw[-1], bw[-1]
@@ -3104,6 +3458,136 @@ def harde_blokkade(a, b):
         if wa and wb and not (wa & wb) and not lijkt:
             return 'andere naam in bestandsnaam'
     return ''
+
+
+def _periode_overlap(begin_a, eind_a, begin_b, eind_b):
+    return min(eind_a, eind_b) - max(begin_a, begin_b)
+
+
+def _json_set(d, veld):
+    try:
+        return set(json.loads(d[veld] or '[]'))
+    except (ValueError, TypeError, KeyError):
+        return set()
+
+
+def _studie_anker(a, b):
+    """Dezelfde studie, ook als begin- of eindjaar één à twee jaar verschuift."""
+    for x in opleiding_periodes(a):
+        for y in opleiding_periodes(b):
+            if _zelfde_opleiding_record(x, y):
+                return True
+            niveau, richting, school, _plaats, jaar, eind = x
+            niveau2, richting2, school2, _plaats2, jaar2, eind2 = y
+            if (niveau == niveau2 and richting and richting == richting2
+                    and school and school == school2
+                    and abs(jaar - jaar2) <= 2 and abs(eind - eind2) <= 2):
+                return True
+    return False
+
+
+def _werk_anker(a, b):
+    for werk_a, begin_a, eind_a in werk_periodes(a):
+        for werk_b, begin_b, eind_b in werk_periodes(b):
+            if werk_a.lstrip('*') != werk_b.lstrip('*'):
+                continue
+            if _periode_overlap(begin_a, eind_a, begin_b, eind_b) >= 0 or abs(begin_a - begin_b) <= 1:
+                return True
+    return False
+
+
+def _contact_anker(a, b):
+    """Gedeeld privénummer of profiel. Een ontbrekende werkgever weegt hier niet mee."""
+    tel = {p for p in _json_set(a, 'phones') & _json_set(b, 'phones') if p and p not in BUREAU_CONTACT}
+    links = {p for p in _json_set(a, 'links') & _json_set(b, 'links') if p and p not in BUREAU_CONTACT}
+    return bool(tel or links)
+
+
+def _parallel_andere_baan(begin_a, eind_a, begin_b, eind_b):
+    """Twee banen naast elkaar. Een overdracht van hooguit twee jaar aan het eind telt niet."""
+    if _periode_overlap(begin_a, eind_a, begin_b, eind_b) < 2:
+        return False
+    if begin_a <= begin_b:
+        vroeg_eind, laat_begin, laat_eind = eind_a, begin_b, eind_b
+    else:
+        vroeg_eind, laat_begin, laat_eind = eind_b, begin_a, eind_a
+    if laat_begin >= vroeg_eind - 2 and laat_eind > vroeg_eind:
+        return False
+    return True
+
+
+def _opleiding_zelfde_jaren_botsen(a, b):
+    """Twee verschillende studies die dezelfde jaren vullen. Een latere studie of een jaar verschil niet."""
+    studies_a, studies_b = opleiding_periodes(a), opleiding_periodes(b)
+    if not studies_a or not studies_b:
+        return False
+    for niveau in {o[0] for o in studies_a} & {o[0] for o in studies_b}:
+        lijst_a = [x for x in studies_a if x[0] == niveau]
+        lijst_b = [x for x in studies_b if x[0] == niveau]
+        if len(lijst_a) != 1 or len(lijst_b) != 1:
+            continue
+        x, y = lijst_a[0], lijst_b[0]
+        if _zelfde_opleiding_record(x, y):
+            continue
+        _niveau, richting, school, _plaats, jaar, eind = x
+        _niveau2, richting2, school2, _plaats2, jaar2, eind2 = y
+        if _periode_overlap(jaar, eind, jaar2, eind2) <= 1:
+            continue
+        duur_a = max(eind - jaar, 1)
+        duur_b = max(eind2 - jaar2, 1)
+        overlap = _periode_overlap(jaar, eind, jaar2, eind2)
+        # Alleen als de studies grotendeels dezelfde jaren vullen. Twee jaar overlap
+        # kan een tweede studie zijn die eerder begint.
+        if overlap < 3 or overlap * 2 < duur_a or overlap * 2 < duur_b:
+            continue
+        andere_richting = bool(richting and richting2 and richting != richting2)
+        andere_school = bool(school and school2 and school != school2)
+        zelfde_richting = bool(richting and richting == richting2)
+        if andere_richting or (andere_school and not zelfde_richting):
+            return True
+    return False
+
+
+def _richtingen_sluiten_uit(a, b):
+    studies_a, studies_b = opleiding_periodes(a), opleiding_periodes(b)
+    for niveau in {o[0] for o in studies_a} & {o[0] for o in studies_b}:
+        richting_a = {o[1] for o in studies_a if o[0] == niveau and o[1]}
+        richting_b = {o[1] for o in studies_b if o[0] == niveau and o[1]}
+        if len(richting_a) == 1 and len(richting_b) == 1 and richting_a.isdisjoint(richting_b):
+            return True
+    return False
+
+
+def _banen_parallel(a, b):
+    periodes_a, periodes_b = werk_periodes(a), werk_periodes(b)
+    if not periodes_a or not periodes_b or _werk_anker(a, b):
+        return False
+    for werk_a, begin_a, eind_a in periodes_a:
+        for werk_b, begin_b, eind_b in periodes_b:
+            if werk_a.lstrip('*') == werk_b.lstrip('*'):
+                continue
+            if _parallel_andere_baan(begin_a, eind_a, begin_b, eind_b):
+                return True
+    return False
+
+
+def mail_verliest_van_conflict(a, b):
+    """Gedeeld mailadres blijft gelden, tenzij de cv's dezelfde jaren anders invullen.
+
+    Geen gedeelde werkgever bewijst niets. Een extra baan, carrièreswitch, master,
+    stage of een klein jaartalverschil is een aanvulling van dezelfde persoon.
+    Daan en Sasha blijven apart: hun studie én hun baan vullen dezelfde jaren
+    met een andere inhoud, zonder gemeenschappelijk anker.
+    """
+    if _studie_anker(a, b) or _werk_anker(a, b) or _contact_anker(a, b):
+        return False
+    # Daan: de opleidingen vullen dezelfde jaren, ook als de banen op elkaar volgen.
+    if _opleiding_zelfde_jaren_botsen(a, b):
+        return True
+    # Sasha: andere richting, en de banen lopen naast elkaar in plaats van na elkaar.
+    if _banen_parallel(a, b) and _richtingen_sluiten_uit(a, b):
+        return True
+    return False
 
 
 def safe_pair(a, b):
@@ -3127,8 +3611,48 @@ def safe_pair(a, b):
     strong = bool((ae & be) or (ap & bp) or (al & bl))
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
+    # Zelfde persoonsnaam en hetzelfde eigen e-mailadres => één kandidaat,
+    # behalve als studie én baan dezelfde jaren met andere inhoud vullen.
+    if zelfde_naam_eigen_email(a, b) and not mail_verliest_van_conflict(a, b):
+        return True, False, 'zelfde volledige naam en persoonlijk e-mailadres: één kandidaat; nieuwste CV wint'
+    def _werkgever_tokens(d):
+        found = set()
+        raw = d['werkgevers'] if 'werkgevers' in (d.keys() if hasattr(d, 'keys') else d) else ''
+        for x in str(raw or '').split(' ; '):
+            stuk = normalized_name(x).split()
+            if stuk:
+                found.add(stuk[0])
+        for w, _b, _e in werk_periodes(d):
+            found.add(str(w).lstrip('*'))
+        for _b, _e, venster, *_rest in periodes_uit_cv(d['snippet'] or ''):
+            first = (venster.split() or [''])[0]
+            if len(first) >= 4 and first not in WERK_STOP and first not in NL_PLACES:
+                found.add(first)
+        snippet = d['snippet'] if 'snippet' in (d.keys() if hasattr(d, 'keys') else d) else ''
+        words = str(snippet or '').split()
+        for i, w in enumerate(words[:-1]):
+            if w.endswith(JOB_ENDINGS):
+                found.add(words[i + 1])
+        for m in re.finditer(r'\b(?:bij|at)\s+([a-z]{4,})', str(snippet or '')):
+            found.add(m.group(1))
+        def _bedrijf(w):
+            w = str(w).lstrip('*')
+            if len(w) < 4 or w in WERK_STOP or w in NL_PLACES or w in COMPANY_WORDS or w.endswith(JOB_ENDINGS):
+                return ''
+            if w in {'heden', 'present', 'support', 'analyse', 'voor', 'met', 'van', 'the', 'and', 'voor'}:
+                return ''
+            return w
+        return {x for x in (_bedrijf(w) for w in found) if x}
     # Harde blokkades: andere voornaam (ook gezinsleden), andere persoon in de bestandsnaam (bureau-cv's).
     blok = harde_blokkade(a, b)
+    # Zelfde volle naam zonder twee verschillende persoonlijke mails: één kandidaat.
+    # Opleiding of loopbaan op een lastige/oude CV mag dat niet splitsen (nieuwste CV wint).
+    # Echte naamgenoten met andere werkgevers blijven via de token-check hieronder apart.
+    if (blok.startswith(('tegenstrijdige opleiding', 'andere loopbaan'))
+            and same_name and len(an.split()) >= 2
+            and not (ae and be and not (ae & be))
+            and not mail_verliest_van_conflict(a, b)):
+        blok = ''
     if blok:
         if blok == 'andere voornaam' and ae & be and all(
                 not email_matches_name(a['name'], e) and not email_matches_name(b['name'], e) for e in ae & be):
@@ -3146,6 +3670,27 @@ def safe_pair(a, b):
                 return True, False, f'zelfde persoon met meerdere voornamen ({volledig}); zelfde mail, telefoon en loopbaan'
             return False, True, 'zelfde contactgegevens, maar andere achternaam'
         return False, False, ''
+    # Zelfde volle naam, geen twee verschillende persoonlijke mails, geen harde blokkade: één kandidaat.
+    # Excel toont het nieuwste CV; ontbrekende mail of telefoon komt van de andere CV.
+    # Heeft het nieuwste CV beide, dan worden oude mail en nummer niet gebruikt.
+    # Naamgenoot met 1 gedeelde werkgever en verder andere banen blijft apart.
+    if same_name and len(an.split()) >= 2 and not (ae and be and not (ae & be)):
+        oa, ob = _werkgever_tokens(a), _werkgever_tokens(b)
+        # Precies één gedeelde werkgever én aan beide kanten andere banen: naamgenoot.
+        # Geen overlap (lastige CV met andere werkgever) is dezelfde persoon.
+        naamgenoot = bool(oa and ob and (oa - ob) and (ob - oa) and len(oa & ob) == 1)
+        try:
+            gedeeld = set(json.loads(a['emails'] or '[]')) & set(json.loads(b['emails'] or '[]'))
+        except (ValueError, TypeError):
+            gedeeld = set()
+        alleen_bureau = bool(gedeeld) and all(
+            GENERIC_EMAIL.match(e) or e in BUREAU_CONTACT for e in gedeeld)
+        # Zelfde naam op twee bureau-cv's met alleen jobs@/info@ en een andere loopbaan: niet één persoon.
+        # Het gedeelde 020-nummer is dan het recruiternummer, geen privénummer.
+        if alleen_bureau and oa and ob and oa != ob:
+            return False, False, ''
+        if not naamgenoot:
+            return True, False, 'zelfde volledige naam: één kandidaat; nieuwste CV wint, ontbrekende mail/telefoon aanvullen'
     # Beide cv's zonder bruikbare naam, maar hetzelfde persoonlijke mailadres ÉN telefoonnummer: één persoon.
     if not an and not bn and (ae & be) and (ap & bp):
         return True, False, 'geen naam, wel zelfde persoonlijk e-mailadres en telefoon'
@@ -3217,6 +3762,16 @@ def safe_pair(a, b):
             # 'Johan Smit' / 'Johan Smits' met één gedeeld mailadres: misschien een typfout, misschien niet.
             # Alleen samen als ook telefoon of LinkedIn gelijk is; anders als mogelijk dubbel laten zien.
             return False, True, 'zelfde e-mail, achternaam net anders'
+    # Dezelfde naam + exact dezelfde volledige opleiding of specifieke werkgever met beginjaar:
+    # ook zonder dezelfde mail/telefoon kunnen dit verschillende CV-versies zijn.
+    if same_name and not strong:
+        opl = opleiding_overeenkomsten(a, b)
+        werk = zelfde_werk(a, b)
+        if opl and (werk or len(opl) >= 2):
+            return True, False, 'zelfde volledige opleiding (' + opl[0] + ')' + (
+                ' en werkgever (' + werk[0] + ')' if werk else ' (meerdere opleidingen)')
+        if werk and len(werk) >= 2:
+            return True, False, 'zelfde twee werkgevers met beginjaar (' + ', '.join(werk[:2]) + ')'
     if strong:
         return (True, False, 'zelfde e-mail, telefoon of LinkedIn én naam') if (an and bn and (name_sim >= .89 or contained)) \
             else (False, True, 'gedeelde contactgegevens; namen niet bevestigd')
@@ -3296,6 +3851,79 @@ def cv_folder(out=None):
     except OSError:
         chosen = ''
     return (Path(chosen) / CV_FOLDER) if chosen else (out / CV_FOLDER)
+
+
+NAAMLOZE_FOLDER = 'Naamloze_cvs'
+
+
+def naamloze_cv_folder(out=None):
+    """Eigen map naast Alle_cvs, ook bij een zelfgekozen CV-bestandslocatie."""
+    return cv_folder(out).parent / NAAMLOZE_FOLDER
+
+
+def kopieer_naamloze_cvs(out, naamloze):
+    """Kopieer overgebleven naamloze CV-kandidaten na AI; wijzig geen originelen.
+    Voor ZIP-documenten wordt uitsluitend het betreffende ZIP-lid gekopieerd.
+    Maak geen duplicaten en verwijder bestaande kopieën nooit.
+    """
+    folder = naamloze_cv_folder(out)
+    try:
+        if folder.is_symlink():
+            print('NAAMLOZE CVS: doelmap is een verwijzing; overgeslagen.', flush=True)
+            return 0
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f'NAAMLOZE CVS: map niet beschikbaar ({type(exc).__name__}).', flush=True)
+        return 0
+    copied, seen = 0, set()
+    for row in naamloze:
+        sha = row.get('sha256') or ''
+        location = row.get('oorspronkelijk_bestand') or ''
+        if not re.fullmatch(r'[a-fA-F0-9]{64}', sha) or not location or sha in seen:
+            continue
+        seen.add(sha)
+        vname = location.split(ZIP_SEP)[-1].replace('\\', '/').rsplit('/', 1)[-1]
+        ext = Path(vname).suffix.lower()
+        if ext not in SUPPORTED:
+            continue
+        target = folder / f'{cv_id_of(sha)}_{safe_part(Path(vname).stem, 45)}{ext}'
+        part = folder / (target.name + '.bezig')
+        try:
+            if target.exists():
+                if target.is_file() and not target.is_symlink() and (ext == '.pages' or hash_file(target) == sha):
+                    row['kopie_in_naamloze_map'] = str(target)
+                continue   # nooit een andere bestaande kopie overschrijven
+            if part.exists():
+                part.unlink()       # eigen tijdelijke kopie na afgebroken export
+            if ZIP_SEP in location:
+                pathzip, member = location.split(ZIP_SEP, 1)
+                with zipfile.ZipFile(pathzip) as z:
+                    info = z.getinfo(member)
+                    if info.is_dir() or info.flag_bits & 1 or info.file_size > GROOT_MB * 1024 * 1024:
+                        continue
+                    with z.open(info) as source, part.open('wb') as dest:
+                        shutil.copyfileobj(source, dest, 1048576)
+            else:
+                source = Path(location)
+                if not source.exists() or source.is_symlink():
+                    continue
+                copy_document(source, part)
+            if ext != '.pages' and hash_file(part) != sha:
+                print('NAAMLOZE CVS: kopie komt niet overeen met origineel:', vname, flush=True)
+                continue
+            part.replace(target)
+            row['kopie_in_naamloze_map'] = str(target)
+            copied += 1
+        except (OSError, ValueError, RuntimeError, KeyError, zipfile.BadZipFile) as exc:
+            print(f'NAAMLOZE CVS: kopiëren mislukt ({type(exc).__name__}): {vname}', flush=True)
+        finally:
+            if part.exists():
+                try:
+                    part.unlink()
+                except OSError:
+                    pass
+    print(f'NAAMLOZE CVS: {copied} nieuwe kopieën in {folder}; originelen blijven staan.', flush=True)
+    return copied
 
 
 def cv_rel_link(rel):
@@ -4149,35 +4777,130 @@ def _opl_niveau(venster):
         return 'master'
     if re.search(r' (?:hbo|bachelor|bsc|ba|b tech|btech|propedeuse) ', v):
         return 'bachelor'
+    # 'WO Informatica' is een universitaire studie, maar het woord 'WO'
+    # zegt op zichzelf niet of er een bachelor of master is behaald.
+    if re.search(r' wo ', v):
+        return 'wo'
     if re.search(r' mbo ', v):
         return 'mbo'
     return ''
 
 
+# Een opleiding kan zich meerdere keren in een loopbaan voordoen (twee bachelors, overstap, master na HBO).
+# Lees daarom de afzonderlijke opleidingen, niet alleen het niveau en niet de huidige woonplaats.
+OPLEIDING_RICHTINGEN = ('informatica', 'bedrijfskunde', 'data science', 'computer science',
+                        'software engineering', 'commerciele economie', 'ict', 'rechten',
+                        'verpleegkunde', 'werktuigbouwkunde', 'psychologie')
+
+
+def opleiding_periodes(d):
+    """(niveau, richting, school, plaats_bij_school, beginjaar, eindjaar).
+    Een adres/woonplaats verderop in het cv is nooit de plaats van een opleiding."""
+    out = []
+    for begin, eind, venster, _exact, _voor in periodes_uit_cv(d['snippet'] or ''):
+        words = venster.split()
+        eerste = ' ' + ' '.join(words[:8]) + ' '
+        if not OPL_WOORD.search(eerste) or re.search(r' (?:bij|at) ', ' ' + ' '.join(words[:5]) + ' '):
+            continue
+        niveau = _opl_niveau(venster)
+        if not niveau:
+            continue
+        # De eerstvolgende cv-sectie/contactregel hoort niet bij de school.
+        kort = re.split(r'\b(?:woonplaats|adres|werkervaring|experience|vaardigheden|skills|'
+                        r'telefoon|mobiel|linkedin|huidige functie)\b',
+                        ' '.join(words[:16]), maxsplit=1)[0]
+        # Een periodevenster bevat soms ook de VOLGENDE studieperiode. Stop vóór
+        # het volgende jaartal, zodat 'Hogeschool Utrecht 2010' niet als schoolnaam
+        # wordt opgeslagen wanneer het tweede diploma in 2010 begint.
+        kort = re.split(r'\b(?:19|20)\d{2}\b', kort, maxsplit=1)[0].strip()
+        richting = next((v for v in OPLEIDING_RICHTINGEN if re.search(r'\b' + re.escape(v) + r'\b', kort)), '')
+        m = re.search(r'\b(?:hogeschool|hogescholen|universiteit|university|college|roc)\b', kort)
+        school = ''
+        plaats = ''
+        if m:
+            # 'Hogeschool van Amsterdam' -> Amsterdam; 'Hogeschool Utrecht' -> Utrecht.
+            # 'Woonplaats Amsterdam' na 'Hogeschool Utrecht' mag deze plaats niet vervangen.
+            na = kort[m.end():].split()
+            na = [w for w in na if w not in ('van', 'de', 'het', 'der', 'technical', 'skills', 'skill',
+                                             'profiel', 'profile', 'vaardigheden') and not w.isdigit()][:3]
+            plaats = _plaats_in(' ' + ' '.join(na) + ' ', NL_PLACES | BE_PLACES)
+            school = kort[:m.end()].split()[-1] + ' ' + ' '.join(na[:1])
+            school = school.strip()
+        else:
+            # Ook Fontys, Avans of Saxion tellen als opleiding; locatie is dan onbekend.
+            for naam in ('fontys', 'avans', 'saxion', 'hanzehogeschool', 'inholland', 'stenden'):
+                if re.search(r'\b' + naam + r'\b', kort):
+                    school = naam
+                    break
+        out.append((niveau, richting, school, plaats, begin // 12, eind // 12))
+    return out
+
+
+def opleiding_overeenkomsten(a, b):
+    """Dezelfde volledige opleiding: niveau + richting + school + begin- en eindjaar.
+    Alleen 'HBO' of alleen 'Hogeschool Utrecht' is onvoldoende bewijs."""
+    uit = set()
+    for niveau, richting, school, plaats, jaar, einde in opleiding_periodes(a):
+        if not richting or not school:
+            continue
+        for nv2, ri2, sc2, pl2, jr2, eind2 in opleiding_periodes(b):
+            if (niveau, richting, school, jaar, einde) == (nv2, ri2, sc2, jr2, eind2):
+                uit.add(f'{niveau} {richting} - {school} ({jaar}-{einde})')
+    return sorted(uit)
+
+
+def _zelfde_opleiding_record(x, y):
+    """Eén specifieke studie, met jaar, richting en instelling, in twee cv's."""
+    nv, richting, school, _plaats, jaar, einde = x
+    nv2, richting2, school2, _plaats2, jaar2, einde2 = y
+    return (nv == nv2 and richting and richting == richting2
+            and school and school == school2
+            and abs(jaar - jaar2) <= 1 and abs(einde - einde2) <= 1)
+
+
 def opleiding_botst(a, b):
-    """Beide cv's noemen een opleiding van HETZELFDE niveau (bv. allebei HBO/bachelor) die niet kan kloppen:
-    - in andere jaren: 'HBO Informatica, Saxion 2001-2005' tegenover 'HBO Informatica, Avans 2008-2012';
-    - of in dezelfde jaren in een andere plaats: 'Hogeschool Utrecht 2006-2010' tegenover 'Hogeschool van Amsterdam
-      2006-2010'.
-    Een ander niveau (oud cv alleen bachelor 2006-2010, nieuw cv alleen master 2010-2012) is GEEN botsing."""
-    def opl(d):
-        uit = collections.defaultdict(list)
-        for bm, em, v, _x, _vo in periodes_uit_cv(d['snippet'] or ''):
-            kop = ' ' + ' '.join(v.split()[:6]) + ' '
-            if OPL_WOORD.search(kop):
-                niveau = _opl_niveau(v)
-                if niveau:
-                    uit[niveau].append((bm // 12, em // 12, _plaats_in(kop, NL_PLACES | BE_PLACES)))
-        return uit
-    pa, pb = opl(a), opl(b)
-    for niveau in set(pa) & set(pb):
-        la, lb = pa[niveau], pb[niveau]
-        if not ({x for x, _y, _p in la} & {x for x, _y, _p in lb}) and not ({y for _x, y, _p in la} & {y for _x, y, _p in lb}):
+    """Twee cv's vermelden per opleidingsniveau maar één duidelijk verschillende opleiding:
+    dan is dat GEEN bewijs voor twee studies van dezelfde kandidaat. Behandel dit als
+    twee personen (zonder dubbel-twijfelgeval), tenzij een ander cv beide studies bewijst.
+    Verschillende niveaus (bachelor/master), ontbrekende informatie en twee opleidingen
+    in één cv zijn op zichzelf géén conflict.
+    """
+    pa, pb = opleiding_periodes(a), opleiding_periodes(b)
+    for niveau in {o[0] for o in pa} & {o[0] for o in pb}:
+        la = [x for x in pa if x[0] == niveau]
+        lb = [x for x in pb if x[0] == niveau]
+        if len(la) != 1 or len(lb) != 1:
+            continue     # CV noemt zelf meerdere studies op hetzelfde niveau
+        x, y = la[0], lb[0]
+        if _zelfde_opleiding_record(x, y):
+            continue
+        _nv, richting, school, plaats, jaar, eind = x
+        _nv2, richting2, school2, plaats2, jaar2, eind2 = y
+        # Alleen blokkeren op echte, voldoende specifieke tegenspraak. Een andere
+        # woonplaats kan hier niet meetellen: plaats is direct aan de school gekoppeld.
+        voldoende = (richting or school) and (richting2 or school2)
+        andere_richting = bool(richting and richting2 and richting != richting2)
+        andere_school = bool(school and school2 and school != school2)
+        andere_plaats = bool(plaats and plaats2 and plaats != plaats2)
+        andere_jaren = abs(jaar - jaar2) > 1 or abs(eind - eind2) > 1
+        if voldoende and (andere_richting or andere_school or andere_plaats or andere_jaren):
             return True
-        for x1, y1, p1 in la:
-            for x2, y2, p2 in lb:
-                if (x1, y1) == (x2, y2) and p1 and p2 and p1 != p2:
-                    return True
+    return False
+
+
+def opleidingen_verzoend(a, b, groep):
+    """Een cv dat BEIDE afwijkende studies expliciet noemt kan een groepsbotsing verzoenen.
+    De twee enkele cv's op zichzelf blijven terecht verschillend."""
+    if not opleiding_botst(a, b):
+        return True
+    pa, pb = opleiding_periodes(a), opleiding_periodes(b)
+    for doc in groep:
+        studies = opleiding_periodes(doc)
+        if len(studies) < 2:
+            continue
+        if (any(_zelfde_opleiding_record(x, s) for x in pa for s in studies)
+                and any(_zelfde_opleiding_record(y, s) for y in pb for s in studies)):
+            return True
     return False
 
 
@@ -4379,7 +5102,7 @@ def deduplicate(db, merge_file=None):
         ai_model = ai_rechter.MODEL_ID
     except Exception:
         ai_model = 'geen'
-    docs = db.execute("SELECT * FROM docs WHERE status='cv' AND classifier_version=? AND name_verified=1 ORDER BY path", (CLASSIFIER_VERSION,)).fetchall()
+    docs = db.execute("SELECT * FROM docs WHERE status='cv' AND classifier_version=? AND name_verified=1 AND name!='' ORDER BY path", (CLASSIFIER_VERSION,)).fetchall()
     docs = [d for d in docs if in_scope(d['path'], d['sha'])]
     dsu = DSU(len(docs))
     by_sha, by_email, by_phone, by_link, by_name = (collections.defaultdict(list) for _ in range(5))
@@ -4416,8 +5139,24 @@ def deduplicate(db, merge_file=None):
     leden = {i: [i] for i in range(len(docs))}
 
     def groep_botst(ra, rb):
-        """Hele kandidaatgroep controleren: een nieuw cv moet bij ALLE cv's van de groep passen."""
-        return any(harde_blokkade(docs[x], docs[y]) for x in leden[ra] for y in leden[rb])
+        """Toets de hele groep; twee verschillende studies mogen alleen samen wanneer
+        een derde cv BEIDE opleidingen letterlijk bevat."""
+        alle = [docs[i] for i in leden[ra] + leden[rb]]
+        for x in leden[ra]:
+            for y in leden[rb]:
+                blokkade = harde_blokkade(docs[x], docs[y])
+                if not blokkade:
+                    continue
+                if zelfde_naam_eigen_email(docs[x], docs[y]) and not mail_verliest_van_conflict(docs[x], docs[y]):
+                    continue
+                if (blokkade.startswith('tegenstrijdige opleiding')
+                        and opleidingen_verzoend(docs[x], docs[y], alle)):
+                    continue
+                # Zelfde studie, maar de lastige CV noemt een andere werkgever: één persoon.
+                if blokkade.startswith('andere loopbaan') and opleiding_overeenkomsten(docs[x], docs[y]):
+                    continue
+                return True
+        return False
 
     def samenvoegen(a, b):
         ra, rb = dsu.find(a), dsu.find(b)
@@ -4444,6 +5183,21 @@ def deduplicate(db, merge_file=None):
         elif review:
             reviews.append((a,b,reason))
     reviews = ai_dubbel_controle(docs, reviews, samenvoegen, out_dir)
+    # Bewaar per automatische koppeling de concrete reden in de exportmap.
+    # Geen namen of persoonsgegevens in de log: bestands-hashes en besluiten volstaan.
+    if out_dir:
+        try:
+            redenen = []
+            for i, j in sorted(candidates):
+                if dsu.find(i) != dsu.find(j):
+                    continue
+                auto, _rev, reden = safe_pair(docs[i], docs[j])
+                if auto:
+                    redenen.append(dict(cv_sha_1=docs[i]['sha'], cv_sha_2=docs[j]['sha'], reden=reden))
+            save_csv(out_dir / 'samenvoeg_redenen.csv', redenen,
+                     ['cv_sha_1', 'cv_sha_2', 'reden'])
+        except OSError:
+            pass
     # Extra samenvoegingen alleen als de gebruiker dit expliciet bevestigt in CSV.
     if merge_file and merge_file.exists():
         pre_groups = collections.defaultdict(list)
@@ -4488,11 +5242,46 @@ def deduplicate(db, merge_file=None):
         if not rec and not (f'/{CV_FOLDER}/' in str(d['path']).replace('\\', '/')):
             rec = (d['received_ns'] if 'received_ns' in d.keys() else 0) or 0
         return max(d['mtime_ns'] or 0, rec)
+    def cv_versie_rang(d):
+        """Hoofdversie: meest recente werkPERIODE (laatste functie eerst),
+        daarna opleidingsPERIODE, daarna expliciete ICT-inhoud.
+        Alleen bij gelijkspel een betrouwbare bestandsdatum en SHA.
+        Een later gekopieerde oude CV mag geen nieuwere baan verdringen.
+        """
+        banen = werk_periodes(d)
+        studies = opleiding_periodes(d)
+        werk = max(((begin, eind) for _w, begin, eind in banen), default=(0, 0))
+        opleiding = max(((begin, eind) for _nv, _richting, _school,
+                          _plaats, begin, eind in studies), default=(0, 0))
+        inhoud = normalized_name(d['snippet'] or '')
+        it_termen = re.findall(
+            r'\b(?:python|java|javascript|typescript|sql|azure|aws|docker|'
+            r'kubernetes|linux|git|react|nodejs|csharp|dotnet|'
+            r'data engineering|cloud|software development|cybersecurity|'
+            r'netwerkbeheer|informatica|devops)\b', inhoud)
+        it = len(set(it_termen))
+        return (werk[0], werk[1], opleiding[0], opleiding[1],
+                it, newest(d), d['year'] or '', d['sha'] or '')
+    def _veld_waarden(item, field):
+        try:
+            values = json.loads(item[field] or '[]')
+        except (ValueError, TypeError, KeyError):
+            return []
+        if field == 'phones':
+            return [x for x in (norm_phone(v) for v in values) if x]
+        if field == 'emails':
+            return [x for x in (_fix_email(v) for v in values) if x]
+        return [v for v in values if v]
+
+    def _uniek(values):
+        seen = []
+        for value in values:
+            if value and value not in seen:
+                seen.append(value)
+        return seen
+
     for group in sorted(groups.values(), key=lambda g: min(d['sha'] for d in g)):
-        recent = sorted(group, key=lambda d:(inhoud_jaar(d), newest(d), d['year'] or ''), reverse=True)
-        all_emails = sorted(set(_fix_email(v) for d in group for v in json.loads(d['emails'])))
-        all_phones = sorted(set(filter(None, (norm_phone(v) for d in group for v in json.loads(d['phones'])))))
-        all_links = sorted(set(v for d in group for v in json.loads(d['links'])))
+        recent = sorted(group, key=cv_versie_rang, reverse=True)
         # Naam die in de meeste versies staat (opgeschoond); bij gelijkspel de vollere naam.
         names = [tidy_name(clean_person_name(d['name']) or d['name']) for d in group if d['name']]
         uniek = sorted({n for n in names}, key=len)
@@ -4504,8 +5293,7 @@ def deduplicate(db, merge_file=None):
         names.sort(key=lambda n: (bool(clean_person_name(n)), counts[normalized_name(n)], len(n.split()), len(n)),
                    reverse=True)
         name = names[0] if names else ''
-        name = name_order_by_email(name_with_email(tidy_name(name), sorted({v for d in group for v in json.loads(d['emails'])})),
-                                   sorted({v for d in group for v in json.loads(d['emails'])}))
+        name = tidy_name(name)
         # Stabiele ID op de vroegst aanwezige bestandsfingerprint (per volledige exportsnapshot).
         known = collections.Counter(id_map[d['sha']] for d in group if d['sha'] in id_map)
         known_ids = [i for i, _n in sorted(known.items(), key=lambda kv: (-kv[1], kv[0])) if i not in used_ids]
@@ -4519,35 +5307,48 @@ def deduplicate(db, merge_file=None):
         used_ids.add(ident)
         for d in group:
             id_map[d['sha']] = ident
-        first = sorted(group, key=lambda d:(inhoud_jaar(d), newest(d), d['year'] or ''), reverse=True)[0]
-        roles = [d['role'] for d in sorted(group,key=lambda d:d['mtime_ns'],reverse=True) if d['role']]
-        employers = [d['employer'] for d in sorted(group,key=lambda d:d['mtime_ns'],reverse=True) if d['employer']]
+        first = recent[0]     # dezelfde hoofdversie als alle andere gekozen velden
+        roles = [d['role'] for d in recent if d['role']]
+        employers = [d['employer'] for d in recent if d['employer']]
         distinct_shas = len({d['sha'] for d in group})
-        def latest(field):
+
+        def gekozen(field):
+            """Waarden van het nieuwste cv. Alleen als dat veld leeg is: het oudste cv dat het wel heeft.
+            Nooit een mix, en nooit gegevens van een andere kandidaat (alleen deze groep)."""
             for item in recent:
-                values = json.loads(item[field])
-                if field == 'phones':
-                    values = [x for x in (norm_phone(v) for v in values) if x]   # oude opgeslagen nummers ook controleren
-                elif field == 'emails':
-                    values = [_fix_email(v) for v in values]
+                values = _uniek(_veld_waarden(item, field))
                 if values:
-                    return values[0]
+                    return values
+            return []
+
+        emails = gekozen('emails')
+        phones = gekozen('phones')
+        links = gekozen('links')
+        # Binnen het gekozen cv: een adres dat bij de naam past gaat voor een referentie-adres.
+        # Een ouder cv vult het veld niet aan zolang het nieuwste cv al een adres heeft.
+        if emails and email_owner_mismatch(name, emails[0]):
+            passend = [e for e in emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
+            if passend:
+                emails = _uniek(passend + emails)
+        name = name_order_by_email(name_with_email(name, emails), emails)
+        def eerste_veld(veld):
+            for item in recent:
+                if veld not in item.keys():
+                    continue
+                waarde = str(item[veld] or '').strip()
+                if waarde:
+                    return waarde
             return ''
-        levs = collections.Counter(d['leverancier'] for d in group if 'leverancier' in d.keys() and d['leverancier'])
-        candidate = dict(persoon_id=ident, naam=name, bedrijf_raw=levs.most_common(1)[0][0] if levs else '',
-           email=latest('emails'),
-           telefoon=latest('phones'), linkedin=latest('links'),
-           alle_emails=' | '.join(all_emails), alle_telefoons=' | '.join(all_phones),
-           alle_linkedin=' | '.join(all_links), huidige_functie=roles[0] if roles else '',
+        levs = eerste_veld('leverancier')
+        candidate = dict(persoon_id=ident, naam=name, bedrijf_raw=levs,
+           email=emails[0] if emails else '',
+           telefoon=phones[0] if phones else '', linkedin=links[0] if links else '',
+           alle_emails=' | '.join(emails), alle_telefoons=' | '.join(phones),
+           alle_linkedin=' | '.join(links), huidige_functie=roles[0] if roles else '',
            laatst_bekende_werkgever=employers[0] if employers else '',
-           cv_jaar=first['year'], aantal_cv_versies=distinct_shas,
+           cv_jaar=eerste_veld('year') or first['year'], aantal_cv_versies=distinct_shas,
            aantal_bestandslocaties=len(group), eerste_bron='CV', cv_id=cv_id_of(first['sha']), cv_sha=first['sha'],
            cv_pad=first['path'], cv_archief=first['archive'])
-        # E-mail: liefst het adres dat bij de naam past (niet dat van een referentie of leidinggevende).
-        if candidate['email'] and email_owner_mismatch(name, candidate['email']):
-            fitting = [e for e in all_emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
-            if fitting:
-                candidate['email'] = fitting[0]
         # Taal, woonplaats NL/BE en verblijfsduur (wens opdrachtgever). Jouw eigen keuze 'wel cv' gaat voor.
         if not any(decided.get(d['sha'], {}).get('status') == 'cv' for d in group):
             def ai_vraag(soort, _d=first):
@@ -4562,7 +5363,7 @@ def deduplicate(db, merge_file=None):
                         return None
                     ai_cache[key] = ans
                 return ai_cache[key]
-            uitkomst, reden = filter_kandidaat(first, all_phones, all_emails, ai_vraag)
+            uitkomst, reden = filter_kandidaat(first, phones, emails, ai_vraag)
             if uitkomst == 'weg':
                 for d in group:
                     EXCLUDED[d['path']] = reden
@@ -5060,10 +5861,18 @@ def build_checks(reviews, people, doubt, legacy_count, unread_count, scanned_cou
 def twijfel_overzicht(db):
     """Anoniem overzicht van de twijfelgevallen: per soort hoeveel, zonder namen of paden.
     Zo kun je zien waar de twijfel vandaan komt zonder persoonsgegevens te delen."""
-    rows = db.execute("SELECT ext, reason, note FROM docs WHERE status='review' AND classifier_version=?",
+    rows = db.execute("SELECT ext, reason, note, sha FROM docs WHERE status='review' AND classifier_version=?",
                       (CLASSIFIER_VERSION,)).fetchall()
     if not rows:
         return
+    uniq, seen_sha = [], set()
+    for r in rows:
+        key = r['sha'] or r['ext']
+        if key in seen_sha:
+            continue
+        seen_sha.add(key)
+        uniq.append(r)
+    rows = uniq
     groups = collections.Counter()
     for r in rows:
         reason = (r['reason'] or '').lower()
@@ -5087,12 +5896,142 @@ def twijfel_overzicht(db):
         print(f'  {n:>5}  {ext:<6} {key}', flush=True)
 
 
+def naamloze_cv_rijen(docs):
+    """Alleen sterke naamloze CV-kandidaten, na de normale scan en AI.
+
+    Een 'review' uit een willekeurige CV-map is niet genoeg: een rapport,
+    functie-eis of handleiding met CV-kopjes hoort hier niet automatisch thuis.
+    Bevestigde kandidaten komen uitsluitend op het tabblad 'Unieke personen'.
+    """
+    result = []
+    for source in docs:
+        d = dict(source)
+        status = d.get('status', '')
+        reason = d.get('reason') or ''
+        if status not in ('cv', 'review') or (d.get('classifier_version') or 0) != CLASSIFIER_VERSION:
+            continue
+        if d.get('path') in EXCLUDED or reason.startswith('niet meegenomen:'):
+            continue
+        name = (d.get('name') or '').strip()
+        verified = bool(d.get('name_verified'))
+        if status == 'cv':
+            if verified and name:
+                continue       # Hoort al bij een echte kandidaat
+            state = 'CV, naam niet bevestigd' if name else 'CV, naam ontbreekt'
+        else:
+            if name:
+                continue       # Onzekere documentsoort, niet per se een naamloos CV
+            match = re.search(r'kopjes:\s*([^;]+)', reason, re.I)
+            heads = {h.strip().lower() for h in match.group(1).split(',')} if match else set()
+            periods = re.search(r'werkperiodes:\s*(\d+)', reason, re.I)
+            nperiods = int(periods.group(1)) if periods else 0
+            # Minimaal drie sterke kopjes inclusief Opleiding en Werkervaring,
+            # én 2 concrete perioden. Zo vallen de test-handleidingen,
+            # offertes en lege CV-sjablonen niet in deze verzameling.
+            if not (len(heads) >= 3 and {'opleiding', 'werkervaring'} <= heads
+                    and nperiods >= 2 and 'andere documentsoort' not in reason.lower()
+                    and 'sjabloon' not in reason.lower() and 'vacature' not in reason.lower()
+                    and 'AI: geen cv' not in reason):
+                continue
+            state = 'Mogelijk CV, naam ontbreekt'
+        result.append(dict(
+            cv_id=cv_id_of(d.get('sha') or ''),
+            naam_onbevestigd=name if not verified else '',
+            beoordeling=state,
+            cv_score=d.get('score') or 0,
+            oorspronkelijk_bestand=d.get('path') or '',
+            archiefkopie=d.get('archive') or '',
+            sha256=d.get('sha') or '',
+            jaar=d.get('year') or '',
+            toelichting=(d.get('note') or reason or 'Naam na controle nog niet betrouwbaar vastgesteld'),
+        ))
+    result.sort(key=lambda r: (r['beoordeling'], (r['oorspronkelijk_bestand'] or '').lower()))
+    return result
+
+
+def dubbele_kandidaten_controle(people, docs, docs_to_id, out):
+    """Onderzoek gelijke namen met verschillende kandidaatnummers.
+
+    Bewaart per paar WAAROM het apart gebleven is. Verandert geen kandidaat-IDs,
+    ontdubbelingsbesluiten, bronbestanden of persoonlijke informatie online.
+    """
+    cols = ['naam', 'kandidaat_id_1', 'kandidaat_id_2',
+            'hoofd_cv_1', 'hoofd_cv_2', 'gedeeld_persoonlijk_email',
+            'oorzaak', 'advies']
+    by_name = collections.defaultdict(list)
+    by_person = collections.defaultdict(list)
+    for d in docs:
+        pid = docs_to_id.get(d['path'])
+        if pid:
+            by_person[pid].append(d)
+    for p in people:
+        normalized = normalized_name(p.get('naam') or '')
+        if normalized:
+            by_name[normalized].append(p)
+    rows = []
+    for members in by_name.values():
+        if len(members) < 2:
+            continue
+        members = sorted(members, key=lambda p: p.get('kandidaat_id') or '')
+        for i, one in enumerate(members[:20]):
+            for two in members[i + 1:20]:
+                left = by_person.get(one['persoon_id'], [])
+                right = by_person.get(two['persoon_id'], [])
+                own_mail, auto_match, conflicts, doubts = False, False, set(), set()
+                for d1 in left[:12]:
+                    for d2 in right[:12]:
+                        if zelfde_naam_eigen_email(d1, d2):
+                            own_mail = True
+                        auto, review, reason = safe_pair(d1, d2)
+                        auto_match |= bool(auto)
+                        if review and reason:
+                            doubts.add(reason)
+                        conflict = harde_blokkade(d1, d2)
+                        if conflict:
+                            conflicts.add(conflict)
+                if own_mail:
+                    cause = 'Zelfde volledige naam én persoonlijke e-mail, maar niet gekoppeld'
+                    advice = 'FOUT: controleer groepsblokkade en vaste IDs'
+                elif auto_match:
+                    cause = 'Cv-paar had automatisch moeten koppelen; groep bleef gescheiden'
+                    advice = 'Groepsconflict: ' + ', '.join(sorted(conflicts)[:2]) if conflicts else 'Controleer groepsblokkade'
+                elif conflicts:
+                    cause = 'Tegenstrijdige informatie: ' + ', '.join(sorted(conflicts)[:2])
+                    advice = 'Niet automatisch samenvoegen; handmatige controle'
+                elif doubts:
+                    cause = 'Onzeker: ' + '; '.join(sorted(doubts)[:2])
+                    advice = 'Handmatige identiteitscontrole'
+                else:
+                    cause = 'Alleen dezelfde naam, zonder voldoende gedeeld identiteitsbewijs'
+                    advice = 'Controleer e-mail, telefoon en echte loopbaan'
+                rows.append(dict(
+                    naam=one['naam'],
+                    kandidaat_id_1=one.get('kandidaat_id') or '',
+                    kandidaat_id_2=two.get('kandidaat_id') or '',
+                    hoofd_cv_1=one.get('cv_pad') or '',
+                    hoofd_cv_2=two.get('cv_pad') or '',
+                    gedeeld_persoonlijk_email='ja' if own_mail else 'nee',
+                    oorzaak=cause, advies=advice))
+    save_csv(out / 'dubbele_kandidaten_controle.csv', rows, cols)
+    if rows:
+        n = sum(len(members) > 1 for members in by_name.values())
+        print(f'DUBBELE KANDIDATEN: {n} gelijke namen met meerdere nummers; '
+              f'{len(rows)} paren in dubbele_kandidaten_controle.csv', flush=True)
+    else:
+        print('DUBBELE KANDIDATEN: geen gelijke volledige namen met aparte nummers.', flush=True)
+    return rows
+
+
 def build_exports(db, out):
+    # Vorige export nooit als nieuw rapporteren wanneer opbouwen mislukt.
+    # De XLSX zelf mag voor herstel blijven staan; alleen de geldigheidsstempel vervalt.
+    (out / 'excel_export_geldig.json').unlink(missing_ok=True)
     remove_vanished(db)
     merges = out/'samenvoegen_correcties.csv'
     if not merges.exists():
         save_csv(merges, [], ['persoon_id_1','persoon_id_2','toelichting'])
     docs, people, docs_to_id, reviews = deduplicate(db, merges)
+    dubbele_kandidaten_controle(people, docs, docs_to_id, out)
     apply_corrections(people,out)
     cv_files = collect_cvs(out, people, docs, docs_to_id, db=db)
     for p in people:
@@ -5145,6 +6084,11 @@ def build_exports(db, out):
                               'OCR heeft het gelezen maar vond geen tekst; open het bestand zelf als het een cv kan zijn.'
                               if 'geen tekst' in (d['note'] or '') else
                               'Nog niet met OCR gelezen (OCR stond uit); scan opnieuw met OCR aan.')))
+    # Lege namen alleen onderaan 'Bestanden en status'; nooit tussen kandidaten.
+    # Ze blijven zichtbaar en klikbaar, ook wanneer AI niets kon bevestigen.
+    files.sort(key=lambda row: (not bool((row.get('naam') or '').strip()),
+                                normalized_name(row.get('naam') or ''),
+                                (row.get('oorspronkelijk_bestand') or '').lower()))
     pcols = ['persoon_id','cv_id','naam','email','telefoon','linkedin',
              'online_linkedin','online_email','online_telefoon','online_zekerheid','online_waarom',
              'te_controleren_linkedin','te_controleren_email','te_controleren_telefoon',
@@ -5164,6 +6108,13 @@ def build_exports(db, out):
         print(f'NIET MEEGENOMEN: {weg_personen} cv(\'s) (taal, woonplaats of verblijfsduur); '
               'zie ‘Bestanden en status’.', flush=True)
     save_csv(out/'cv_bestanden.csv',files,fcols)
+    # Naamloze CV's apart tonen, nooit als kandidaten of als dubbelpaar.
+    # De AI-stap is al afgerond voordat build_exports wordt aangeroepen.
+    naamloze = naamloze_cv_rijen(all_docs)
+    kopieer_naamloze_cvs(out, naamloze)
+    naamloos_cols = ['cv_id','naam_onbevestigd','beoordeling','cv_score',
+                     'oorspronkelijk_bestand','kopie_in_naamloze_map','archiefkopie','sha256','jaar','toelichting']
+    save_csv(out/'naamloze_cvs.csv',naamloze,naamloos_cols)
     save_csv(out/'handmatige_controle.csv',checks,ccols)
     error_cols = ['categorie','bestand','extensie','status','omschrijving']
     categories = collections.Counter(item['categorie'] for item in error_details)
@@ -5213,7 +6164,9 @@ def build_exports(db, out):
                    'werkervaring', 'opleidingen', 'certificeringen', 'vaardigheden', 'over', 'locatie',
                    'email_openbaar', 'telefoon_openbaar']
         xlsx_export(temporary, [
-            ('Unieke personen',vcols,view),('Bestanden en status',*as_kid(fcols,files))]
+            ('Unieke personen',vcols,view),
+            ("Naamloze cv's",*as_kid(naamloos_cols,naamloze)),
+            ('Bestanden en status',*as_kid(fcols,files))]
             + ([('LinkedIn-gegevens', li_cols, li_rijen)] if li_rijen else []))
         # Controle nodig, leesfouten en online-details staan alleen nog in de CSV-bestanden in de exportmap.
         with zipfile.ZipFile(temporary) as z:
@@ -5230,12 +6183,24 @@ def build_exports(db, out):
                   final.name, flush=True)
             print('Tip: sluit Excel voor je scant, dan wordt CV_Crawler_Resultaten.xlsx gewoon bijgewerkt.',
                   flush=True)
-        (out/'laatste_excel.txt').write_text(str(final), encoding='utf-8')
         save_kandidaten_json(out, vcols, view)
+        # Stempel pas NA de volledige, gevalideerde XLSX én bijbehorende export.
+        # Bij falen: geen stempel -> Open Excel toont nooit een vorige versie.
+        _stat = final.stat()
+        _ready = dict(schema=1, filename=final.name, bytes=_stat.st_size,
+                      mtime_ns=_stat.st_mtime_ns, classifier_version=CLASSIFIER_VERSION)
+        _ready_tmp = out / 'excel_export_geldig.bezig.json'
+        try:
+            _ready_tmp.write_text(json.dumps(_ready), encoding='utf-8')
+            os.replace(_ready_tmp, out / 'excel_export_geldig.json')
+        finally:
+            _ready_tmp.unlink(missing_ok=True)
+        (out/'laatste_excel.txt').write_text(str(final), encoding='utf-8')
     finally:
         if temporary.exists():
             temporary.unlink()
     print(f'EXPORT: {len(people)} unieke persoonsrecords, {len(docs)} CV-bestandslocaties, {len(checks)} controlepunten')
+    print(f"NAAMLOZE CV'S: {len(naamloze)} apart op het Excel-tabblad; niet in de kandidatenlijst.")
     print(f'LET OP: alleen documenten die met herkenning V{CLASSIFIER_VERSION} zijn beoordeeld, tellen mee als bevestigd CV.')
     print('EXPORT-CONTROLE: ' + ', '.join(f'{v} {k}' for k,v in categories.most_common())
           if categories else 'EXPORT-CONTROLE: geen leesfouten of online-only bestanden')
@@ -6709,6 +7674,44 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     return True
 
 
+def ai_naam_bevestigd(ai_naam, doc):
+    """AI is alleen een aanwijzing. Accepteer een persoonsnaam uitsluitend
+    als die letterlijk als naam in het cv terug te vinden is, met onafhankelijk
+    aanvullend bewijs uit kop/naamveld, eigen e-mail of eigen BESTANDSNAAM.
+    Niets uit een bovenliggende map wordt ooit gebruikt als persoonsnaam.
+    """
+    # Gebruik hoofdletters zoals bij gewone naamherkenning, niet 'Jasmijn koster'.
+    naam = tidy_name(clean_person_name(tidy_name(ai_naam or '')))
+    if not naam or not reasonable_name(naam):
+        return ''
+    snippet = ' '.join((doc['snippet'] or '').lower().split())
+    tokens = snippet.split()
+    norm = normalized_name(naam)
+    compleet = ' ' + snippet + ' '
+    expliciet = f' {norm} ' in compleet or f' {"".join(norm.split())} ' in compleet
+    if not expliciet:
+        return ''            # AI mag geen naam verzinnen
+    kop = ' ' + ' '.join(tokens[:120]) + ' '
+    in_kop = f' {norm} ' in kop or f' {"".join(norm.split())} ' in kop
+    met_label = bool(re.search(
+        r'\b(?:naam|name|fullname|volledige naam|kandidaat|candidate|cv van|'
+        r'curriculum vitae|voornaam)\s+' + re.escape(norm) + r'\b',
+        snippet[:3500]))
+    bestandsnaam = naam_uit_bestandsnaam(doc['path'], '', zonder_tekst=True)
+    # 'CV_Jeroen_Bos.docx' mag geen AI-naam 'Jasmijn Koster' krijgen,
+    # ook al staat die naam toevallig elders in de uitgelezen tekst.
+    if bestandsnaam and normalized_name(bestandsnaam) != norm:
+        return ''
+    bestand_klopt = normalized_name(bestandsnaam) == norm
+    try:
+        e_mails = json.loads(doc['emails'] or '[]')
+    except (ValueError, TypeError):
+        e_mails = []
+    eigen_mail = any(email_matches_name(naam, mail) for mail in e_mails
+                    if not GENERIC_EMAIL.match(mail))
+    return naam if bestand_klopt or met_label or (in_kop and eigen_mail) else ''
+
+
 def ai_twijfel(db, out):
     """Lokale AI helpt bij twijfelgevallen: cv of geen cv (en welke naam). Jouw eigen keuzes in het
     twijfel-venster gaan altijd voor. Resultaten worden bewaard, dus stoppen en later verder kan."""
@@ -6727,13 +7730,16 @@ def ai_twijfel(db, out):
         cache = json.loads(cache_path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         cache = {}
-    rows = db.execute("SELECT path, sha, name, snippet, reason, emails, phones, links, leverancier FROM docs "
-                      "WHERE status='review' AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
+    # Pas na alle gewone herkenningsregels: review en al herkende cv-documenten
+    # waarvan de persoonsnaam nog ontbreekt (nooit bij reeds complete cv's).
+    rows = db.execute("SELECT path, sha, name, name_verified, status, snippet, reason, emails, phones, links, leverancier FROM docs "
+                      "WHERE (status='review' OR (status='cv' AND (name='' OR name_verified=0))) "
+                      "AND classifier_version=?", (CLASSIFIER_VERSION,)).fetchall()
     todo = [r for r in rows if r['sha'] not in decided and (r['snippet'] or '').strip()
             and not (r['reason'] or '').startswith('controleren:')]
     if not todo:
         return
-    print(f'AI-TWIJFEL: {len(todo)} twijfelgevallen laten beoordelen door de lokale AI (stoppen mag, '
+    print(f'AI-TWIJFEL: {len(todo)} onvolledige cv-/twijfelbestanden controleren met lokale AI (stoppen mag, '
           'de volgende keer gaat hij verder waar hij was)…', flush=True)
     counts = collections.Counter()
     seen = {}
@@ -6754,35 +7760,55 @@ def ai_twijfel(db, out):
         m = re.search(r'werkperiodes: (\d+)', rs)
         cv_kenmerk = ('werkervaring' in rs.split(';')[0] or 'opleiding' in rs.split(';')[0]
                       or 'cv-kop: ja' in rs or (m and int(m.group(1)) > 0))
-        if res['soort'] == 'cv' and not cv_kenmerk:
-            res = dict(res, soort='onzeker')          # geen kopje Werkervaring/Opleiding, cv-kop of werkperiodes
-        if res['soort'] == 'cv':
-            name = r['name'] or ''
-            if not name and res.get('naam'):
-                cand = tidy_name(clean_person_name(res['naam'].title()))
-                # De naam moet echt in het document staan (geen verzonnen naam).
-                if cand and all(w in (r['snippet'] or '') for w in normalized_name(cand).split()):
-                    name = cand
-            extra = ''
-            if not name and contact and (r['leverancier'] or '') and not r['leverancier'].startswith('via:'):
-                # Echt geen persoonsnaam te vinden (niet in de tekst, e-mail, LinkedIn of via de AI):
-                # dan de eigen bedrijfsnaam als naam, zodat de kandidaat niet verdwijnt.
-                name, extra = r['leverancier'], '; naam = bedrijfsnaam (geen persoonsnaam gevonden)'
-            if name and contact:
+        # Een door de regels al herkend cv blijft een cv. AI mag alleen het
+        # LEGE NAAMVELD aanvullen, nooit zo'n cv alsnog weggooien.
+        # Onbevestigde namen (ook als die eerder al waren ingevuld) moeten
+        # door dezelfde onafhankelijke controle als nieuwe AI-namen.
+        name = r['name'] or ''
+        if r['status'] == 'cv' and not r['name_verified'] and name:
+            name = ai_naam_bevestigd(name, r)
+        if not name and res.get('naam'):
+            name = ai_naam_bevestigd(res['naam'], r)
+        if r['status'] == 'cv':
+            if name:
+                db.execute("UPDATE docs SET name=?, name_verified=1, reason=? WHERE path=?",
+                           (name, (r['reason'] or '') + '; AI-naam onafhankelijk bevestigd', r['path']))
+                counts['cv'] += 1
+            else:
+                db.execute("UPDATE docs SET name='', name_verified=0, reason=? WHERE path=?",
+                           ((r['reason'] or '') + '; naam na AI-controle niet bevestigd', r['path']))
+                counts['onzeker'] += 1
+        elif res['soort'] == 'cv':
+            if not cv_kenmerk:
+                name = ''      # een referentiebrief / losse lijst mag nooit cv worden door AI alleen
+            if name and contact and cv_kenmerk and reasonable_name(name):
                 db.execute("UPDATE docs SET status='cv', name_verified=1, name=?, reason=? WHERE path=?",
-                           (name, (r['reason'] or '') + f'; AI: cv ({reden})' + extra, r['path']))
+                           (name, (r['reason'] or '') + f'; AI: cv ({reden}); naam gecontroleerd', r['path']))
                 counts['cv'] += 1
             else:
                 db.execute("UPDATE docs SET reason=? WHERE path=?",
                            ((r['reason'] or '') + '; AI: lijkt een cv, maar ' +
-                            ('naam onbekend' if not name else 'geen contactgegevens') + ' – zelf kijken', r['path']))
+                            ('naam niet bevestigd' if not name else 'onvoldoende contact of cv-bewijs') +
+                            ' – zelf kijken', r['path']))
                 counts['onzeker'] += 1
         elif res['soort'] == 'geen_cv':
-            db.execute("UPDATE docs SET status='other', reason=? WHERE path=?",
-                       ((r['reason'] or '') + f'; AI: geen cv ({reden})', r['path']))
-            counts['geen'] += 1
+            # Een duidelijke sollicitatiebrief mag niet op review blijven
+            # alleen omdat een oud score-etiket 'Werkervaring' suggereerde.
+            # Bij echte cv-kenmerken mag AI nooit alleen beslissen.
+            brief = bool(re.search(
+                r'\b(?:geachte(?: heer| mevrouw)?|met vriendelijke groet|dear sir|dear madam)\b',
+                r['snippet'] or ''))
+            if cv_kenmerk and not brief and not ('vacature' in rs or 'sjabloon' in rs):
+                db.execute("UPDATE docs SET reason=? WHERE path=?",
+                           ((r['reason'] or '') + '; AI: geen cv, maar cv-signalen; controle nodig', r['path']))
+                counts['onzeker'] += 1
+            else:
+                db.execute("UPDATE docs SET status='other', reason=? WHERE path=?",
+                           ((r['reason'] or '') + f'; AI: geen cv ({reden})', r['path']))
+                counts['geen'] += 1
         else:
-            db.execute("UPDATE docs SET reason=? WHERE path=?", ((r['reason'] or '') + '; AI: twijfelt ook', r['path']))
+            db.execute("UPDATE docs SET reason=? WHERE path=?",
+                       ((r['reason'] or '') + '; AI: twijfelt ook', r['path']))
             counts['onzeker'] += 1
         if i % 20 == 0 or i == len(todo):
             db.commit()
