@@ -1,0 +1,11 @@
+Resume
+Bram van Dalen
+E-mail: bram.van.dalen@example.com
+Professional Profile
+Software professional with a background in digital services.
+Work Experience
+2020 - present Software engineer at Stadshaven Systems
+Education
+2014 - 2018 HBO Informatica, Hogeschool Fictiva 8
+Technical Skills
+Python, cloud, SQL and testing

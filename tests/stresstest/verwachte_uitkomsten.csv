@@ -1,0 +1,132 @@
+﻿test_id;bestand;verwacht_status;verwacht_naam;verwacht_persoon_groep;categorie;bestandsformaat;ocr_nodig;waarom
+T001;Testbestanden/01_Echte_CVs/CV_map_zonder_CV_in_bestandsnaam/01_Noor_Vermeer.docx;cv;Noor Vermeer;P001;algemeen_cv;docx;nee;"Echt cv; variant standaard, opmaak plain."
+T002;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/02_Sven_de_Moor.pdf;cv;Sven de Moor;P002;algemeen_cv;pdf;nee;"Echt cv; variant minimaal, opmaak plain."
+T003;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/03_Elif_Yildiz.txt;cv;Elif Yildiz;P003;algemeen_cv;txt;nee;"Echt cv; variant zonder_werk, opmaak plain."
+T004;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/04_Tessa_Rozendaal.rtf;cv;Tessa Rozendaal;P004;algemeen_cv;rtf;nee;"Echt cv; variant zonder_contact, opmaak plain."
+T005;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/05_Daniël_Haverkamp.odt;cv;Daniël Haverkamp;P005;algemeen_cv;odt;nee;"Echt cv; variant alleen_opleiding_profiel, opmaak plain."
+T006;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/06_Rachid_Ben_Salem.docx;cv;Rachid Ben Salem;P006;algemeen_cv;docx;nee;"Echt cv; variant alleen_opleiding_skills, opmaak splitname."
+T007;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/07_Mila_Nieuwveld.pdf;cv;Mila Nieuwveld;P007;algemeen_cv;pdf;nee;"Echt cv; variant ervaring_skills, opmaak plain."
+T008;Testbestanden/01_Echte_CVs/CV_map_zonder_CV_in_bestandsnaam/08_Bram_van_Dalen.txt;cv;Bram van Dalen;P008;algemeen_cv;txt;nee;"Echt cv; variant english, opmaak plain."
+T009;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/09_Aysha_Karim.rtf;cv;Aysha Karim;P009;algemeen_cv;rtf;nee;"Echt cv; variant compact, opmaak plain."
+T010;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/10_Lynn_Veldstra.odt;cv;Lynn Veldstra;P010;algemeen_cv;odt;nee;"Echt cv; variant tabular, opmaak plain."
+T011;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/11_Omar_El_Idrissi.docx;cv;Omar El Idrissi;P011;algemeen_cv;docx;nee;"Echt cv; variant standaard, opmaak table."
+T012;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/12_Fenna_Hoekema.pdf;cv;Fenna Hoekema;P012;algemeen_cv;pdf;nee;"Echt cv; variant minimaal, opmaak plain."
+T013;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/13_Kai_Westerhuis.txt;cv;Kai Westerhuis;P013;algemeen_cv;txt;nee;"Echt cv; variant zonder_werk, opmaak plain."
+T014;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/14_Lotte_Rijnhart.rtf;cv;Lotte Rijnhart;P014;algemeen_cv;rtf;nee;"Echt cv; variant zonder_contact, opmaak plain."
+T015;Testbestanden/01_Echte_CVs/CV_map_zonder_CV_in_bestandsnaam/15_Jules_Verhoeven.odt;cv;Jules Verhoeven;P015;algemeen_cv;odt;nee;"Echt cv; variant alleen_opleiding_profiel, opmaak plain."
+T016;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/16_Imane_Bouhadi.docx;cv;Imane Bouhadi;P016;algemeen_cv;docx;nee;"Echt cv; variant alleen_opleiding_skills, opmaak footer."
+T017;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/17_Emma_van_Uden.pdf;cv;Emma van Uden;P017;algemeen_cv;pdf;nee;"Echt cv; variant ervaring_skills, opmaak plain."
+T018;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/18_Rens_van_Loon.txt;cv;Rens van Loon;P018;algemeen_cv;txt;nee;"Echt cv; variant english, opmaak plain."
+T019;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/19_Jana_Sterre.rtf;cv;Jana Sterre;P019;algemeen_cv;rtf;nee;"Echt cv; variant compact, opmaak plain."
+T020;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/20_Levi_Kuipers.odt;cv;Levi Kuipers;P020;algemeen_cv;odt;nee;"Echt cv; variant tabular, opmaak plain."
+T021;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/21_Sara_Beekman.docx;cv;Sara Beekman;P021;algemeen_cv;docx;nee;"Echt cv; variant standaard, opmaak columns."
+T022;Testbestanden/01_Echte_CVs/CV_map_zonder_CV_in_bestandsnaam/22_Niels_van_der_Meer.pdf;cv;Niels van der Meer;P022;algemeen_cv;pdf;nee;"Echt cv; variant minimaal, opmaak plain."
+T023;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/23_Ravi_de_Graaf.txt;cv;Ravi de Graaf;P023;algemeen_cv;txt;nee;"Echt cv; variant zonder_werk, opmaak plain."
+T024;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/24_Iris_Meijerland.rtf;cv;Iris Meijerland;P024;algemeen_cv;rtf;nee;"Echt cv; variant zonder_contact, opmaak plain."
+T025;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/25_Puck_de_Rooij.odt;cv;Puck de Rooij;P025;algemeen_cv;odt;nee;"Echt cv; variant alleen_opleiding_profiel, opmaak plain."
+T026;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/26_Timo_van_Breugel.docx;cv;Timo van Breugel;P026;algemeen_cv;docx;nee;"Echt cv; variant alleen_opleiding_skills, opmaak decorated."
+T027;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/27_Demi_Schouten.pdf;cv;Demi Schouten;P027;algemeen_cv;pdf;nee;"Echt cv; variant ervaring_skills, opmaak plain."
+T028;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/28_Adam_El_Hani.txt;cv;Adam El Hani;P028;algemeen_cv;txt;nee;"Echt cv; variant english, opmaak plain."
+T029;Testbestanden/01_Echte_CVs/CV_map_zonder_CV_in_bestandsnaam/29_Sophie_van_Eijk.rtf;cv;Sophie van Eijk;P029;algemeen_cv;rtf;nee;"Echt cv; variant compact, opmaak plain."
+T030;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/30_Sander_Berkel.odt;cv;Sander Berkel;P030;algemeen_cv;odt;nee;"Echt cv; variant tabular, opmaak plain."
+T031;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/31_Yara_Maasveld.docx;cv;Yara Maasveld;P031;algemeen_cv;docx;nee;"Echt cv; variant standaard, opmaak long."
+T032;Testbestanden/01_Echte_CVs/Gevarieerde_CVs/32_Milan_de_Wit.pdf;cv;Milan de Wit;P032;algemeen_cv;pdf;nee;"Echt cv; variant minimaal, opmaak plain."
+T033;Testbestanden/02_Lastige_echte_CVs/Marthijn_vanRheenen-SCOM_OMS_Consultant.docx;cv;Marthijn van Rheenen;S01;regressie_cv;docx;nee;"Bestandsnaam draagt persoonsnaam, inhoud laat naam weg; SCOM OMS Consultant is geen naam."
+T034;Testbestanden/02_Lastige_echte_CVs/cv_MarcHorstmanNL_2026.docx;cv;Marc Horstman;S02;regressie_cv;docx;nee;Aan elkaar geplakte naam en NL-suffix in eigen bestandsnaam.
+T035;Testbestanden/02_Lastige_echte_CVs/C.V. Jacques van Nes NL (6).pdf;cv;Jacques van Nes;S03;regressie_cv;pdf;nee;"CV-kop + naam + contact; geen herkenbare sectiekopjes."
+T036;Testbestanden/02_Lastige_echte_CVs/CV_Mila_Nieuwveld_2026.pdf;cv;Mila Nieuwveld;S04;regressie_cv;pdf;nee;Opleiding + profiel + vaardigheden, geen werkervaring.
+T037;Testbestanden/02_Lastige_echte_CVs/cv_Adam_El_Hani_2026.docx;cv;Adam El Hani;S05;regressie_cv;docx;nee;Education + Skills zonder werkervaring.
+T038;Testbestanden/02_Lastige_echte_CVs/20260315_CV_Yara_Maasveld_NL.docx;cv;Yara Maasveld;S06;regressie_cv;docx;nee;Geen contactgegevens maar complete cv-opbouw.
+T039;Testbestanden/02_Lastige_echte_CVs/CV_Niels_van_der_Meer_updated.pdf;cv;Niels van der Meer;S07;regressie_cv;pdf;nee;Meerdere tussenvoegsels en Engels/Nederlands in de bestandsnaam.
+T040;Testbestanden/02_Lastige_echte_CVs/tessa_rozendaal_herzien.odt;cv;Tessa Rozendaal;S08;regressie_cv;odt;nee;"Geen expliciet CV in bestandsnaam; wel naam, opleiding en profiel."
+T041;Testbestanden/02_Lastige_echte_CVs/cv_ElifYildiz_final.rtf;cv;Elif Yildiz;S09;regressie_cv;rtf;nee;Engelstalige cv-kopjes in RTF.
+T042;Testbestanden/02_Lastige_echte_CVs/DemiSchouten_HBO_Opleidingen.docx;cv;Demi Schouten;S10;regressie_cv;docx;nee;CV dat juist alleen opleiding / profiel / skills beschrijft.
+T043;Testbestanden/02_Lastige_echte_CVs/2024_CV_Jana_Sterre.docx;cv;Jana Sterre;S11;regressie_cv;docx;nee;Begint met een jaartal in bestandsnaam.
+T044;Testbestanden/02_Lastige_echte_CVs/CV_Sara_Beekman.docx;cv;Sara Beekman;S12;regressie_cv;docx;nee;"Contact in Word-tabel; juiste naam staat in het document."
+T045;Testbestanden/02_Lastige_echte_CVs/Rens_Van_Loon_CV.pdf;cv;Rens van Loon;S13;regressie_cv;pdf;nee;Wel naam en structuur, geen e-mail of telefoon.
+T046;Testbestanden/02_Lastige_echte_CVs/CV_Kaan_van_der_Steen.pdf;cv;Kaan van der Steen;S14;regressie_cv;pdf;nee;"Persoonsnaam alleen uit bestandsnaam; inhoudelijke kopjes wel aanwezig."
+T047;Testbestanden/02_Lastige_echte_CVs/Sophie_van_Eijk.pdf;cv;Sophie van Eijk;S15;regressie_cv;pdf;nee;Geen werkervaring, maar opleiding plus vaardigheden en profiel.
+T048;Testbestanden/02_Lastige_echte_CVs/Nour_el_Hamdi_2026.odt;cv;Nour el Hamdi;S16;regressie_cv;odt;nee;Nederlandse naam met tussenvoegsel in ODT.
+T049;Testbestanden/02_Lastige_echte_CVs/CV_Teun_Meijering.docx;cv;Teun Meijering;S17;regressie_cv;docx;nee;"Naam in Word-header; niet alleen in de normale paragrafen."
+T050;Testbestanden/02_Lastige_echte_CVs/Anne-Jet_de_Bruin_CV.docx;cv;Anne-Jet de Bruin;S18;regressie_cv;docx;nee;Samengestelde voornaam en tussenvoegsel.
+T051;Testbestanden/02_Lastige_echte_CVs/Finn_de_Groot_CV.docx;cv;Finn de Groot;S19;regressie_cv;docx;nee;"Opmaak in twee kolommen; contact en opleidingen verdeeld."
+T052;Testbestanden/02_Lastige_echte_CVs/Inkoop/CVs_Micha/CV_Imane_Bouhadi_2022.pdf;cv;Imane Bouhadi;S20;regressie_cv;pdf;nee;Normale cv in recruiter-map met andere persoonsnaam.
+T053;Testbestanden/03_Echte_CVs_naam_niet_te_bewijzen/CV_naam_afgeschermd_01.pdf;cv;;;cv_naam_onbekend;pdf;nee;"Genuine CV text but no verifiable personal name; keep document as CV, leave person/name empty."
+T054;Testbestanden/03_Echte_CVs_naam_niet_te_bewijzen/CV_naam_afgeschermd_02.docx;cv;;;cv_naam_onbekend;docx;nee;"Genuine CV text but no verifiable personal name; keep document as CV, leave person/name empty."
+T055;Testbestanden/03_Echte_CVs_naam_niet_te_bewijzen/CV_naam_afgeschermd_03.odt;cv;;;cv_naam_onbekend;odt;nee;"Genuine CV text but no verifiable personal name; keep document as CV, leave person/name empty."
+T056;Testbestanden/03_Echte_CVs_naam_niet_te_bewijzen/CV_naam_afgeschermd_04.txt;cv;;;cv_naam_onbekend;txt;nee;"Genuine CV text but no verifiable personal name; keep document as CV, leave person/name empty."
+T057;Testbestanden/03_Echte_CVs_naam_niet_te_bewijzen/CV_naam_afgeschermd_05.rtf;cv;;;cv_naam_onbekend;rtf;nee;"Genuine CV text but no verifiable personal name; keep document as CV, leave person/name empty."
+T058;Testbestanden/03_Echte_CVs_naam_niet_te_bewijzen/CV_naam_afgeschermd_06.pdf;cv;;;cv_naam_onbekend;pdf;nee;"Genuine CV text but no verifiable personal name; keep document as CV, leave person/name empty."
+T059;Testbestanden/04_Dubbelen_eerst_samenvoegen/CV_Robin_Zilvermeer_2024.docx;cv;Robin Zilvermeer;GROEP_ROBIN;zelfde_persoon_varianten;docx;nee;"Drie versies/formaten van dezelfde fictieve persoon; één kandidaat verwacht."
+T060;Testbestanden/04_Dubbelen_eerst_samenvoegen/Robin_Zilvermeer_versie2.pdf;cv;Robin Zilvermeer;GROEP_ROBIN;zelfde_persoon_varianten;pdf;nee;"Drie versies/formaten van dezelfde fictieve persoon; één kandidaat verwacht."
+T061;Testbestanden/04_Dubbelen_eerst_samenvoegen/kopie_CV_Robin_Zilvermeer.txt;cv;Robin Zilvermeer;GROEP_ROBIN;zelfde_persoon_varianten;txt;nee;"Drie versies/formaten van dezelfde fictieve persoon; één kandidaat verwacht."
+T062;Testbestanden/04_Dubbelen_eerst_samenvoegen/andere_map/andere_bestandsnaam.docx;cv;Robin Zilvermeer;GROEP_ROBIN;exact_dezelfde_inhoud;docx;nee;Exact dezelfde bytes, andere bestandsnaam/pad. Eén kandidaat en meerdere bestandslocaties.
+T063;Testbestanden/05_Niet_samenvoegen/Sasha_van_Kessel_A.docx;cv;Sasha van Kessel;SASHA_A;dezelfde_naam_maar_ander_persoon;docx;nee;Zelfde naam EN e-mail, maar studie op hetzelfde niveau in andere jaren/school en loopbaan. Niet samenvoegen.
+T064;Testbestanden/05_Niet_samenvoegen/Sasha_van_Kessel_B.docx;cv;Sasha van Kessel;SASHA_B;dezelfde_naam_maar_ander_persoon;docx;nee;Zelfde naam EN e-mail, maar studie op hetzelfde niveau in andere jaren/school en loopbaan. Niet samenvoegen.
+T065;Testbestanden/06_Verzoenen_met_derde_CV/Wende_Ravenstijn_A.docx;cv;Wende Ravenstijn;GROEP_WENDE;derde_cv_bevestigt_beide_studies;docx;nee;Alleen dit derde CV bevat beide afzonderlijke opleidingen. Als het bewijs klopt, mag de groep samen.
+T066;Testbestanden/06_Verzoenen_met_derde_CV/Wende_Ravenstijn_B.pdf;cv;Wende Ravenstijn;GROEP_WENDE;derde_cv_bevestigt_beide_studies;pdf;nee;Alleen dit derde CV bevat beide afzonderlijke opleidingen. Als het bewijs klopt, mag de groep samen.
+T067;Testbestanden/06_Verzoenen_met_derde_CV/Wende_Ravenstijn_VERBINDING.docx;cv;Wende Ravenstijn;GROEP_WENDE;derde_cv_bevestigt_beide_studies;docx;nee;Alleen dit derde CV bevat beide afzonderlijke opleidingen. Als het bewijs klopt, mag de groep samen.
+T068;Testbestanden/05_Niet_samenvoegen/Daan_Vijverman_A.pdf;cv;Daan Vijverman;DAAN_A;zelfde_naam_conflict;pdf;nee;"Zelfde naam en e-mail maar onverenigbare opleidingen in dezelfde jaren; niet automatisch samenvoegen."
+T069;Testbestanden/05_Niet_samenvoegen/Daan_Vijverman_B.pdf;cv;Daan Vijverman;DAAN_B;zelfde_naam_conflict;pdf;nee;"Zelfde naam en e-mail maar onverenigbare opleidingen in dezelfde jaren; niet automatisch samenvoegen."
+T070;Testbestanden/07_Niet_CVs_In_CV_Map/01_CV_Vacature_Java_developer.pdf;other;;;vacature;pdf;nee;Geen individueel cv: vacature. Bestandsnaam of CV-map kan misleiden.
+T071;Testbestanden/08_Niet_CVs_Buiten_CV_Map/02_Inhuuraanvraag_Cloud_Engineer.docx;other;;;inhuuraanvraag;docx;nee;Geen individueel cv: inhuuraanvraag. Bestandsnaam of CV-map kan misleiden.
+T072;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/03_Leeg_CV_sjabloon.txt;other;;;leeg_sjabloon;txt;nee;Geen individueel cv: leeg_sjabloon. Bestandsnaam of CV-map kan misleiden.
+T073;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/04_Sollicitatiebrief.rtf;other;;;sollicitatiebrief;rtf;nee;Geen individueel cv: sollicitatiebrief. Bestandsnaam of CV-map kan misleiden.
+T074;Testbestanden/07_Niet_CVs_In_CV_Map/05_Referentiebrief.odt;other;;;referentiebrief;odt;nee;Geen individueel cv: referentiebrief. Bestandsnaam of CV-map kan misleiden.
+T075;Testbestanden/08_Niet_CVs_Buiten_CV_Map/06_Diploma.pdf;other;;;diploma;pdf;nee;Geen individueel cv: diploma. Bestandsnaam of CV-map kan misleiden.
+T076;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/07_CV_Certificaat.docx;other;;;certificaat;docx;nee;Geen individueel cv: certificaat. Bestandsnaam of CV-map kan misleiden.
+T077;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/08_Projectrapport.txt;other;;;schoolrapport;txt;nee;Geen individueel cv: schoolrapport. Bestandsnaam of CV-map kan misleiden.
+T078;Testbestanden/07_Niet_CVs_In_CV_Map/09_Portfolio.rtf;other;;;schoolportfolio;rtf;nee;Geen individueel cv: schoolportfolio. Bestandsnaam of CV-map kan misleiden.
+T079;Testbestanden/08_Niet_CVs_Buiten_CV_Map/10_Intakeformulier.odt;other;;;leeg_formulier;odt;nee;Geen individueel cv: leeg_formulier. Bestandsnaam of CV-map kan misleiden.
+T080;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/11_Kandidatenlijst.pdf;other;;;kandidatenlijst;pdf;nee;Geen individueel cv: kandidatenlijst. Bestandsnaam of CV-map kan misleiden.
+T081;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/12_Recruiter_profiel.docx;other;;;rolprofiel;docx;nee;Geen individueel cv: rolprofiel. Bestandsnaam of CV-map kan misleiden.
+T082;Testbestanden/07_Niet_CVs_In_CV_Map/13_CV_Projectplan.txt;other;;;projectplan;txt;nee;Geen individueel cv: projectplan. Bestandsnaam of CV-map kan misleiden.
+T083;Testbestanden/08_Niet_CVs_Buiten_CV_Map/14_Werkgeversverklaring.rtf;other;;;werkgeversverklaring;rtf;nee;Geen individueel cv: werkgeversverklaring. Bestandsnaam of CV-map kan misleiden.
+T084;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/15_Contract.odt;other;;;contract;odt;nee;Geen individueel cv: contract. Bestandsnaam of CV-map kan misleiden.
+T085;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/16_Factuur.pdf;other;;;factuur;pdf;nee;Geen individueel cv: factuur. Bestandsnaam of CV-map kan misleiden.
+T086;Testbestanden/07_Niet_CVs_In_CV_Map/17_Offerte.docx;other;;;offerte;docx;nee;Geen individueel cv: offerte. Bestandsnaam of CV-map kan misleiden.
+T087;Testbestanden/08_Niet_CVs_Buiten_CV_Map/18_LinkedIn_resultaat.txt;other;;;online_resultaat;txt;nee;Geen individueel cv: online_resultaat. Bestandsnaam of CV-map kan misleiden.
+T088;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/19_CV_Overzicht_bestanden.rtf;other;;;mappen_overzicht;rtf;nee;Geen individueel cv: mappen_overzicht. Bestandsnaam of CV-map kan misleiden.
+T089;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/20_Motivatiebrief.odt;other;;;motivatie;odt;nee;Geen individueel cv: motivatie. Bestandsnaam of CV-map kan misleiden.
+T090;Testbestanden/07_Niet_CVs_In_CV_Map/21_Handleiding.pdf;other;;;instructiedocument;pdf;nee;Geen individueel cv: instructiedocument. Bestandsnaam of CV-map kan misleiden.
+T091;Testbestanden/08_Niet_CVs_Buiten_CV_Map/22_Aanbesteding.docx;other;;;aanbesteding;docx;nee;Geen individueel cv: aanbesteding. Bestandsnaam of CV-map kan misleiden.
+T092;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/23_Boekbespreking.txt;other;;;verslag;txt;nee;Geen individueel cv: verslag. Bestandsnaam of CV-map kan misleiden.
+T093;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/24_Stageovereenkomst.rtf;other;;;stageovereenkomst;rtf;nee;Geen individueel cv: stageovereenkomst. Bestandsnaam of CV-map kan misleiden.
+T094;Testbestanden/07_Niet_CVs_In_CV_Map/25_CV_Werkopdracht.odt;other;;;werkopdracht;odt;nee;Geen individueel cv: werkopdracht. Bestandsnaam of CV-map kan misleiden.
+T095;Testbestanden/08_Niet_CVs_Buiten_CV_Map/26_Checklist.pdf;other;;;checklist;pdf;nee;Geen individueel cv: checklist. Bestandsnaam of CV-map kan misleiden.
+T096;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/27_Cursusmateriaal.docx;other;;;cursusmateriaal;docx;nee;Geen individueel cv: cursusmateriaal. Bestandsnaam of CV-map kan misleiden.
+T097;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/28_Salarisrapport.txt;other;;;salarisrapport;txt;nee;Geen individueel cv: salarisrapport. Bestandsnaam of CV-map kan misleiden.
+T098;Testbestanden/07_Niet_CVs_In_CV_Map/29_Verzoek_cv.rtf;other;;;email_aanvraag;rtf;nee;Geen individueel cv: email_aanvraag. Bestandsnaam of CV-map kan misleiden.
+T099;Testbestanden/08_Niet_CVs_Buiten_CV_Map/30_Vrijwilligersaanmeldformulier.odt;other;;;aanmeldformulier;odt;nee;Geen individueel cv: aanmeldformulier. Bestandsnaam of CV-map kan misleiden.
+T100;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/31_CV_Kandidatenbeoordeling.pdf;other;;;beoordeling;pdf;nee;Geen individueel cv: beoordeling. Bestandsnaam of CV-map kan misleiden.
+T101;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/32_Verklaring_opleiding.docx;other;;;schoolverklaring;docx;nee;Geen individueel cv: schoolverklaring. Bestandsnaam of CV-map kan misleiden.
+T102;Testbestanden/07_Niet_CVs_In_CV_Map/33_Loopbaanadvies_rapport.txt;other;;;loopbaanadvies;txt;nee;Geen individueel cv: loopbaanadvies. Bestandsnaam of CV-map kan misleiden.
+T103;Testbestanden/08_Niet_CVs_Buiten_CV_Map/34_Interviewsamenvatting.rtf;other;;;interview;rtf;nee;Geen individueel cv: interview. Bestandsnaam of CV-map kan misleiden.
+T104;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/35_Klantpresentatie.odt;other;;;bedrijfspresentatie;odt;nee;Geen individueel cv: bedrijfspresentatie. Bestandsnaam of CV-map kan misleiden.
+T105;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/36_Website_team.pdf;other;;;website_export;pdf;nee;Geen individueel cv: website_export. Bestandsnaam of CV-map kan misleiden.
+T106;Testbestanden/07_Niet_CVs_In_CV_Map/37_CV_Declaratie.docx;other;;;declaratie;docx;nee;Geen individueel cv: declaratie. Bestandsnaam of CV-map kan misleiden.
+T107;Testbestanden/08_Niet_CVs_Buiten_CV_Map/38_Job_requirements.txt;other;;;english_vacancy;txt;nee;Geen individueel cv: english_vacancy. Bestandsnaam of CV-map kan misleiden.
+T108;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/39_Afwijzingsbrief.rtf;other;;;afwijzingsbrief;rtf;nee;Geen individueel cv: afwijzingsbrief. Bestandsnaam of CV-map kan misleiden.
+T109;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/40_Jaarverslag.odt;other;;;jaarverslag;odt;nee;Geen individueel cv: jaarverslag. Bestandsnaam of CV-map kan misleiden.
+T110;Testbestanden/07_Niet_CVs_In_CV_Map/41_Referenties.pdf;other;;;referentielijst;pdf;nee;Geen individueel cv: referentielijst. Bestandsnaam of CV-map kan misleiden.
+T111;Testbestanden/08_Niet_CVs_Buiten_CV_Map/42_CV-template_online.docx;other;;;voorbeeld_template;docx;nee;Geen individueel cv: voorbeeld_template. Bestandsnaam of CV-map kan misleiden.
+T112;Testbestanden/07_Niet_CVs_In_CV_Map/Recruiter/43_CV_Database_export.txt;other;;;database_export;txt;nee;Geen individueel cv: database_export. Bestandsnaam of CV-map kan misleiden.
+T113;Testbestanden/08_Niet_CVs_Buiten_CV_Map/Misleidende_CV_Naam/44_HR_privacybeleid.rtf;other;;;privacybeleid;rtf;nee;Geen individueel cv: privacybeleid. Bestandsnaam of CV-map kan misleiden.
+T114;Testbestanden/09_Terecht_twijfel_of_afwijzing/CV_map/01_profiel_zonder_identificatie.docx;review;;;bewust_onvoldoende_bewijs;docx;nee;"Onvoldoende onafhankelijk bewijs voor automatische CV-acceptatie; review of other is veilig."
+T115;Testbestanden/09_Terecht_twijfel_of_afwijzing/CV_map/02_enkel_opleiding_zonder_naam.pdf;review;;;bewust_onvoldoende_bewijs;pdf;nee;"Onvoldoende onafhankelijk bewijs voor automatische CV-acceptatie; review of other is veilig."
+T116;Testbestanden/09_Terecht_twijfel_of_afwijzing/CV_map/03_los_werkverleden.txt;review;;;bewust_onvoldoende_bewijs;txt;nee;"Onvoldoende onafhankelijk bewijs voor automatische CV-acceptatie; review of other is veilig."
+T117;Testbestanden/09_Terecht_twijfel_of_afwijzing/CV_map/04_naam_en_telefoon_op_los_briefje.docx;review;;;bewust_onvoldoende_bewijs;docx;nee;"Onvoldoende onafhankelijk bewijs voor automatische CV-acceptatie; review of other is veilig."
+T118;Testbestanden/09_Terecht_twijfel_of_afwijzing/CV_map/05_mogelijke_cv_omslag.pdf;review;;;bewust_onvoldoende_bewijs;pdf;nee;"Onvoldoende onafhankelijk bewijs voor automatische CV-acceptatie; review of other is veilig."
+T119;Testbestanden/09_Terecht_twijfel_of_afwijzing/CV_map/06_profielschets_zonder_naam.txt;review;;;bewust_onvoldoende_bewijs;txt;nee;"Onvoldoende onafhankelijk bewijs voor automatische CV-acceptatie; review of other is veilig."
+T120;Testbestanden/10_OCR_gescande_bestanden/SCAN_CV_01.pdf;cv;Marc Horstman;OCR_1;gescande_pdf_ocr;scanpdf;ja;"PDF bevat alleen een afbeelding van een cv; OCR moet de tekst uitlezen."
+T121;Testbestanden/10_OCR_gescande_bestanden/SCAN_CV_02.pdf;cv;Jacques van Nes;OCR_2;gescande_pdf_ocr;scanpdf;ja;"PDF bevat alleen een afbeelding van een cv; OCR moet de tekst uitlezen."
+T122;Testbestanden/10_OCR_gescande_bestanden/SCAN_CV_03.pdf;cv;Dina Arslan;OCR_3;gescande_pdf_ocr;scanpdf;ja;"PDF bevat alleen een afbeelding van een cv; OCR moet de tekst uitlezen."
+T123;Testbestanden/10_OCR_gescande_bestanden/SCAN_CV_04.pdf;cv;Finn de Groot;OCR_4;gescande_pdf_ocr;scanpdf;ja;"PDF bevat alleen een afbeelding van een cv; OCR moet de tekst uitlezen."
+T124;Testbestanden/10_OCR_gescande_bestanden/SCAN_CV_05.pdf;cv;Zara Nouri;OCR_5;gescande_pdf_ocr;scanpdf;ja;"PDF bevat alleen een afbeelding van een cv; OCR moet de tekst uitlezen."
+T125;Testbestanden/10_OCR_gescande_bestanden/SCAN_NIET_CV_01.pdf;other;;;gescande_niet_cv;scanpdf;ja;"PDF bevat afbeelding van vacature of formulier; OCR nodig om niet-CV te herkennen."
+T126;Testbestanden/10_OCR_gescande_bestanden/SCAN_NIET_CV_02.pdf;other;;;gescande_niet_cv;scanpdf;ja;"PDF bevat afbeelding van vacature of formulier; OCR nodig om niet-CV te herkennen."
+T127;Testbestanden/11_Leesfouten/CV_onleesbaar_defect.docx;error;;;bewust_beschadigd_document;bad_docx;nee;Bewust ongeldige DOCX: mag niet crashen of kandidaten aanmaken.
+T128;Testbestanden/11_Leesfouten/defecte_pdf.pdf;error;;;bewust_beschadigd_document;bad_pdf;nee;Bewust ongeldige PDF: mag de gehele scan niet laten vastlopen.
+T129;Testbestanden/12_ZIP_inhoud/ingepakte_CVs.zip › CV_Teun_Meijering.docx;cv;Teun Meijering;ZIP_0;cv_in_zip;docx;nee;Origineel CV binnen een extra ZIP in de testmap.
+T130;Testbestanden/12_ZIP_inhoud/ingepakte_CVs.zip › CV_Selma_Aksoy.pdf;cv;Selma Aksoy;ZIP_1;cv_in_zip;pdf;nee;Origineel CV binnen een extra ZIP in de testmap.
+T131;Testbestanden/12_ZIP_inhoud/ingepakte_CVs.zip › CV_Liam_Bekkers.txt;cv;Liam Bekkers;ZIP_2;cv_in_zip;txt;nee;Origineel CV binnen een extra ZIP in de testmap.

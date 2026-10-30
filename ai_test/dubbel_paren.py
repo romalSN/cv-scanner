@@ -80,9 +80,12 @@ def paren(n=300, seed=7):
         elif soort == 9:  # gedeeld contact van referentie; alleen andere achternaam is bewijsbaar anders
             q = persoon(r); q.update(voor=p['voor'])
             if q['achter'] == p['achter']:
-                # Zelfde volledige naam en zelfde e-mail is zonder verdere labels
-                # niet van een nieuwe CV-versie te onderscheiden. Gebruikersregel:
-                # één kandidaat in dit expliciete, identieke geval.
+                # Zelfde volledige naam en hetzelfde mailadres, zonder tegenstrijdige
+                # studie of een andere werkgever: één kandidaat (nieuwe cv-versie).
+                q['school'] = p['school']
+                q['sjaar'] = p['sjaar']
+                if q['banen'] and p['banen']:
+                    q['banen'][0][3] = p['banen'][0][3]
                 uit.append(('zelfde', 'zelfde naam+persoonlijke mail (referentie niet bewijsbaar)',
                             tekst(p), tekst(q, mail=p['mail'])))
             else:
@@ -102,10 +105,11 @@ def paren(n=300, seed=7):
             q['banen'][-1][3] = p['banen'][-1][3]
             q['banen'][-1][0] = p['banen'][-1][0] + 4
             uit.append(('anders', 'naamgenoot zelfde bedrijf andere jaren', tekst(p), tekst(q)))
-        elif soort == 13:  # zelfde naam en eigen mail: volgens gebruikersregel één kandidaat
-            q = persoon(r); q.update(voor=p['voor'], achter=p['achter'])
+        elif soort == 13:  # zelfde naam en eigen mail, zelfde studie en baan: nieuwere versie
+            persoon(r)  # zelfde toevalsreeks als voorheen; de tweede persoon wordt niet gebruikt
+            extra = [[2024, 'heden', p['banen'][0][2], p['banen'][0][3], p['banen'][0][4]]]
             uit.append(('zelfde', 'zelfde naam+persoonlijke mail, nieuwere cv-versie',
-                        tekst(p), tekst(q, mail=p['mail'])))
+                        tekst(p), tekst(p, mail=p['mail'], banen=extra + [list(x) for x in p['banen']])))
         elif soort == 14:  # Engelse versie + voorletter (moeilijk)
             uit.append(('zelfde', 'engels + voorletter', tekst(p), tekst(p, engels=True, naam=f"{p['voor'][0]}. {p['achter']}")))
         elif soort == 16:  # verhuisd/nieuw: ander mailadres én ander nummer, nieuwste baan erbij

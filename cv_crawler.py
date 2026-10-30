@@ -3460,6 +3460,38 @@ def harde_blokkade(a, b):
     return ''
 
 
+def _werkgever_kern(d):
+    """Eerste woord van elke werkgever, plus werkperiodes. Functietitels blijven erbuiten."""
+    found = set()
+    keys = d.keys() if hasattr(d, 'keys') else ()
+    raw = d['werkgevers'] if 'werkgevers' in keys else ''
+    for x in str(raw or '').split(' ; '):
+        stuk = normalized_name(x).split()
+        if stuk:
+            found.add(stuk[0])
+    try:
+        for w, _b, _e in werk_periodes(d):
+            found.add(str(w).lstrip('*'))
+    except Exception:
+        pass
+    return {w for w in found if len(w) >= 4 and w not in COMPANY_WORDS and not w.endswith(JOB_ENDINGS)}
+
+
+def mail_verliest_van_conflict(a, b):
+    """Zelfde mailadres koppelt niet als de studie én de werkgever botsen.
+
+    Daan en Sasha in de stresstest hebben dezelfde naam en hetzelfde adres,
+    maar een andere opleiding én een andere baan. Dat zijn twee personen.
+    Een nieuwe cv-versie met dezelfde werkgever blijft wél één kandidaat.
+    """
+    if not opleiding_botst(a, b):
+        return False
+    oa, ob = _werkgever_kern(a), _werkgever_kern(b)
+    if oa and ob and not (oa & ob):
+        return True
+    return bool(loopbaan_botst(a, b))
+
+
 def safe_pair(a, b):
     """Geeft (auto, review, motivatie); automatisch uitsluitend met sterk bewijs."""
     an, bn = normalized_name(a['name']), normalized_name(b['name'])
@@ -3482,9 +3514,9 @@ def safe_pair(a, b):
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
     # Zelfde persoonsnaam en hetzelfde eigen e-mailadres => één kandidaat,
-    # ook als oudere en nieuwe CV verschillende studies of werkgevers noemen.
-    # Andere namen en recruiter-adressen komen niet door deze uitzondering.
-    if zelfde_naam_eigen_email(a, b):
+    # behalve als studie én werkgever aantoonbaar botsen (twee verschillende mensen,
+    # hetzelfde mailadres in de test of op een bureau-cv).
+    if zelfde_naam_eigen_email(a, b) and not mail_verliest_van_conflict(a, b):
         return True, False, 'zelfde volledige naam en persoonlijk e-mailadres: één kandidaat; nieuwste CV wint'
     def _werkgever_tokens(d):
         found = set()
@@ -3521,7 +3553,8 @@ def safe_pair(a, b):
     # Echte naamgenoten met andere werkgevers blijven via de token-check hieronder apart.
     if (blok.startswith(('tegenstrijdige opleiding', 'andere loopbaan'))
             and same_name and len(an.split()) >= 2
-            and not (ae and be and not (ae & be))):
+            and not (ae and be and not (ae & be))
+            and not mail_verliest_van_conflict(a, b)):
         blok = ''
     if blok:
         if blok == 'andere voornaam' and ae & be and all(
@@ -5015,7 +5048,9 @@ def deduplicate(db, merge_file=None):
         for x in leden[ra]:
             for y in leden[rb]:
                 blokkade = harde_blokkade(docs[x], docs[y])
-                if not blokkade or zelfde_naam_eigen_email(docs[x], docs[y]):
+                if not blokkade:
+                    continue
+                if zelfde_naam_eigen_email(docs[x], docs[y]) and not mail_verliest_van_conflict(docs[x], docs[y]):
                     continue
                 if (blokkade.startswith('tegenstrijdige opleiding')
                         and opleidingen_verzoend(docs[x], docs[y], alle)):

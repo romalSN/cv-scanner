@@ -85,6 +85,9 @@ jobs:
       - name: Test - alle afgesproken regels (matching, plaatsen, typfouten, cloud, sleutels, Pages)
         run: python tests/test_regels.py
 
+      - name: Stresstest - verkeerde samenvoegingen, gemiste cv's en twijfel
+        run: python tests/test_stresstest.py
+
       - name: Test - Mac leest oude Word-bestanden met verkeerde extensie
         if: runner.os == 'macOS'
         run: python tests/test_mac_lezen.py

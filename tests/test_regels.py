@@ -1185,8 +1185,16 @@ _daan_b = ('Curriculum Vitae\nDaan Vijverman\nE-mail: daan.vijverman@example.com
 _da, _db = _cvdoc(_daan_a, 6801), _cvdoc(_daan_b, 6802)
 check('Daan: zelfde naam/mail maar tegenstrijdige studie in dezelfde jaren',
       c.opleiding_botst(_da, _db), (c.opleiding_periodes(_da), c.opleiding_periodes(_db)))
-check('Daan: dezelfde volledige naam en eigen e-mail = één kandidaat, ondanks botsende studies',
-      c.safe_pair(_da, _db)[0] and c.zelfde_naam_eigen_email(_da, _db), c.safe_pair(_da, _db))
+check('Daan en Sasha-patroon: zelfde naam en mail, andere studie én andere baan = apart',
+      not c.safe_pair(_da, _db)[0], c.safe_pair(_da, _db))
+_sasha_a = ('Curriculum Vitae\nSasha van Kessel\nE-mail: sasha.van.kessel@example.com\n'
+            'Werkervaring\n2016 - 2022 Technisch beheer bij Wolkenpad Digitaal\n'
+            'Opleiding\n2000 - 2004 HBO Informatica Hogeschool Fictiva Zuid')
+_sasha_b = ('Curriculum Vitae\nSasha van Kessel\nE-mail: sasha.van.kessel@example.com\n'
+            'Werkervaring\n2019 - 2024 Verpleegkundige bij Zorgveld\n'
+            'Opleiding\n2012 - 2016 HBO Verpleegkunde Hogeschool Fictiva Noord')
+check('Sasha: zelfde naam en mail, andere studie én andere baan = apart',
+      not c.safe_pair(_cvdoc(_sasha_a, 6803), _cvdoc(_sasha_b, 6804))[0])
 check('Daan: niet automatisch samen bij gedeeld algemeen bureauadres',
       not c.zelfde_naam_eigen_email(dict(_da, emails=json.dumps(['info@voorbeeld.nl'])),
                                     dict(_db, emails=json.dumps(['info@voorbeeld.nl']))))
@@ -1262,6 +1270,19 @@ check('Daan testdatabase bevat precies twee geverifieerde CV-versies',
                        "AND classifier_version=?", (c.CLASSIFIER_VERSION,)).fetchone()[0] == 2,
       [(r['status'],r['name_verified'],r['classifier_version'])
        for r in _db_main.execute('SELECT * FROM docs')])
+# Een derde cv met alleen dezelfde naam en hetzelfde mailadres mag A en B niet aan elkaar knopen.
+_brug = 'Curriculum Vitae\nDaan Vijverman\ndaan.vijverman@example.com\n06 11112222\n'
+_sha_brug = 'c' * 64
+_db_main.execute("INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+                 "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+                 "opleidingen,woonplaats,taal) "
+                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (str(_db_main_out / 'daan_2.txt'), _sha_brug,
+                  'Daan Vijverman', 1, 'cv', c.CLASSIFIER_VERSION,
+                  c.normalized_snippet(_brug), json.dumps(c.signature(_brug)),
+                  json.dumps(c.emails_in(_brug)), '[]', '[]', 1002, 1002,
+                  '', '', '', c.opleidingen_from(_brug), '', 'nl'))
+_db_main.commit()
 # Test uitsluitend de ontdubbeling en kandidaat-ID's, niet de onafhankelijke
 # taal-, verblijf-, woonplaats- of mapkeuzefilters van eerdere tests.
 _filter_orig = c.filter_kandidaat
@@ -1271,16 +1292,19 @@ try:
     c.filter_kandidaat = lambda *args, **kwargs: ('ok', '')
     _dm_docs, _dm_people, _dm_to, _dm_reviews = c.deduplicate(
         _db_main, _db_main_out / 'samenvoegen_correcties.csv')
-    check('Daan: twee CV-versies leveren slechts één kandidaat op',
-          len(_dm_people) == 1, (len(_dm_docs), [(p['naam'], p['cv_id']) for p in _dm_people]))
-    check('Daan: nieuwste werkdata wint ook bij andere opleiding',
-          len(_dm_people) == 1 and _dm_people[0]['cv_sha'] == 'b' * 64,
-          [(p['cv_sha'], p['kandidaat_id']) for p in _dm_people])
-    _dm_id = _dm_people[0]['kandidaat_id'] if _dm_people else ''
-    _dm_people2 = c.deduplicate(_db_main, _db_main_out / 'samenvoegen_correcties.csv')[1]
-    check('Daan: kandidaatnummer blijft vast na volgende export',
-          len(_dm_people2) == 1 and _dm_people2[0]['kandidaat_id'] == _dm_id,
-          ([_dm_id], [p['kandidaat_id'] for p in _dm_people2]))
+    _pad_a = str(_db_main_out / 'daan_0.txt')
+    _pad_b = str(_db_main_out / 'daan_1.txt')
+    _ida, _idb = _dm_to.get(_pad_a), _dm_to.get(_pad_b)
+    check('Daan: andere studie én andere baan blijven twee kandidaten',
+          _ida and _idb and _ida != _idb,
+          (len(_dm_people), _ida, _idb, [(p['naam'], p['kandidaat_id']) for p in _dm_people]))
+    check('Daan: een derde cv met alleen dezelfde mail koppelt de twee personen niet',
+          _ida != _idb, (_dm_to.get(str(_db_main_out / 'daan_2.txt')), _ida, _idb))
+    _ids = sorted(x for x in (_ida, _idb) if x)
+    _dm_to2 = c.deduplicate(_db_main, _db_main_out / 'samenvoegen_correcties.csv')[2]
+    _ids2 = sorted(x for x in (_dm_to2.get(_pad_a), _dm_to2.get(_pad_b)) if x)
+    check('Daan: kandidaatnummers blijven vast na volgende export',
+          _ids2 == _ids and len(_ids2) == 2, (_ids, _ids2))
 finally:
     c.filter_kandidaat = _filter_orig
     c.SCOPE = _scope_orig
