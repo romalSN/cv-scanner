@@ -3460,36 +3460,134 @@ def harde_blokkade(a, b):
     return ''
 
 
-def _werkgever_kern(d):
-    """Eerste woord van elke werkgever, plus werkperiodes. Functietitels blijven erbuiten."""
-    found = set()
-    keys = d.keys() if hasattr(d, 'keys') else ()
-    raw = d['werkgevers'] if 'werkgevers' in keys else ''
-    for x in str(raw or '').split(' ; '):
-        stuk = normalized_name(x).split()
-        if stuk:
-            found.add(stuk[0])
+def _periode_overlap(begin_a, eind_a, begin_b, eind_b):
+    return min(eind_a, eind_b) - max(begin_a, begin_b)
+
+
+def _json_set(d, veld):
     try:
-        for w, _b, _e in werk_periodes(d):
-            found.add(str(w).lstrip('*'))
-    except Exception:
-        pass
-    return {w for w in found if len(w) >= 4 and w not in COMPANY_WORDS and not w.endswith(JOB_ENDINGS)}
+        return set(json.loads(d[veld] or '[]'))
+    except (ValueError, TypeError, KeyError):
+        return set()
+
+
+def _studie_anker(a, b):
+    """Dezelfde studie, ook als begin- of eindjaar één à twee jaar verschuift."""
+    for x in opleiding_periodes(a):
+        for y in opleiding_periodes(b):
+            if _zelfde_opleiding_record(x, y):
+                return True
+            niveau, richting, school, _plaats, jaar, eind = x
+            niveau2, richting2, school2, _plaats2, jaar2, eind2 = y
+            if (niveau == niveau2 and richting and richting == richting2
+                    and school and school == school2
+                    and abs(jaar - jaar2) <= 2 and abs(eind - eind2) <= 2):
+                return True
+    return False
+
+
+def _werk_anker(a, b):
+    for werk_a, begin_a, eind_a in werk_periodes(a):
+        for werk_b, begin_b, eind_b in werk_periodes(b):
+            if werk_a.lstrip('*') != werk_b.lstrip('*'):
+                continue
+            if _periode_overlap(begin_a, eind_a, begin_b, eind_b) >= 0 or abs(begin_a - begin_b) <= 1:
+                return True
+    return False
+
+
+def _contact_anker(a, b):
+    """Gedeeld privénummer of profiel. Een ontbrekende werkgever weegt hier niet mee."""
+    tel = {p for p in _json_set(a, 'phones') & _json_set(b, 'phones') if p and p not in BUREAU_CONTACT}
+    links = {p for p in _json_set(a, 'links') & _json_set(b, 'links') if p and p not in BUREAU_CONTACT}
+    return bool(tel or links)
+
+
+def _parallel_andere_baan(begin_a, eind_a, begin_b, eind_b):
+    """Twee banen naast elkaar. Een overdracht van hooguit twee jaar aan het eind telt niet."""
+    if _periode_overlap(begin_a, eind_a, begin_b, eind_b) < 2:
+        return False
+    if begin_a <= begin_b:
+        vroeg_eind, laat_begin, laat_eind = eind_a, begin_b, eind_b
+    else:
+        vroeg_eind, laat_begin, laat_eind = eind_b, begin_a, eind_a
+    if laat_begin >= vroeg_eind - 2 and laat_eind > vroeg_eind:
+        return False
+    return True
+
+
+def _opleiding_zelfde_jaren_botsen(a, b):
+    """Twee verschillende studies die dezelfde jaren vullen. Een latere studie of een jaar verschil niet."""
+    studies_a, studies_b = opleiding_periodes(a), opleiding_periodes(b)
+    if not studies_a or not studies_b:
+        return False
+    for niveau in {o[0] for o in studies_a} & {o[0] for o in studies_b}:
+        lijst_a = [x for x in studies_a if x[0] == niveau]
+        lijst_b = [x for x in studies_b if x[0] == niveau]
+        if len(lijst_a) != 1 or len(lijst_b) != 1:
+            continue
+        x, y = lijst_a[0], lijst_b[0]
+        if _zelfde_opleiding_record(x, y):
+            continue
+        _niveau, richting, school, _plaats, jaar, eind = x
+        _niveau2, richting2, school2, _plaats2, jaar2, eind2 = y
+        if _periode_overlap(jaar, eind, jaar2, eind2) <= 1:
+            continue
+        duur_a = max(eind - jaar, 1)
+        duur_b = max(eind2 - jaar2, 1)
+        overlap = _periode_overlap(jaar, eind, jaar2, eind2)
+        # Alleen als de studies grotendeels dezelfde jaren vullen. Twee jaar overlap
+        # kan een tweede studie zijn die eerder begint.
+        if overlap < 3 or overlap * 2 < duur_a or overlap * 2 < duur_b:
+            continue
+        andere_richting = bool(richting and richting2 and richting != richting2)
+        andere_school = bool(school and school2 and school != school2)
+        zelfde_richting = bool(richting and richting == richting2)
+        if andere_richting or (andere_school and not zelfde_richting):
+            return True
+    return False
+
+
+def _richtingen_sluiten_uit(a, b):
+    studies_a, studies_b = opleiding_periodes(a), opleiding_periodes(b)
+    for niveau in {o[0] for o in studies_a} & {o[0] for o in studies_b}:
+        richting_a = {o[1] for o in studies_a if o[0] == niveau and o[1]}
+        richting_b = {o[1] for o in studies_b if o[0] == niveau and o[1]}
+        if len(richting_a) == 1 and len(richting_b) == 1 and richting_a.isdisjoint(richting_b):
+            return True
+    return False
+
+
+def _banen_parallel(a, b):
+    periodes_a, periodes_b = werk_periodes(a), werk_periodes(b)
+    if not periodes_a or not periodes_b or _werk_anker(a, b):
+        return False
+    for werk_a, begin_a, eind_a in periodes_a:
+        for werk_b, begin_b, eind_b in periodes_b:
+            if werk_a.lstrip('*') == werk_b.lstrip('*'):
+                continue
+            if _parallel_andere_baan(begin_a, eind_a, begin_b, eind_b):
+                return True
+    return False
 
 
 def mail_verliest_van_conflict(a, b):
-    """Zelfde mailadres koppelt niet als de studie én de werkgever botsen.
+    """Gedeeld mailadres blijft gelden, tenzij de cv's dezelfde jaren anders invullen.
 
-    Daan en Sasha in de stresstest hebben dezelfde naam en hetzelfde adres,
-    maar een andere opleiding én een andere baan. Dat zijn twee personen.
-    Een nieuwe cv-versie met dezelfde werkgever blijft wél één kandidaat.
+    Geen gedeelde werkgever bewijst niets. Een extra baan, carrièreswitch, master,
+    stage of een klein jaartalverschil is een aanvulling van dezelfde persoon.
+    Daan en Sasha blijven apart: hun studie én hun baan vullen dezelfde jaren
+    met een andere inhoud, zonder gemeenschappelijk anker.
     """
-    if not opleiding_botst(a, b):
+    if _studie_anker(a, b) or _werk_anker(a, b) or _contact_anker(a, b):
         return False
-    oa, ob = _werkgever_kern(a), _werkgever_kern(b)
-    if oa and ob and not (oa & ob):
+    # Daan: de opleidingen vullen dezelfde jaren, ook als de banen op elkaar volgen.
+    if _opleiding_zelfde_jaren_botsen(a, b):
         return True
-    return bool(loopbaan_botst(a, b))
+    # Sasha: andere richting, en de banen lopen naast elkaar in plaats van na elkaar.
+    if _banen_parallel(a, b) and _richtingen_sluiten_uit(a, b):
+        return True
+    return False
 
 
 def safe_pair(a, b):
@@ -3514,8 +3612,7 @@ def safe_pair(a, b):
     if a['sha'] and a['sha'] == b['sha']:
         return True, False, 'exact dezelfde documenthash'
     # Zelfde persoonsnaam en hetzelfde eigen e-mailadres => één kandidaat,
-    # behalve als studie én werkgever aantoonbaar botsen (twee verschillende mensen,
-    # hetzelfde mailadres in de test of op een bureau-cv).
+    # behalve als studie én baan dezelfde jaren met andere inhoud vullen.
     if zelfde_naam_eigen_email(a, b) and not mail_verliest_van_conflict(a, b):
         return True, False, 'zelfde volledige naam en persoonlijk e-mailadres: één kandidaat; nieuwste CV wint'
     def _werkgever_tokens(d):

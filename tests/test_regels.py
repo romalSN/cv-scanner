@@ -1195,6 +1195,56 @@ _sasha_b = ('Curriculum Vitae\nSasha van Kessel\nE-mail: sasha.van.kessel@exampl
             'Opleiding\n2012 - 2016 HBO Verpleegkunde Hogeschool Fictiva Noord')
 check('Sasha: zelfde naam en mail, andere studie én andere baan = apart',
       not c.safe_pair(_cvdoc(_sasha_a, 6803), _cvdoc(_sasha_b, 6804))[0])
+# Aanvullingen van dezelfde persoon: geen gedeelde werkgever is geen splitsing.
+_switch_oud = ('Curriculum Vitae\nNoor Vermeer\nnoor.vermeer@gmail.com\n06 10000001\n'
+               'Werkervaring\n2014 - 2020 Java ontwikkelaar bij AlfaSoft\n'
+               'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht')
+_switch_nieuw = ('Curriculum Vitae\nNoor Vermeer\nnoor.vermeer@gmail.com\n06 10000001\n'
+                 'Werkervaring\n2020 - heden Scrum master bij BetaGroep\n'
+                 'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht')
+check('carrièreswitch: andere baan na de vorige, zelfde studie = één kandidaat',
+      c.safe_pair(_cvdoc(_switch_oud, 6831), _cvdoc(_switch_nieuw, 6832))[0])
+_overdracht = ('Curriculum Vitae\nNoor Vermeer\nnoor.vermeer@gmail.com\n'
+               'Werkervaring\n2018 - heden Scrum master bij BetaGroep\n'
+               'Opleiding\n2016 - 2020 HBO Bedrijfskunde Hogeschool Rotterdam')
+check('carrièreswitch met overdracht en latere studie = één kandidaat',
+      c.safe_pair(_cvdoc(_switch_oud, 6833), _cvdoc(_overdracht, 6834))[0])
+_baan_a = ('Curriculum Vitae\nMila Nieuwveld\nmila.nieuwveld@gmail.com\n'
+           'Werkervaring\n2018 - heden Developer bij AlfaSoft\n'
+           'Opleiding\n2012 - 2016 HBO Informatica Hogeschool Utrecht')
+_baan_b = ('Curriculum Vitae\nMila Nieuwveld\nmila.nieuwveld@gmail.com\n'
+           'Werkervaring\n2019 - heden Docent bij Schoolhof\n'
+           'Opleiding\n2012 - 2016 HBO Informatica Hogeschool Utrecht')
+check('twee gelijktijdige banen, zelfde studie = één kandidaat',
+      c.safe_pair(_cvdoc(_baan_a, 6841), _cvdoc(_baan_b, 6842))[0])
+_studie_een = ('Curriculum Vitae\nFinn de Groot\nfinn.degroot@gmail.com\n'
+               'Werkervaring\n2016 - 2022 Analist bij Tuinnet\n'
+               'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht')
+_studie_twee = ('Curriculum Vitae\nFinn de Groot\nfinn.degroot@gmail.com\n'
+                'Werkervaring\n2022 - heden Data engineer bij Nieuwbedrijf\n'
+                '2016 - 2022 Analist bij Tuinnet\n'
+                'Opleiding\n2014 - 2016 Master Data Science Universiteit Utrecht\n'
+                '2010 - 2014 HBO Informatica Hogeschool Utrecht')
+check('meerdere studies en een extra baan = één kandidaat',
+      c.safe_pair(_cvdoc(_studie_een, 6851), _cvdoc(_studie_twee, 6852))[0])
+_versie_extra = ('Curriculum Vitae\nOmar El Idrissi\nomar.elidrissi@gmail.com\n'
+                 'Werkervaring\n2015 - 2021 Tester bij Datafabriek\n'
+                 'Opleiding\n2011 - 2015 HBO Informatica Avans')
+_versie_nieuw = ('Curriculum Vitae\nOmar El Idrissi\nomar.elidrissi@gmail.com\n'
+                 'Werkervaring\n2021 - heden Test engineer bij Datafabriek\n'
+                 '2015 - 2021 Tester bij Datafabriek\n'
+                 '2019 - 2020 Stage bij Kleinlab\n'
+                 'Opleiding\n2011 - 2015 HBO Informatica Avans')
+check('nieuwe cv-versie met extra stage = één kandidaat',
+      c.safe_pair(_cvdoc(_versie_extra, 6861), _cvdoc(_versie_nieuw, 6862))[0])
+_jaar_oud = ('Curriculum Vitae\nSara Beekman\nsara.beekman@gmail.com\n'
+             'Werkervaring\n2017 - 2023 Consultant bij VoorbeeldBV\n'
+             'Opleiding\n2013 - 2017 HBO Informatica Hogeschool Utrecht')
+_jaar_nieuw = ('Curriculum Vitae\nSara Beekman\nsara.beekman@gmail.com\n'
+               'Werkervaring\n2023 - heden Adviseur bij AndereZaak\n'
+               'Opleiding\n2011 - 2015 HBO Informatica Hogeschool Utrecht')
+check('klein jaartalverschil en andere werkgever = één kandidaat',
+      c.safe_pair(_cvdoc(_jaar_oud, 6871), _cvdoc(_jaar_nieuw, 6872))[0])
 check('Daan: niet automatisch samen bij gedeeld algemeen bureauadres',
       not c.zelfde_naam_eigen_email(dict(_da, emails=json.dumps(['info@voorbeeld.nl'])),
                                     dict(_db, emails=json.dumps(['info@voorbeeld.nl']))))
