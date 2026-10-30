@@ -1359,6 +1359,72 @@ finally:
     c.filter_kandidaat = _filter_orig
     c.SCOPE = _scope_orig
 
+# Nieuwste cv is de basis. Oudere cv's vullen alleen een leeg veld, nooit een bestaand nummer of adres.
+_contact_out = Path(tempfile.mkdtemp())
+_contact_db = c.db_open(_contact_out)
+
+def _contact_cv(tekst, sha, naam, mail, tel, link):
+    _contact_db.execute(
+        "INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+        "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+        "opleidingen,woonplaats,taal) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (str(_contact_out / (sha[:12] + '.txt')), sha, naam, 1, 'cv', c.CLASSIFIER_VERSION,
+         c.normalized_snippet(tekst), json.dumps(c.signature(tekst)),
+         json.dumps(mail), json.dumps(tel), json.dumps(link),
+         1000, 1000, '', '', '', c.opleidingen_from(tekst), '', 'nl'))
+
+_contact_cv('Curriculum Vitae\nNoor Vermeer\nWerkervaring\n2016 - 2022 Analist bij Tuinnet\n'
+            'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht',
+            '1' * 64, 'Noor Vermeer', ['noor.vermeer@gmail.com'], ['06 33334444'],
+            ['https://www.linkedin.com/in/noor-oud'])
+_contact_cv('Curriculum Vitae\nNoor Vermeer\nWerkervaring\n2023 - heden Data engineer bij Nieuwbedrijf\n'
+            'Opleiding\n2010 - 2014 HBO Informatica Hogeschool Utrecht',
+            '2' * 64, 'Noor Vermeer', ['noor.vermeer@gmail.com'], ['06 11112222'],
+            ['https://www.linkedin.com/in/noorvermeer'])
+_contact_cv('Curriculum Vitae\nMila Nieuwveld\nWerkervaring\n2015 - 2021 Tester bij Datafabriek\n'
+            'Opleiding\n2011 - 2015 HBO Informatica Avans',
+            '3' * 64, 'Mila Nieuwveld', ['mila.nieuwveld@gmail.com'], ['06 55556666'],
+            ['https://www.linkedin.com/in/mila-oud'])
+_contact_cv('Curriculum Vitae\nMila Nieuwveld\nWerkervaring\n2022 - heden Tester bij Datafabriek\n'
+            'Opleiding\n2011 - 2015 HBO Informatica Avans',
+            '4' * 64, 'Mila Nieuwveld', ['mila.nieuwveld@gmail.com'], [],
+            [])
+_contact_db.commit()
+_filter_contact = c.filter_kandidaat
+_scope_contact = c.SCOPE
+try:
+    c.SCOPE = []
+    c.filter_kandidaat = lambda *args, **kwargs: ('ok', '')
+    _contact_people = c.deduplicate(_contact_db, _contact_out / 'samenvoegen_correcties.csv')[1]
+finally:
+    c.filter_kandidaat = _filter_contact
+    c.SCOPE = _scope_contact
+_noor = next(p for p in _contact_people if p['naam'] == 'Noor Vermeer')
+_mila = next(p for p in _contact_people if p['naam'] == 'Mila Nieuwveld')
+check('nieuwste cv houdt zijn telefoon; het oude nummer komt er niet bij',
+      _noor['telefoon'] == c.norm_phone('06 11112222')
+      and c.norm_phone('06 33334444') not in _noor['alle_telefoons']
+      and _noor['linkedin'] == 'https://www.linkedin.com/in/noorvermeer'
+      and 'noor-oud' not in _noor['alle_linkedin'],
+      (_noor['telefoon'], _noor['alle_telefoons'], _noor['linkedin'], _noor['alle_linkedin']))
+check('ontbrekend telefoonnummer wordt aangevuld vanuit het oudere cv van dezelfde persoon',
+      _mila['telefoon'] == c.norm_phone('06 55556666') and _mila['email'] == 'mila.nieuwveld@gmail.com',
+      (_mila['telefoon'], _mila['email'], _mila['alle_telefoons']))
+_bureau_was = set(c.BUREAU_CONTACT)
+try:
+    c.BUREAU_CONTACT.add(c.norm_phone('020 1234567'))
+    _ref_a = _cvdoc('Curriculum Vitae\nPiet Jansen\npiet.jansen@gmail.com\n020 1234567\n'
+                    'Werkervaring\n2018 - heden Java developer bij Codewerk\nOpleiding\nHBO Informatica', 6901)
+    _ref_b = _cvdoc('Curriculum Vitae\nMarie Jansen\nmarie.jansen@gmail.com\n020 1234567\n'
+                    'Werkervaring\n2019 - heden Scrum master bij Tulpsoft\nOpleiding\nHBO Bedrijfskunde', 6902)
+    _ref_a['phones'] = json.dumps([c.norm_phone('020 1234567')])
+    _ref_b['phones'] = json.dumps([c.norm_phone('020 1234567')])
+    check('recruiternummer is geen bewijs om twee kandidaten samen te voegen',
+          not c.safe_pair(_ref_a, _ref_b)[0], c.safe_pair(_ref_a, _ref_b))
+finally:
+    c.BUREAU_CONTACT.clear()
+    c.BUREAU_CONTACT.update(_bureau_was)
+
 # --- Afgekeurde namen uit Marcels Excel: de echte naam uit de veelvoorkomende opmaak halen ---
 W="Werkervaring\n2015 - heden Ontwikkelaar bij Codewerk\nOpleiding\nHBO Informatica"
 L=[

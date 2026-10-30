@@ -5262,11 +5262,26 @@ def deduplicate(db, merge_file=None):
         it = len(set(it_termen))
         return (werk[0], werk[1], opleiding[0], opleiding[1],
                 it, newest(d), d['year'] or '', d['sha'] or '')
+    def _veld_waarden(item, field):
+        try:
+            values = json.loads(item[field] or '[]')
+        except (ValueError, TypeError, KeyError):
+            return []
+        if field == 'phones':
+            return [x for x in (norm_phone(v) for v in values) if x]
+        if field == 'emails':
+            return [x for x in (_fix_email(v) for v in values) if x]
+        return [v for v in values if v]
+
+    def _uniek(values):
+        seen = []
+        for value in values:
+            if value and value not in seen:
+                seen.append(value)
+        return seen
+
     for group in sorted(groups.values(), key=lambda g: min(d['sha'] for d in g)):
         recent = sorted(group, key=cv_versie_rang, reverse=True)
-        all_emails = sorted(set(_fix_email(v) for d in group for v in json.loads(d['emails'])))
-        all_phones = sorted(set(filter(None, (norm_phone(v) for d in group for v in json.loads(d['phones'])))))
-        all_links = sorted(set(v for d in group for v in json.loads(d['links'])))
         # Naam die in de meeste versies staat (opgeschoond); bij gelijkspel de vollere naam.
         names = [tidy_name(clean_person_name(d['name']) or d['name']) for d in group if d['name']]
         uniek = sorted({n for n in names}, key=len)
@@ -5278,8 +5293,7 @@ def deduplicate(db, merge_file=None):
         names.sort(key=lambda n: (bool(clean_person_name(n)), counts[normalized_name(n)], len(n.split()), len(n)),
                    reverse=True)
         name = names[0] if names else ''
-        name = name_order_by_email(name_with_email(tidy_name(name), sorted({v for d in group for v in json.loads(d['emails'])})),
-                                   sorted({v for d in group for v in json.loads(d['emails'])}))
+        name = tidy_name(name)
         # Stabiele ID op de vroegst aanwezige bestandsfingerprint (per volledige exportsnapshot).
         known = collections.Counter(id_map[d['sha']] for d in group if d['sha'] in id_map)
         known_ids = [i for i, _n in sorted(known.items(), key=lambda kv: (-kv[1], kv[0])) if i not in used_ids]
@@ -5297,33 +5311,44 @@ def deduplicate(db, merge_file=None):
         roles = [d['role'] for d in recent if d['role']]
         employers = [d['employer'] for d in recent if d['employer']]
         distinct_shas = len({d['sha'] for d in group})
-        def latest(field):
-            # Nieuwste CV wint per veld. Ontbreekt mail of telefoon daar, dan van een ouder CV.
-            # Heeft de nieuwste CV e-mail én telefoon, dan blijven oude contactgegevens ongebruikt.
+
+        def gekozen(field):
+            """Waarden van het nieuwste cv. Alleen als dat veld leeg is: het oudste cv dat het wel heeft.
+            Nooit een mix, en nooit gegevens van een andere kandidaat (alleen deze groep)."""
             for item in recent:
-                values = json.loads(item[field])
-                if field == 'phones':
-                    values = [x for x in (norm_phone(v) for v in values) if x]   # oude opgeslagen nummers ook controleren
-                elif field == 'emails':
-                    values = [_fix_email(v) for v in values]
+                values = _uniek(_veld_waarden(item, field))
                 if values:
-                    return values[0]
+                    return values
+            return []
+
+        emails = gekozen('emails')
+        phones = gekozen('phones')
+        links = gekozen('links')
+        # Binnen het gekozen cv: een adres dat bij de naam past gaat voor een referentie-adres.
+        # Een ouder cv vult het veld niet aan zolang het nieuwste cv al een adres heeft.
+        if emails and email_owner_mismatch(name, emails[0]):
+            passend = [e for e in emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
+            if passend:
+                emails = _uniek(passend + emails)
+        name = name_order_by_email(name_with_email(name, emails), emails)
+        def eerste_veld(veld):
+            for item in recent:
+                if veld not in item.keys():
+                    continue
+                waarde = str(item[veld] or '').strip()
+                if waarde:
+                    return waarde
             return ''
-        levs = collections.Counter(d['leverancier'] for d in group if 'leverancier' in d.keys() and d['leverancier'])
-        candidate = dict(persoon_id=ident, naam=name, bedrijf_raw=levs.most_common(1)[0][0] if levs else '',
-           email=latest('emails'),
-           telefoon=latest('phones'), linkedin=latest('links'),
-           alle_emails=' | '.join(all_emails), alle_telefoons=' | '.join(all_phones),
-           alle_linkedin=' | '.join(all_links), huidige_functie=roles[0] if roles else '',
+        levs = eerste_veld('leverancier')
+        candidate = dict(persoon_id=ident, naam=name, bedrijf_raw=levs,
+           email=emails[0] if emails else '',
+           telefoon=phones[0] if phones else '', linkedin=links[0] if links else '',
+           alle_emails=' | '.join(emails), alle_telefoons=' | '.join(phones),
+           alle_linkedin=' | '.join(links), huidige_functie=roles[0] if roles else '',
            laatst_bekende_werkgever=employers[0] if employers else '',
-           cv_jaar=first['year'], aantal_cv_versies=distinct_shas,
+           cv_jaar=eerste_veld('year') or first['year'], aantal_cv_versies=distinct_shas,
            aantal_bestandslocaties=len(group), eerste_bron='CV', cv_id=cv_id_of(first['sha']), cv_sha=first['sha'],
            cv_pad=first['path'], cv_archief=first['archive'])
-        # E-mail: liefst het adres dat bij de naam past (niet dat van een referentie of leidinggevende).
-        if candidate['email'] and email_owner_mismatch(name, candidate['email']):
-            fitting = [e for e in all_emails if email_matches_name(name, e) and not GENERIC_EMAIL.match(e)]
-            if fitting:
-                candidate['email'] = fitting[0]
         # Taal, woonplaats NL/BE en verblijfsduur (wens opdrachtgever). Jouw eigen keuze 'wel cv' gaat voor.
         if not any(decided.get(d['sha'], {}).get('status') == 'cv' for d in group):
             def ai_vraag(soort, _d=first):
@@ -5338,7 +5363,7 @@ def deduplicate(db, merge_file=None):
                         return None
                     ai_cache[key] = ans
                 return ai_cache[key]
-            uitkomst, reden = filter_kandidaat(first, all_phones, all_emails, ai_vraag)
+            uitkomst, reden = filter_kandidaat(first, phones, emails, ai_vraag)
             if uitkomst == 'weg':
                 for d in group:
                     EXCLUDED[d['path']] = reden
