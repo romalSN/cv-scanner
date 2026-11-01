@@ -3926,14 +3926,40 @@ def kopieer_naamloze_cvs(out, naamloze):
     return copied
 
 
+def pad_naast_excel(path):
+    """Relatief pad vanaf de Excel, alleen als het bestand al in de exportmap staat.
+    Geen exists() en geen resolve(): op de Mac zou dat iCloud-bestanden aanraken
+    nog voordat iemand op de link klikt."""
+    if not path or not OUT_DIR:
+        return ''
+    try:
+        root = Path(OUT_DIR)
+        p = Path(path)
+        if not p.is_absolute():
+            p = root / p
+        rel = p.relative_to(root)
+    except (ValueError, TypeError):
+        return ''
+    if not rel.parts or '..' in rel.parts:
+        return ''
+    return rel.as_posix()
+
+
+def excel_cv_link(pad, archief=''):
+    """Link in Excel die het cv pas opent bij een klik.
+    Eerst een bestand dat al naast de Excel staat (Alle_cvs of een bestaande cv_archief-kopie).
+    Alleen als dat er niet is: file:// naar het origineel. Er wordt niets gekopieerd."""
+    for kandidaat in (pad, archief):
+        rel = pad_naast_excel(kandidaat)
+        if rel:
+            return rel
+    return file_link(pad, archief)
+
+
 def cv_rel_link(rel):
     """Link vanuit de Excel naar een cv in de cv-map (relatief als de map naast de Excel staat)."""
-    folder = cv_folder()
-    target = folder / rel
-    try:
-        return target.resolve().relative_to(Path(OUT_DIR).resolve()).as_posix()
-    except (ValueError, TypeError, OSError):
-        return file_link(str(target))
+    target = cv_folder() / rel
+    return pad_naast_excel(target) or file_link(str(target))
 
 
 def safe_part(text, limit=50):
@@ -5773,12 +5799,9 @@ def personen_overzicht(people):
         email, email_bron = contact('email')
         tel, tel_bron = contact('telefoon')
         li, li_bron = contact('linkedin')
+        cv_url = cv_rel_link(cv_file) if cv_file else excel_cv_link(p.get('cv_pad', ''), p.get('cv_archief', ''))
         rows.append(dict(naam=p['naam'], kandidaat_id=p.get('kandidaat_id', ''), cv_id=p.get('cv_id', ''),
-                         open_cv=(XLink('Open cv', cv_rel_link(cv_file)) if cv_file else
-                                  XLink('Open cv', mac_archive_link(p.get('cv_archief', '')))
-                                  if sys.platform == 'darwin' and mac_archive_link(p.get('cv_archief', '')) else
-                                  XLink('Open cv', file_link(p.get('cv_pad', ''), p.get('cv_archief', '')))
-                                  if p.get('cv_pad') else ''),
+                         open_cv=(XLink('Open cv', cv_url) if cv_url else ''),
                          email=email, email_bron=email_bron, telefoon=tel, telefoon_bron=tel_bron,
                          linkedin=li, linkedin_bron=li_bron,
                          gezocht_zekerheid='\n'.join(labels), gezocht_waarom=pretty_waarom(only_ticks(p.get('online_waarom', ''))),
@@ -6022,11 +6045,172 @@ def dubbele_kandidaten_controle(people, docs, docs_to_id, out):
     return rows
 
 
+def naam_uit_linkedin_titel(title):
+    """'Lotte Berg - Adviseur | LinkedIn' -> 'Lotte Berg'. Alleen een echte persoonsnaam."""
+    stuk = re.split(r'\s+[\|\-–—]\s+', str(title or ''), maxsplit=1)[0]
+    stuk = re.sub(r'\s+linkedin\s*$', '', stuk, flags=re.I).strip(' |-')
+    naam = tidy_name(clean_person_name(stuk))
+    return naam if naam and reasonable_name(naam) else ''
+
+
+def namen_uit_prive_mail(emails):
+    """voornaam.achternaam@gmail.com -> 'Voornaam Achternaam'. Alleen privé-domeinen, nooit info@ of jobs@."""
+    namen = []
+    for email in emails or []:
+        if not email or GENERIC_EMAIL.match(email):
+            continue
+        local, _, domain = str(email).partition('@')
+        if domain.lower() not in PRIVE_MAILDOMEINEN:
+            continue
+        if re.fullmatch(r'[A-Za-z]{2,}[._-][A-Za-z]{2,}', local):
+            kandidaat = tidy_name(re.sub(r'[._-]', ' ', local).title())
+            if reasonable_name(kandidaat):
+                namen.append(kandidaat)
+    return namen
+
+
+def naam_voor_naamloos(links, emails, online_namen=None):
+    """Naam voor een cv waar geen naam in de tekst staat.
+    Eerst de naam in de LinkedIn-link (jan-de-boer). Lukt dat niet, dan de naam die een zoekresultaat
+    op datzelfde profiel toont. Anders een privé-mailadres dat voornaam.achternaam is.
+    Twee verschillende namen, of een mailnaam die niet bij de LinkedIn-naam past: niets invullen.
+    """
+    link_namen = []
+    for link in links or []:
+        if 'linkedin.com/in/' not in str(link).lower():
+            continue
+        naam = name_from_linkedin(link)
+        if naam:
+            link_namen.append(naam)
+    online = []
+    if not link_namen:
+        for naam in online_namen or []:
+            naam = tidy_name(clean_person_name(naam or ''))
+            if naam and reasonable_name(naam):
+                online.append(naam)
+    mail_namen = namen_uit_prive_mail(emails)
+    gekozen = link_namen or online
+    if gekozen:
+        if len({normalized_name(n) for n in gekozen}) != 1:
+            return ''
+        basis = gekozen[0]
+        if mail_namen and normalized_name(basis) not in {normalized_name(m) for m in mail_namen}:
+            if not any(email_matches_name(basis, e) for e in emails or [] if e and not GENERIC_EMAIL.match(e)):
+                return ''
+        return basis
+    if len({normalized_name(m) for m in mail_namen}) == 1:
+        return mail_namen[0]
+    return ''
+
+
+_tavily_naam_op = False
+
+
+def _online_naam_op_profiel(slug, cache):
+    """Zoek het LinkedIn-profiel op en lees de naam uit de titel.
+    Eerst Tavily, tot dat tegoed op is. Daarna Google (Serper, en als die op is SerpApi)."""
+    global _tavily_naam_op
+    if slug in cache:
+        return cache[slug]
+    tkey = os.environ.get('TAVILY_API_KEY', '').strip()
+    heeft_google = bool(os.environ.get('SERPER_API_KEY', '').strip() or os.environ.get('SERPAPI_API_KEY', '').strip())
+    if (not tkey or _tavily_naam_op) and not heeft_google:
+        return ''
+    query = f'site:linkedin.com/in/{slug}'
+    rijen = None
+    geantwoord = False
+    if tkey and not _tavily_naam_op:
+        try:
+            rijen = tavily_search(query, tkey, include_domains=['linkedin.com'], max_results=3)
+            geantwoord = True
+        except urllib.error.HTTPError as exc:
+            if exc.code in (402, 429, 432, 433):
+                print('NAAM UIT LINKEDIN: Tavily-tegoed op; verder via Google (Serper/SerpApi).', flush=True)
+                _tavily_naam_op = True
+            elif exc.code in (401, 403):
+                print('NAAM UIT LINKEDIN: Tavily-sleutel ongeldig; verder via Google (Serper/SerpApi).', flush=True)
+                _tavily_naam_op = True
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            pass
+    if not geantwoord and heeft_google:
+        rijen, _via = google_search(query)
+        geantwoord = rijen is not None
+    if not geantwoord:
+        return ''
+    naam = ''
+    for rij in rijen or []:
+        url = str((rij or {}).get('url') or '')
+        if slug.lower() not in url.lower():
+            continue
+        naam = naam_uit_linkedin_titel((rij or {}).get('title') or '')
+        if naam:
+            break
+    cache[slug] = naam
+    return naam
+
+
+def vul_namen_zonder_naam(db, out):
+    """Cv's zonder bewezen naam: naam uit de LinkedIn-link, anders uit een zoekresultaat op dat profiel,
+    anders uit een herkenbaar privé-mailadres. Verzonnen namen en tegenstrijdige namen blijven leeg."""
+    rows = db.execute(
+        "SELECT path, emails, links FROM docs WHERE status='cv' AND classifier_version=? "
+        "AND trim(COALESCE(name,''))=''",
+        (CLASSIFIER_VERSION,)).fetchall()
+    if not rows:
+        return 0
+    cache_pad = Path(out) / 'linkedin_naam_cache.json'
+    try:
+        cache = json.loads(cache_pad.read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        cache = {}
+    gezet = 0
+    gezocht = 0
+    for row in rows:
+        try:
+            links = json.loads(row['links'] or '[]')
+            emails = json.loads(row['emails'] or '[]')
+        except (ValueError, TypeError):
+            continue
+        online = []
+        if not any(name_from_linkedin(link) for link in links if 'linkedin.com/in/' in str(link).lower()):
+            for link in links:
+                if 'linkedin.com/in/' not in str(link).lower():
+                    continue
+                slug = linkedin_slug(str(link))
+                if not slug or name_from_linkedin(link):
+                    continue
+                if gezocht >= 25 and slug not in cache:
+                    continue
+                if slug not in cache:
+                    gezocht += 1
+                gevonden = _online_naam_op_profiel(slug, cache)
+                if gevonden:
+                    online.append(gevonden)
+        naam = naam_voor_naamloos(links, emails, online)
+        if not naam:
+            continue
+        db.execute("UPDATE docs SET name=?, name_verified=1 WHERE path=? AND trim(COALESCE(name,''))=''",
+                   (naam, row['path']))
+        gezet += 1
+    if gezocht:
+        try:
+            cache_pad.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            pass
+    db.commit()
+    if gezet:
+        print(f'NAAM UIT LINKEDIN OF MAIL: {gezet} cv(s) zonder naam in de tekst kregen een naam '
+              'uit de LinkedIn-link, een zoekresultaat op dat profiel, of een herkenbaar privé-mailadres.',
+              flush=True)
+    return gezet
+
+
 def build_exports(db, out):
     # Vorige export nooit als nieuw rapporteren wanneer opbouwen mislukt.
     # De XLSX zelf mag voor herstel blijven staan; alleen de geldigheidsstempel vervalt.
     (out / 'excel_export_geldig.json').unlink(missing_ok=True)
     remove_vanished(db)
+    vul_namen_zonder_naam(db, out)
     merges = out/'samenvoegen_correcties.csv'
     if not merges.exists():
         save_csv(merges, [], ['persoon_id_1','persoon_id_2','toelichting'])
@@ -6151,9 +6335,10 @@ def build_exports(db, out):
                 r2 = {ren.get(k, k): (kid.get(v, v) if k in ren else v) for k, v in r.items()}
                 if 'sha256' in r2:
                     src = r2.get('oorspronkelijk_bestand', '')
-                    r2['open_cv'] = (XLink('Open', cv_rel_link(cv_files[r2['sha256']]))
-                                     if in_cv_folder(src, out) and r2.get('sha256') in cv_files
-                                     else XLink('Open', file_link(src, r2.get('archiefkopie', ''))) if src else '')
+                    rel = cv_files.get(r2.get('sha256') or '')
+                    doel = str(cv_folder(out) / rel) if rel else src
+                    url = excel_cv_link(doel, r2.get('archiefkopie', '')) if (doel or r2.get('archiefkopie')) else ''
+                    r2['open_cv'] = XLink('Open', url) if url else ''
                 new_rows.append(r2)
             new_cols = [ren.get(c, c) for c in cols]
             if 'sha256' in cols:

@@ -1485,6 +1485,93 @@ _MA2 = _MA.replace('2010 - 2012 Master', '2015 - 2017 Master').replace('2012 - h
 check('dubbel: bachelor + later master (gat), zelfde baan+jaren, zelfde mail = samen', c.safe_pair(_cvdoc(_BA, 406), _cvdoc(_MA2, 407))[0])
 
 
+check('naamloos: naam staat in de LinkedIn-link',
+      c.naam_voor_naamloos(['https://www.linkedin.com/in/jan-de-boer'], []) == 'Jan de Boer')
+check('naamloos: onleesbare LinkedIn-code zonder zoekresultaat blijft leeg',
+      c.naam_voor_naamloos(['https://www.linkedin.com/in/ACoAAAbc123'], []) == '')
+check('naamloos: zoekresultaat op hetzelfde profiel geeft de naam',
+      c.naam_voor_naamloos(['https://www.linkedin.com/in/ACoAAAbc123'], [], ['Lotte Berg']) == 'Lotte Berg')
+check('naamloos: titel van een LinkedIn-zoekresultaat',
+      c.naam_uit_linkedin_titel('Lotte Berg - Adviseur | LinkedIn') == 'Lotte Berg')
+check('naamloos: privé-mail voornaam.achternaam',
+      c.naam_voor_naamloos([], ['jan.jansen@gmail.com']) == 'Jan Jansen')
+check('naamloos: bureau-mail of werkmail verzint geen naam',
+      c.naam_voor_naamloos([], ['jobs@bureauvoorbeeld.nl']) == ''
+      and c.naam_voor_naamloos([], ['daan.vijverman@example.com']) == '')
+check('naamloos: LinkedIn-naam en een andere mailnaam blijven leeg',
+      c.naam_voor_naamloos(['https://www.linkedin.com/in/jan-de-boer'], ['piet.smit@gmail.com']) == '')
+check('naamloos: LinkedIn-naam en dezelfde mail horen bij elkaar',
+      c.naam_voor_naamloos(['https://www.linkedin.com/in/jan-de-boer'], ['jan.de.boer@gmail.com']) == 'Jan de Boer')
+
+_naam_out = Path(tempfile.mkdtemp())
+_naam_db = c.db_open(_naam_out)
+def _naamloos(pad, sha, links, emails):
+    _naam_db.execute("INSERT INTO docs(path,sha,name,name_verified,status,classifier_version,"
+                     "snippet,tokens,emails,phones,links,mtime_ns,received_ns,year,role,employer,"
+                     "opleidingen,woonplaats,taal) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (str(_naam_out / pad), sha, '', 0, 'cv', c.CLASSIFIER_VERSION,
+                      'curriculum vitae werkervaring', '[]', json.dumps(emails), '[]', json.dumps(links),
+                      1, 1, '', '', '', '[]', '', 'nl'))
+_naamloos('jan.txt', 'd' * 64, ['https://www.linkedin.com/in/jan-de-boer'], [])
+_naamloos('code.txt', 'e' * 64, ['https://www.linkedin.com/in/ACoAAAbc123'], [])
+_naamloos('mail.txt', 'f' * 64, [], ['lotte.berg@gmail.com'])
+_naam_db.commit()
+_zocht = {'n': 0}
+def _geen_netwerk(slug, cache):
+    _zocht['n'] += 1
+    return ''
+_online_orig = c._online_naam_op_profiel
+try:
+    c._online_naam_op_profiel = _geen_netwerk
+    os.environ['SERPER_API_KEY'] = 'test-niet-bellen'
+    _aantal = c.vul_namen_zonder_naam(_naam_db, _naam_out)
+finally:
+    c._online_naam_op_profiel = _online_orig
+    os.environ['SERPER_API_KEY'] = 'test'
+_jan = _naam_db.execute("SELECT name, name_verified FROM docs WHERE path=?", (str(_naam_out / 'jan.txt'),)).fetchone()
+_code = _naam_db.execute("SELECT name FROM docs WHERE path=?", (str(_naam_out / 'code.txt'),)).fetchone()
+_mail = _naam_db.execute("SELECT name, name_verified FROM docs WHERE path=?", (str(_naam_out / 'mail.txt'),)).fetchone()
+check('naamloos in de database: LinkedIn-link vult de naam en telt mee',
+      _aantal == 2 and _jan['name'] == 'Jan de Boer' and _jan['name_verified'] == 1, (_aantal, _jan['name']))
+check('naamloos in de database: code-link zonder zoekresultaat blijft zonder naam',
+      (_code['name'] or '') == '', _code['name'])
+check('naamloos in de database: herkenbare privé-mail vult de naam',
+      _mail['name'] == 'Lotte Berg' and _mail['name_verified'] == 1, _mail['name'])
+check('naamloos: onleesbare link zoekt alleen als er een sleutel is, en belt het netwerk hier niet',
+      _zocht['n'] == 1, _zocht)
+
+import urllib.error as _urlerr
+_volgorde = []
+def _tavily_eerst(query, key, include_domains=None, max_results=6, exclude_domains=None, raw=False, depth='basic'):
+    _volgorde.append('tavily')
+    return [{'url': 'https://www.linkedin.com/in/ACoAAAbc123', 'title': 'Lotte Berg | LinkedIn', 'content': ''}]
+def _google_later(query):
+    _volgorde.append('google')
+    slug = query.rsplit('/', 1)[-1]
+    return ([{'url': 'https://www.linkedin.com/in/' + slug, 'title': 'Lotte Berg | LinkedIn', 'content': ''}], 'Serper')
+_tav_orig, _goo_orig = c.tavily_search, c.google_search
+try:
+    c.tavily_search, c.google_search = _tavily_eerst, _google_later
+    c._tavily_naam_op = False
+    _naam_tav = c._online_naam_op_profiel('ACoAAAbc123', {})
+    check('naamloos: Tavily gaat eerst, Google pas als Tavily op is',
+          _volgorde == ['tavily'] and _naam_tav == 'Lotte Berg', (_volgorde, _naam_tav))
+    def _tavily_leeg(query, key, include_domains=None, max_results=6, exclude_domains=None, raw=False, depth='basic'):
+        _volgorde.append('tavily')
+        raise _urlerr.HTTPError('https://api.tavily.com/search', 432, 'tegoed op', None, None)
+    c.tavily_search = _tavily_leeg
+    c._tavily_naam_op = False
+    _volgorde.clear()
+    _naam_na = c._online_naam_op_profiel('ACoAAAbc999', {})
+    _naam_erna = c._online_naam_op_profiel('ACoAAAbc888', {})
+    check('naamloos: als Tavily op is, daarna alleen Google',
+          _volgorde == ['tavily', 'google', 'google'] and _naam_na == 'Lotte Berg' and _naam_erna == 'Lotte Berg',
+          (_volgorde, _naam_na, _naam_erna))
+finally:
+    c.tavily_search, c.google_search = _tav_orig, _goo_orig
+    c._tavily_naam_op = False
+
 print()
 print('ALLE REGELS OK' if not FOUTEN else f'{len(FOUTEN)} FOUT(EN): ' + ', '.join(FOUTEN))
 sys.exit(1 if FOUTEN else 0)

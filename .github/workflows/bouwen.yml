@@ -58,6 +58,9 @@ jobs:
       - name: Test - venster Kandidaten (tabel in de scanner)
         run: python tests/test_kandidaten.py
 
+      - name: Test - 2000 cv-links in Excel (geldig, pas openen bij klik, geen extra kopie)
+        run: python tests/test_excel_links.py
+
       - name: Test - Apify (nagebootst)
         run: python tests/test_apify.py
 

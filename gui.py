@@ -1085,14 +1085,15 @@ class ScannerApp:
                 return 'in/' + t.split('/in/', 1)[1].strip('/').split('?')[0]
             return t
 
-        # Zichtbaar: (kop, breedte, waarde). De rest (ID's, bron, waarom) staat in het detailvak.
-        visible = [('Naam', 200, lambda r: flat(r.get('naam', ''))),
-                   ('E-mail', 220, lambda r: flat(r.get('email', ''))),
-                   ('Telefoon', 125, lambda r: flat(r.get('telefoon', ''))),
-                   ('LinkedIn', 210, linkedin_short),
-                   ('Online', 140, status),
-                   ('Functie', 180, lambda r: flat(r.get('huidige_functie', ''))),
-                   ('Werkgever', 170, lambda r: flat(r.get('laatst_bekende_werkgever', '')))]
+        # Zichtbaar: (kop, waarde). Breedte volgt de langste tekst, zodat niets halverwege afgekapt wordt.
+        # ID's en bron-kolommen blijven in het detailvak.
+        visible = [('Naam', lambda r: flat(r.get('naam', ''))),
+                   ('E-mail', lambda r: flat(r.get('email', ''))),
+                   ('Telefoon', lambda r: flat(r.get('telefoon', ''))),
+                   ('LinkedIn', linkedin_short),
+                   ('Online', status),
+                   ('Functie', lambda r: flat(r.get('huidige_functie', ''))),
+                   ('Werkgever', lambda r: flat(r.get('laatst_bekende_werkgever', '')))]
         if not any(r.get('huidige_functie') or r.get('laatst_bekende_werkgever') for r in rows):
             visible = visible[:5]
         names = {'kandidaat_id': 'Kandidaat-ID', 'cv_id': 'Cv-ID', 'email_bron': 'E-mail komt uit',
@@ -1104,12 +1105,17 @@ class ScannerApp:
         win = tk.Toplevel(self.root)
         win.title(f'Kandidaten ({len(rows)})')
         win.configure(bg=PANEL)
-        win.geometry('1200x720')
+        win.geometry('1400x820')
+        try:
+            win.state('zoomed')
+        except tk.TclError:
+            pass
         style = ttk.Style(win)
         rowfont = tkfont.Font(family=FONT, size=11)
+        headfont = tkfont.Font(family=FONT, size=10, weight='bold')
         style.configure('Kand.Treeview', font=rowfont, rowheight=int(rowfont.metrics('linespace') * 1.9),
                         background=CARD, fieldbackground=CARD, foreground=TEXT, borderwidth=0)
-        style.configure('Kand.Treeview.Heading', font=(FONT, 10, 'bold'), padding=(6, 6))
+        style.configure('Kand.Treeview.Heading', font=(FONT, 10, 'bold'), padding=(8, 8))
         style.map('Kand.Treeview', background=[('selected', ACCENT)], foreground=[('selected', '#ffffff')])
 
         top = tk.Frame(win, bg=PANEL)
@@ -1122,13 +1128,14 @@ class ScannerApp:
         count = tk.StringVar()
         tk.Label(top, textvariable=count, font=(FONT, 10), fg=MUTED, bg=PANEL).pack(side='left')
         tk.Label(win, text='Dubbelklik = cv openen  ·  klik op een kolomkop = sorteren  ·  '
-                 'zoeken werkt op alles, ook op ID', font=(FONT, 10), fg=MUTED, bg=PANEL
+                 'sleep een kolomrand om hem breder te maken  ·  zoeken werkt op alles, ook op ID',
+                 font=(FONT, 10), fg=MUTED, bg=PANEL
                  ).pack(anchor='w', padx=16, pady=(0, 8))
 
         pane = tk.PanedWindow(win, orient='vertical', bg=PANEL, sashwidth=6, bd=0)
         pane.pack(fill='both', expand=True, padx=16)
         body = tk.Frame(pane, bg=PANEL)
-        heads = [h for h, _w, _f in visible]
+        heads = [h for h, _f in visible]
         tree = ttk.Treeview(body, columns=heads, show='headings', style='Kand.Treeview', selectmode='browse')
         ys = ttk.Scrollbar(body, orient='vertical', command=tree.yview)
         xs = ttk.Scrollbar(body, orient='horizontal', command=tree.xview)
@@ -1136,21 +1143,36 @@ class ScannerApp:
         ys.pack(side='right', fill='y')
         xs.pack(side='bottom', fill='x')
         tree.pack(side='left', fill='both', expand=True)
-        for h, w, _f in visible:
-            tree.column(h, width=w, minwidth=70, stretch=(h == 'Naam'), anchor='w')
+
+        def kolom_breedte(header, values):
+            """Breed genoeg voor de hele tekst, zoals een Excel-kolom. Heel lange zinnen blijven sleepbaar."""
+            need = headfont.measure(header + '  ▲')
+            for value in values:
+                if value:
+                    need = max(need, rowfont.measure(value))
+            return min(max(need + 36, 140), 640)
+
+        for h, f in visible:
+            width = kolom_breedte(h, [f(r) for r in rows])
+            tree.column(h, width=width, minwidth=width, stretch=False, anchor='w')
         tree.tag_configure('odd', background='#f4f7f9')
         tree.tag_configure('even', background=CARD)
-        detail = tk.Text(pane, height=9, wrap='word', font=(FONT, 10), bg=CARD, fg=TEXT, relief='flat',
+        detail_wrap = tk.Frame(pane, bg=PANEL)
+        detail = tk.Text(detail_wrap, height=8, wrap='word', font=(FONT, 11), bg=CARD, fg=TEXT, relief='flat',
                          padx=12, pady=10, highlightthickness=1, highlightbackground=LINE)
-        detail.tag_configure('h', font=(FONT, 12, 'bold'))
+        detail_scroll = ttk.Scrollbar(detail_wrap, orient='vertical', command=detail.yview)
+        detail.configure(yscrollcommand=detail_scroll.set)
+        detail_scroll.pack(side='right', fill='y')
+        detail.pack(side='left', fill='both', expand=True)
+        detail.tag_configure('h', font=(FONT, 13, 'bold'))
         detail.tag_configure('k', foreground=MUTED)
         detail.configure(state='disabled')
         pane.add(body, stretch='always')
-        pane.add(detail, stretch='never')
+        pane.add(detail_wrap, stretch='never')
 
         order = {'col': 'Naam', 'rev': False}
         shown = {}
-        getter = {h: f for h, _w, f in visible}
+        getter = {h: f for h, f in visible}
         search_text = [' '.join(flat(r.get(c, '')) for c in cols).lower() for r in rows]
 
         def fill(*_a):
@@ -1161,7 +1183,7 @@ class ScannerApp:
             tree.delete(*tree.get_children())
             shown.clear()
             for n, i in enumerate(items):
-                iid = tree.insert('', 'end', values=[f(rows[i]) for _h, _w, f in visible],
+                iid = tree.insert('', 'end', values=[f(rows[i]) for _h, f in visible],
                                   tags=('odd' if n % 2 else 'even',))
                 shown[iid] = rows[i]
             count.set(f'{len(items)} van {len(rows)} kandidaten')
@@ -1242,6 +1264,43 @@ class ScannerApp:
         tree.bind('<<TreeviewSelect>>', show_detail)
         tree.bind('<Double-1>', double)
         tree.bind('<Return>', lambda _e: open_cv())
+        tip = {'win': None, 'key': None}
+
+        def hide_tip(_e=None):
+            if tip['win'] is not None:
+                tip['win'].destroy()
+                tip['win'] = None
+                tip['key'] = None
+
+        def show_tip(event):
+            row_id = tree.identify_row(event.y)
+            col_id = tree.identify_column(event.x)
+            if not row_id or not col_id:
+                hide_tip()
+                return
+            try:
+                header = heads[int(col_id.lstrip('#')) - 1]
+                value = str(tree.set(row_id, header) or '')
+            except (ValueError, IndexError, tk.TclError):
+                hide_tip()
+                return
+            if not value or rowfont.measure(value) + 28 <= int(tree.column(header, 'width')):
+                hide_tip()
+                return
+            if tip['key'] == (row_id, header):
+                return
+            hide_tip()
+            tw = tk.Toplevel(win)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f'+{event.x_root + 14}+{event.y_root + 18}')
+            tk.Label(tw, text=value, font=(FONT, 11), bg=CARD, fg=TEXT, justify='left',
+                     wraplength=560, padx=10, pady=8, highlightthickness=1,
+                     highlightbackground=LINE).pack()
+            tip['win'] = tw
+            tip['key'] = (row_id, header)
+
+        tree.bind('<Motion>', show_tip)
+        tree.bind('<Leave>', hide_tip)
         query.trace_add('write', fill)
         bar = tk.Frame(win, bg=PANEL)
         bar.pack(fill='x', padx=16, pady=12)
