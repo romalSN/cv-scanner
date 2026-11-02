@@ -70,22 +70,16 @@ jobs:
                || { echo "::error::llama-cpp-python bouwen mislukt: $(tail -5 pip_ai2.txt | tr '\n' ' ')"; exit 1; }; }
           python -c "import llama_cpp; print('::notice::llama-cpp-python', llama_cpp.__version__)"
           if [ "$RUNNER_OS" = "macOS" ]; then
-            python - <<'PY'
-import pathlib, subprocess
-import llama_cpp
-root = pathlib.Path(llama_cpp.__file__).resolve().parent
-gezien = False
-for pad in root.rglob('*'):
-    if not pad.is_file() or pad.suffix not in {'.so', '.dylib'}:
-        continue
-    archs = subprocess.check_output(['lipo', '-archs', str(pad)], text=True).split()
-    print(pad.name, ' '.join(archs))
-    if 'arm64' not in archs or archs == ['x86_64']:
-        raise SystemExit('llama is niet native ARM64: ' + pad.name)
-    gezien = True
-if not gezien:
-    raise SystemExit('geen llama-binary gevonden')
-PY
+            LLAMA=$(python -c "import llama_cpp, pathlib; print(pathlib.Path(llama_cpp.__file__).resolve().parent)")
+            gevonden=0
+            while IFS= read -r f; do
+              a=$(lipo -archs "$f")
+              echo "$a  $f"
+              echo "$a" | grep -qw arm64 || { echo "::error::llama is niet native ARM64: $f ($a)"; exit 1; }
+              [ "$a" != "x86_64" ] || { echo "::error::llama is Intel-only: $f"; exit 1; }
+              gevonden=1
+            done < <(find "$LLAMA" -type f \( -name '*.so' -o -name '*.dylib' \))
+            [ "$gevonden" = 1 ] || { echo "::error::geen llama-binary gevonden"; exit 1; }
           fi
 
       - name: Klein testmodel ophalen (alleen voor de test, zit niet in de app)
