@@ -28,6 +28,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+
+import linkedin_zoek
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -6461,6 +6463,47 @@ def serpapi_search(query, key):
             for o in data.get('organic_results', [])]
 
 
+def linkup_vraag(query):
+    """Linkup krijgt een gewone zoekzin. De site:-operator van Google gaat eraf."""
+    tekst = re.sub(r'(?i)\bsite:\S+', ' ', str(query or ''))
+    tekst = tekst.replace(' OR ', ' or ')
+    tekst = ' '.join(tekst.split())
+    if not tekst:
+        return 'LinkedIn profile'
+    if tekst.lower().startswith('linkedin'):
+        return tekst[:400]
+    return ('LinkedIn profile ' + tekst)[:400]
+
+
+def linkup_search(query, key):
+    """Zoekterm via Linkup, nadat Serper, SerpApi en Tavily niets bruikbaars gaven.
+    Alleen de zoekterm gaat mee. Het cv zelf niet. Standaard de goedkope fast-modus."""
+    diepte = (os.environ.get('LINKUP_DEPTH', 'fast') or 'fast').strip()
+    if diepte not in ('flash', 'fast'):
+        diepte = 'fast'
+    body = {'q': linkup_vraag(query), 'depth': diepte, 'outputType': 'searchResults',
+            'includeDomains': ['linkedin.com'], 'maxResults': 10}
+    req = urllib.request.Request(
+        'https://api.linkup.so/v1/search', data=json.dumps(body).encode('utf-8'), method='POST',
+        headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
+                 'User-Agent': 'CV-Scanner/12'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            ontvangen = json.load(r)
+    except urllib.error.HTTPError as exc:
+        tekst = ''
+        try:
+            tekst = exc.read().decode('utf-8', 'replace')[:240].lower()
+        except Exception:
+            tekst = ''
+        if exc.code == 429 and any(woord in tekst for woord in ('credit', 'quota', 'insufficient', 'payment', 'balance')):
+            raise urllib.error.HTTPError(req.full_url, 402, 'tegoed op', exc.headers, None)
+        raise
+    return [{'url': item.get('url') or '', 'title': item.get('name') or '', 'content': item.get('content') or ''}
+            for item in (ontvangen.get('results') or [])
+            if isinstance(item, dict) and item.get('type') != 'image']
+
+
 def google_search(query):
     """Eerst Serper (eenmalig tegoed) tot dat op is, daarna SerpApi (maandelijks tegoed).
     Geeft (resultaten, dienst) of (None, reden) als geen van beide kan."""
@@ -7028,57 +7071,158 @@ def _cv_sites(db, person):
     return sites
 
 
-def profielen_voorbereiden(people, todo, cache, cache_path, profielen, max_people):
-    """Stap 1 (Apify eerst): alle LinkedIn-URL's verzamelen en in batches ophalen.
-    - URL's uit het cv (alle kandidaten, ook wie al alles heeft: voor het tabblad LinkedIn-gegevens).
-    - Wie geen URL heeft: één Google-zoekopdracht (Serper, anders SerpApi) naar 'site:linkedin.com/in "naam"
-      bedrijf', opgeslagen onder dezelfde sleutel als de gewone online stap (die zoekt dan niet opnieuw).
-      Alleen profielen met precies die naam gaan naar Apify (max 3 per persoon)."""
+def _toon_org(value):
+    """'Datafabriek B.V.' -> 'Datafabriek'. Hoofdletters blijven, zodat de zoekopdracht herkenbaar is."""
+    value = re.split(r'\s*(?:·|,|\||\(| - | – )\s*', value or '')[0]
+    value = re.sub(r'(?i)\s+(?:b\.?v\.?|n\.?v\.?|vof)\.?$', '', value).strip(' .')
+    return value[:60]
+
+
+def _org_zoekbaar(value):
+    """Alleen weggooien wat geen werkgever is: te kort, een plaats, of een lege aanduiding.
+
+    Een grote werkgever als ASML of Philips blijft juist een zoekterm. Die helpt naamgenoten uit elkaar te houden.
+    """
+    schoon = _clean_org(value)
+    if len(schoon) < 3 or schoon in NL_PLACES:
+        return False
+    if VAGUE_EMPLOYERS.match(schoon):
+        return False
+    return True
+
+
+def linkedin_xray_voor(person, db=None):
+    """Gerichte LinkedIn-zoekopdrachten uit de gegevens die al op het cv staan."""
+    naam = (person.get('naam') or '').replace('"', '').strip()
+    werkgevers = []
+
+    def voeg_werk(value):
+        toon = _toon_org(value)
+        if toon and _org_zoekbaar(toon) and toon.lower() not in {w.lower() for w in werkgevers}:
+            werkgevers.append(toon)
+
+    voeg_werk(person.get('laatst_bekende_werkgever') or '')
+    for stuk in (_cv_field(db, person, 'werkgevers') or '').split(' ; '):
+        voeg_werk(stuk)
+    for stuk in (_cv_stage(db, person) or '').split(' ; '):
+        voeg_werk(stuk)
+    functies = []
+    rol = (person.get('huidige_functie') or '').replace('"', '').strip()
+    if rol and (role_is_specific(rol) or len(rol.split()) >= 2):
+        functies.append(re.split(r'\s*(?:·|,|\|)\s*', rol)[0][:60])
+    opleidingen = []
+    for stuk in (_cv_field(db, person, 'opleidingen') or '').split(' ; '):
+        stuk = stuk.replace('"', '').strip()
+        if len(stuk) >= 3 and stuk.lower() not in {o.lower() for o in opleidingen}:
+            opleidingen.append(stuk[:80])
+    plaatsen = []
+    home = (person.get('woonplaats') or _cv_field(db, person, 'woonplaats') or '').replace('"', '').strip()
+    if home:
+        plaatsen.append(home)
+    for stuk in (_cv_field(db, person, 'werkplaatsen') or '').split(' ; '):
+        stuk = stuk.strip()
+        if stuk and stuk.lower() not in {p.lower() for p in plaatsen}:
+            plaatsen.append(stuk)
+    return linkedin_zoek.maak_zoekopdrachten(
+        naam, werkgevers[:3], functies[:3], opleidingen[:3], plaatsen[:2], linkedin_zoek.zoekbudget())
+
+
+def linkedin_aanroepers():
+    """Bestaande sleutels. De sleutelbestanden worden hier niet gewist."""
+
+    def serper(query):
+        key = os.environ.get('SERPER_API_KEY', '').strip()
+        if not key:
+            raise linkedin_zoek.GeenSleutel('Serper')
+        return serper_search(query, key)
+
+    def serpapi(query):
+        key = os.environ.get('SERPAPI_API_KEY', '').strip()
+        if not key:
+            raise linkedin_zoek.GeenSleutel('SerpApi')
+        return serpapi_search(query, key)
+
+    def tavily(query):
+        key = os.environ.get('TAVILY_API_KEY', '').strip()
+        if not key:
+            raise linkedin_zoek.GeenSleutel('Tavily')
+        return tavily_search(query, key, include_domains=['linkedin.com'], max_results=10)
+
+    def linkup(query):
+        key = os.environ.get('LINKUP_API_KEY', '').strip()
+        if not key:
+            raise linkedin_zoek.GeenSleutel('Linkup')
+        return linkup_search(query, key)
+
+    return {'Serper': serper, 'SerpApi': serpapi, 'Tavily': tavily, 'Linkup': linkup}
+
+
+def linkedin_keten_nieuw():
+    ruw = os.environ.get('LINKEDIN_RETRY_WACHT', '').strip()
+    try:
+        wacht = float(ruw) if ruw else 0.4
+    except ValueError:
+        wacht = 0.4
+    return linkedin_zoek.Bronnen(linkedin_aanroepers(), wacht=wacht)
+
+
+def _linkedin_open_bewaren(out, people, todo, klaar):
+    pad = out / linkedin_zoek.OPEN_BESTAND
+    ids = {p.get('persoon_id') or '' for p in people}
+    open_ids = {i for i in linkedin_zoek.lees_open(pad) if i in ids and i not in klaar}
+    for p in todo:
+        pid = p.get('persoon_id') or ''
+        if pid and pid not in klaar and not linkedin_zoek.persoonlijke_url(p.get('linkedin') or ''):
+            open_ids.add(pid)
+    linkedin_zoek.schrijf_open(pad, open_ids)
+
+
+def profielen_voorbereiden(people, todo, cache, cache_path, profielen, max_people, db=None, keten=None, klaar=None):
+    """Stap 1 (Apify eerst): LinkedIn-URL's verzamelen en in batches ophalen.
+    Een persoonlijke link uit het cv gaat direct mee, zonder zoekdienst.
+    Ontbreekt die, dan zoeken Serper, SerpApi en Tavily met gerichte opdrachten.
+    Alleen profielen met precies die naam gaan naar Apify (max 3 per persoon)."""
     urls = []
     for p in people:
         for l in linkedins_in(p.get('linkedin') or ''):
-            urls.append(l)
+            if linkedin_zoek.persoonlijke_url(l):
+                urls.append(l)
+    keten = keten or linkedin_keten_nieuw()
+    if klaar is None:
+        klaar = set()
     gezocht = 0
     for p in todo[:max_people]:
-        if p.get('linkedin'):
+        if linkedin_zoek.persoonlijke_url(p.get('linkedin') or ''):
+            klaar.add(p.get('persoon_id') or '')
             continue
         full = p['naam'].replace('"', '')
         ck = 'linkedin|' + normalized_name(full)
-        if ck not in cache:
-            emp = _clean_org(p.get('laatst_bekende_werkgever') or '')
-            rol = (p.get('huidige_functie') or '')[:45].replace('"', '')
-            if len(emp) >= 3 and emp not in NL_PLACES and not VAGUE_EMPLOYERS.match(emp) and not BIG_EMPLOYERS.match(emp):
-                term = '"' + re.sub(r'\(.*?\)', ' ', (p.get('laatst_bekende_werkgever') or '').split(',')[0]).replace('"', '').strip()[:45] + '"'
-            else:
-                term = rol if rol and role_is_specific(rol) else ''
-            if not term:
-                ck += '|alleen_naam'          # zelfde sleutel als de gewone online stap
-            if ck in cache:
-                res = cache[ck]
-            else:
-                res, via = google_search(f'site:linkedin.com/in "{full}" {term}'.strip())
-                tkey = os.environ.get('TAVILY_API_KEY', '').strip()
-                if res is None and tkey:
-                    try:
-                        res = tavily_search(f'"{full}" {term}'.strip(), tkey, include_domains=['linkedin.com'], max_results=20)
-                    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
-                        res = None
-            if res is None:
-                print('PROFIELEN: geen zoektegoed meer (Serper, SerpApi, Tavily) om LinkedIn-adressen te vinden; rest volgende keer.', flush=True)
-                break
-            if ck not in cache:
+        bron = cache.get(ck)
+        if bron is None:
+            bron = cache.get(ck + '|alleen_naam')
+        if bron is None:
+            queries = linkedin_xray_voor(p, db)
+            rows, toestand = linkedin_zoek.zoek_profielen(queries, cache, keten, normalized_name(full))
+            bron = [{k: r.get(k, '') for k in ('url', 'title', 'content', 'bron')} for r in rows]
+            if toestand == 'af':
+                cache[ck] = bron
+                cache['q|' + ck] = queries[0] if queries else ''
                 gezocht += 1
-                cache[ck] = [{k: r.get(k, '') for k in ('url', 'title', 'content')} for r in res]
-                cache['q|' + ck] = f'"{full}" {term}'.strip()
+                klaar.add(p.get('persoon_id') or '')
+            elif keten.geen_bronnen_meer() and not bron:
+                print('PROFIELEN: geen zoekdienst meer over. Deze scan gaat verder zonder nieuw LinkedIn-onderzoek.', flush=True)
+                break
+        else:
+            klaar.add(p.get('persoon_id') or '')
         words = _name_words(full)
         eigen = []
-        for r in cache.get(ck) or []:
+        for r in bron or []:
             for l in linkedins_in(r.get('url', '')):
                 if own_linkedin(l, r.get('title', ''), words, full) and l not in eigen:
                     eigen.append(l)
         urls += eigen[:3]
     if gezocht:
-        print(f'PROFIELEN: {gezocht} LinkedIn-adressen gezocht (Serper/SerpApi/Tavily).', flush=True)
+        print(f'PROFIELEN: {gezocht} LinkedIn-adressen gezocht (Serper/SerpApi/Tavily/Linkup).', flush=True)
     try:
         profielen.ophalen(urls, cache, log=lambda m: print(m, flush=True))
     finally:
@@ -7115,11 +7259,144 @@ def linkedin_gegevens_rijen(people, out):
     return rijen
 
 
+def _linkedin_sterk_in_tekst(title, content, terms):
+    return bool(_linkedin_soorten_in_tekst((title or '') + ' ' + (content or ''), terms))
+
+
+def _linkedin_soorten_in_tekst(tekst, terms):
+    """Welke sterke of middelsterke cv-kenmerken letterlijk in deze tekst staan."""
+    blob = normalized_name(tekst or '')
+    soorten = []
+    for label, _shown, phrase, weight in terms or []:
+        if weight not in ('sterk', 'middel') or not phrase:
+            continue
+        if re.search(r'(?<![a-z])' + re.escape(phrase) + r'(?![a-z])', blob):
+            soort = str(label).split(' (')[0]
+            if soort not in soorten:
+                soorten.append(soort)
+    return soorten
+
+
+def _alleen_een_werkgever(info):
+    """Naam plus één werkgever uit een zoekresultaat is geen zekere koppeling.
+
+    Goma of een opgeslagen Apify-profiel telt wel als extra controle.
+    """
+    if (info or {}).get('goma_bevestigd') or (info or {}).get('apify_bevestigd'):
+        return False
+    labels = []
+    for lbl, _shown, w in (info or {}).get('hits') or ():
+        if w in ('sterk', 'middel'):
+            labels.append(str(lbl).split(' (')[0])
+
+    def werkgever(label):
+        return label.startswith(('werkgever', 'stagebedrijf', 'organisatie', 'bijbaan'))
+
+    werk = {label for label in labels if werkgever(label)}
+    ander = [label for label in labels if not werkgever(label)]
+    return len(werk) == 1 and not ander
+
+
+def _linkedin_besluit(rows, full, words, terms, goma_cv, cache, teller):
+    """'stop' zodra één profiel overtuigend klopt. Anders de volgende zoekdienst proberen."""
+    gekozen = []
+    for row in rows or []:
+        link = linkedin_zoek.persoonlijke_url((row or {}).get('url') or '')
+        if not link:
+            continue
+        title = (row or {}).get('title') or ''
+        if words and not own_linkedin(link, title, words, full):
+            continue
+        tekst = (title or '') + ' ' + ((row or {}).get('content') or '')
+        soorten = _linkedin_soorten_in_tekst(tekst, terms)
+        gekozen.append((link, bool(soorten), row or {}, soorten))
+    if len(gekozen) == 1 and gekozen[0][1] and not _alleen_een_werkgever(
+            {'hits': {(soort, '', 'sterk') for soort in gekozen[0][3]}}):
+        return 'stop'
+    if not gekozen:
+        return 'verder'
+    temp = {}
+    for link, sterk, row, _soorten in gekozen:
+        temp[('linkedin', link)] = {
+            'hits': {('werkgever', 'cv', 'sterk')} if sterk else set(),
+            'match': set(), 'url': link, 'title': (row.get('title') or '')[:150], 'query': '',
+        }
+    try:
+        import goma_linkedin
+        goma_linkedin.beoordeel(temp, full, goma_cv, cache, teller=teller)
+    except Exception:
+        return 'verder'
+    if any(info.get('goma_geen_winnaar') for info in temp.values()):
+        return 'verder'
+    if sum(1 for info in temp.values() if info.get('goma_bevestigd')) == 1:
+        return 'stop'
+    return 'verder'
+
+
+def _linkedin_zeker_genoeg(candidates):
+    opts = [(v, i) for (t, v), i in candidates.items() if t == 'linkedin']
+    if not opts or any(i.get('goma_geen_winnaar') for _v, i in opts):
+        return False
+    if sum(1 for _v, i in opts if i.get('goma_bevestigd')) == 1:
+        return True
+
+    def sterk(info):
+        return sum(1 for x in (info.get('hits') or ()) if len(x) >= 3 and x[2] == 'sterk')
+
+    beste = sorted(opts, key=lambda o: sterk(o[1]), reverse=True)
+    if sterk(beste[0][1]) < 1 or _alleen_een_werkgever(beste[0][1]):
+        return False
+    if len(beste) == 1:
+        return True
+    return sterk(beste[0][1]) > sterk(beste[1][1])
+
+
+def _goma_cv(db, full, terms):
+    perioden = []
+    if db is not None:
+        doel = normalized_name(full)
+        for row in db.execute("SELECT name, snippet FROM docs WHERE status='cv'"):
+            if normalized_name(row['name']) == doel:
+                for werk, begin, eind in werk_periodes(row):
+                    perioden.append({'org': werk[1:] if str(werk).startswith('*') else werk,
+                                     'start': begin, 'eind': eind})
+    return {
+        'werkgevers': [t[1] for t in terms if t[0].startswith(('werkgever', 'stagebedrijf', 'bijbaan', 'organisatie'))],
+        'functies': [t[1] for t in terms if t[0] == 'functie'],
+        'opleidingen': [t[1] for t in terms if t[0] == 'school'],
+        'plaatsen': [t[1] for t in terms if 'plaats' in t[0]],
+        'perioden': perioden,
+    }
+
+
+def _linkedin_rij_toevoegen(candidates, result, words, full, terms):
+    url = (result or {}).get('url') or ''
+    title = (result or {}).get('title') or ''
+    content = (result or {}).get('content') or ''
+    for link in linkedins_in(url):
+        if not own_linkedin(link, title, words, full):
+            continue
+        info = candidates.setdefault(('linkedin', link), dict(
+            match=set(), hits=set(), url=url, title=title[:150], query=(result or {}).get('query') or ''))
+        if result.get('bron'):
+            info['zoekbron'] = result.get('bron')
+        if _linkedin_sterk_in_tekst(title, content, terms):
+            blob = normalized_name(title + ' ' + content)
+            for label, shown, phrase, weight in terms:
+                if weight == 'sterk' and phrase and re.search(r'(?<![a-z])' + re.escape(phrase) + r'(?![a-z])', blob):
+                    info['hits'].add((label, shown, weight))
+        slug = normalized_name(link.rsplit('/', 1)[-1].replace('-', ' '))
+        info['name_in_url'] = len(words) >= 2 and words[0] in slug and words[-1] in slug
+
+
 def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
-    """Zoek ontbrekende LinkedIn / e-mail / telefoon online op via Tavily.
-    Alleen voor personen bij wie iets ontbreekt. Een profiel heet pas
-    'waarschijnlijk' als het ook inhoudelijk overeenkomt met het cv
-    (werkgever, school, functie, plaats). Alles blijft een SUGGESTIE."""
+    """Zoek ontbrekende LinkedIn / e-mail / telefoon online.
+    LinkedIn dat al als persoonlijk profiel in het cv staat, wordt niet gezocht.
+    Ontbreekt het, dan: Serper, SerpApi, Tavily en Linkup.
+    Zodra een profiel overtuigend klopt, stopt het zoeken. Bij twijfel controleert Goma
+    en gaat de volgende zoekdienst verder zolang het budget dat toestaat.
+    Een profiel heet pas 'waarschijnlijk' als het ook inhoudelijk overeenkomt met het cv.
+    Alles blijft een SUGGESTIE."""
     key = os.environ.get('TAVILY_API_KEY', '').strip()
     try:
         import profielbron as profielen          # Apify
@@ -7127,8 +7404,14 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         profielen = None
     bd_aan = bool(profielen and profielen.sleutel())
     google_aan = bool(os.environ.get('SERPER_API_KEY', '').strip() or os.environ.get('SERPAPI_API_KEY', '').strip())
-    if not key and not bd_aan and not google_aan:
-        print('ONLINE: geen zoeksleutel ingesteld (Apify, Serper, SerpApi of Tavily); online aanvullen overgeslagen.', flush=True)
+    linkup_aan = bool(os.environ.get('LINKUP_API_KEY', '').strip())
+    todo = [p for p in people if p['naam'] and not p.get('naam_is_bedrijf') and not p.get('niet_voor_loxo') and not all(p[k] for k in ('email','telefoon','linkedin'))]
+    klaar = set()
+    if not key and not bd_aan and not google_aan and not linkup_aan:
+        print('ONLINE: geen zoeksleutel ingesteld (Apify, Serper, SerpApi, Tavily of Linkup); online aanvullen overgeslagen.', flush=True)
+        _linkedin_open_bewaren(out, people, todo, klaar)
+        LINKEDIN_DEZE_RUN['gedaan'] = True
+        LINKEDIN_DEZE_RUN['per_api'] = {}
         return False
     cache_path = out / 'online_cache.json'
     try:
@@ -7144,13 +7427,13 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
     google_used = 0
     google_via = {}
     tavily_out = False          # Tavily-tegoed op: verder via Google (Serper/SerpApi)
-    todo = [p for p in people if p['naam'] and not p.get('naam_is_bedrijf') and not p.get('niet_voor_loxo') and not all(p[k] for k in ('email','telefoon','linkedin'))]
     name_count = collections.Counter(normalized_name(p['naam']) for p in people if p['naam'])
+    keten = linkedin_keten_nieuw()
     if bd_aan or not key:
-        # Volgorde: Apify (profielgegevens) -> Serper -> SerpApi -> Tavily (laatste reserve).
+        # Mail/telefoon via Google blijven zoals ze waren. LinkedIn-zoeken heeft een eigen volgorde.
         tavily_out = True
     if bd_aan:
-        profielen_voorbereiden(people, todo, cache, cache_path, profielen, max_people)
+        profielen_voorbereiden(people, todo, cache, cache_path, profielen, max_people, db=db, keten=keten, klaar=klaar)
     print(f'ONLINE: {len(todo)} van {len(people)} personen missen LinkedIn, e-mail of telefoon.', flush=True)
     for person in todo:
         if checked >= max_people:
@@ -7245,14 +7528,30 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                  if evidence_term_ok(t[0].replace(' (groot)', ''), t[2])
                  or (t[0] == 'functie' and any(w.endswith(ROLE_WORDS) for w in t[2].split()))]
         candidates = {}   # (type, waarde) -> info
+        goma_cv = _goma_cv(db, full, terms)
+        goma_teller = {'n': 0}
+        zoek_stop = {'ja': False}
+
+        def linkedin_besluit_nu(rijen):
+            keuze = _linkedin_besluit(rijen, full, words, terms, goma_cv, cache, goma_teller)
+            if keuze == 'stop':
+                zoek_stop['ja'] = True
+            return keuze
+
         have = {'email': bool(person['email']), 'telefoon': bool(person['telefoon']),
                 'linkedin': bool(person['linkedin'])}
+        if have['linkedin'] and not linkedin_zoek.persoonlijke_url(person.get('linkedin') or ''):
+            person = dict(person, linkedin='')
+            have['linkedin'] = False
+        if linkedin_zoek.persoonlijke_url(person.get('linkedin') or ''):
+            klaar.add(person.get('persoon_id') or '')
         confirmed_li = next((k.split('|', 2)[2] for k, v in load_online_decisions(out).items()
                              if v == 'ja' and k.startswith((person.get('persoon_id') or normalized_name(full)) + '|linkedin|')), '')
         if confirmed_li and not have['linkedin']:
             # Door jou bevestigd: niet opnieuw zoeken, wel mail/telefoon op dit profiel zoeken.
             person = dict(person, linkedin=confirmed_li)
             have['linkedin'] = True
+            klaar.add(person.get('persoon_id') or '')
 
         def add(typ, value, url, title, query, fixed=None):
             if have.get(typ) is True:
@@ -7297,15 +7596,13 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
 
         # STAP 2 (1 credit): LinkedIn op naam + functie. STAP 3 (1 credit): eigen/ZZP-site, GitHub, freelance.
         queries = []
+        xray_plan = []
         search_failed = False      # netwerk-/certificaatfout: dan NIET 'niet gevonden' noteren
         if not have['linkedin']:
-            # Eerst op naam + werkgever (een specifiek bedrijf geeft echt bewijs op het profiel); bij een groot of
-            # vaag bedrijf (Albert Heijn, gemeente, eigen bedrijf) op naam + functie. Lukt het niet, dan zoekt de
-            # stap hieronder (orgcheck) nog via Google op werkgever/school.
-            specifiek_bedrijf = (len(emp) >= 3 and emp not in NL_PLACES and not VAGUE_EMPLOYERS.match(emp)
-                                 and not BIG_EMPLOYERS.match(emp) and employer_core)
-            zoekterm = f'"{employer_raw.replace(chr(34), "").strip()[:45]}"' if specifiek_bedrijf and employer_raw.strip() else role
-            queries.append(('linkedin', f'"{full}" {zoekterm}'.strip(), ['linkedin.com'], None))
+            # Sterke combinatie eerst (werkgever, functie, opleiding, plaats), daarna een lossere opdracht.
+            # Een groot of vaag bedrijf (Albert Heijn, gemeente) telt niet als zoekterm; dan de functie.
+            xray_plan = linkedin_xray_voor(person, db) or [f'site:linkedin.com/in/ "{full}"']
+            queries.append(('linkedin', xray_plan[0], ['linkedin.com'], None))
         # Tavily alleen voor LinkedIn. Mail/telefoon gaan via Google (Serper/SerpApi) op het zekere profiel.
         # De oude 'contact website zzp'-zoekopdracht (kostte Tavily-credits, leverde weinig op) alleen als je die aanzet.
         if (not have['email'] or not have['telefoon']) and os.environ.get('CV_ONLINE_CONTACT') == '1':
@@ -7332,9 +7629,39 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
             if cache_key in cache:
                 results = cache[cache_key]
                 summary_cached = True
+                if kind == 'linkedin':
+                    klaar.add(person.get('persoon_id') or '')
             else:
                 results = None
-                if not tavily_out:
+                if kind == 'linkedin':
+                    voor_bron = dict(keten.per_bron)
+                    rows, toestand = linkedin_zoek.zoek_profielen(
+                        xray_plan or [query], cache, keten, normalized_name(full),
+                        na_resultaat=linkedin_besluit_nu)
+                    for naam_bron, aantal in keten.per_bron.items():
+                        extra = aantal - voor_bron.get(naam_bron, 0)
+                        if not extra:
+                            continue
+                        if naam_bron == 'Tavily':
+                            used += extra
+                        else:
+                            google_used += extra
+                            google_via[naam_bron] = google_via.get(naam_bron, 0) + extra
+                    if toestand != 'af' and not rows:
+                        search_failed = True
+                        if keten.geen_bronnen_meer():
+                            print('ONLINE: geen zoekdienst meer over (Serper, SerpApi, Tavily, Linkup). '
+                                  'Deze scan gaat verder.', flush=True)
+                            stop = True
+                            break
+                        continue
+                    results = rows
+                    if toestand == 'af':
+                        klaar.add(person.get('persoon_id') or '')
+                        cache['q|' + cache_key] = (xray_plan or [query])[0]
+                        cache[cache_key] = [{k: r.get(k, '') for k in ('url', 'title', 'content', 'bron')} for r in results]
+                        time.sleep(delay)
+                elif not tavily_out:
                     try:
                         results = tavily_search(query, key, include_domains=domains, exclude_domains=excluded,
                                                 max_results=20 if kind == 'linkedin' else 8,
@@ -7343,6 +7670,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     except urllib.error.HTTPError as exc:
                         if exc.code in (401, 403):
                             print('ONLINE FOUT: Tavily-sleutel ongeldig of geweigerd. Controleer je sleutel.', flush=True)
+                            _linkedin_open_bewaren(out, people, todo, klaar)
                             return False
                         if exc.code in (429, 432, 433):
                             print('ONLINE: Tavily-tegoed op; verder via Google (Serper/SerpApi).', flush=True)
@@ -7355,7 +7683,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         print('ONLINE zoekfout:', type(exc).__name__, str(exc)[:120], flush=True)
                         search_failed = True
                         continue
-                if results is None:
+                if kind != 'linkedin' and results is None:
                     # Zoeken via Google (Serper, daarna SerpApi). Op? Dan als laatste Tavily (als er een sleutel is).
                     res, via = google_search(f'site:linkedin.com/in {query}' if kind == 'linkedin' else query)
                     if res is None and key and bd_aan:
@@ -7368,28 +7696,30 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                             print('ONLINE: ook Tavily lukte niet (' + str(exc)[:80] + ').', flush=True)
                             res = None
                     if res is None:
-                        print('ONLINE: geen zoektegoed meer (Serper, SerpApi en Tavily); rest volgende keer.', flush=True)
+                        print('ONLINE: geen zoektegoed meer (Serper, SerpApi, Tavily en Linkup). '
+                              'Deze scan gaat verder.', flush=True)
                         stop = True
                         break
                     if via != 'Tavily':
                         google_used += 1
                         google_via[via] = google_via.get(via, 0) + 1
                     results = res
-                cache['q|' + cache_key] = query
-                cache[cache_key] = [dict({k: r.get(k, '') for k in ('url', 'title', 'content')},
-                                         **({'raw': own_profile_text(r.get('raw_content'))}
-                                            if kind == 'linkedin' and r.get('raw_content') else {}))
-                                    for r in results]
-                time.sleep(delay)
+                if kind != 'linkedin':
+                    cache['q|' + cache_key] = query
+                    cache[cache_key] = [{k: r.get(k, '') for k in ('url', 'title', 'content', 'bron')} for r in results]
+                    time.sleep(delay)
             for result in results:
                 url = result.get('url', '')
                 title = html.unescape(re.sub(r'<[^>]+>', ' ', result.get('title', '') or ''))
                 content = result.get('content', '') or ''
+                uit_profiel = False
                 if bd_aan and kind == 'linkedin':
                     # Volledig openbaar profiel van Apify (werkgevers, functies, jaren, opleidingen, about).
                     ptekst = profielen.tekst_van(cache, profielen.slug(url))
                     if ptekst:
                         content = content + '\n' + ptekst
+                        if _linkedin_soorten_in_tekst(ptekst, terms):
+                            uit_profiel = True
                 if result.get('raw'):
                     content = content + '\n' + own_profile_text(result['raw'])
                 context = normalized_name(title + ' ' + content + ' ' + url.replace('-', ' '))
@@ -7484,10 +7814,14 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     if typ == 'linkedin':
                         slug = normalized_name(value.rsplit('/', 1)[-1].replace('-', ' '))
                         info['name_in_url'] = len(words) >= 2 and words[0] in slug and words[-1] in slug
+                        if result.get('bron'):
+                            info['zoekbron'] = result.get('bron')
+                        if uit_profiel:
+                            info['apify_bevestigd'] = True
                     if typ == 'email':
                         local = normalized_name(value.split('@')[0].replace('.', ' ').replace('_', ' '))
                         info['name_in_url'] = bool(words) and words[-1] in local
-            if (kind == 'linkedin' and query != f'"{full}"' and not have['linkedin']
+            if (kind == 'linkedin' and not xray_plan and query != f'"{full}"' and not have['linkedin']
                     and not any(t == 'linkedin' for (t, _v) in candidates)):
                 # Met functie erbij niets gevonden: nog één keer alleen op de naam zoeken (1 credit).
                 # Zo komen ook profielen boven met een andere functie dan in het cv (als 'controleren').
@@ -7497,7 +7831,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         # Google (Serper/SerpApi): site:linkedin.com/in "naam" "bedrijf". Alleen een treffer op
         # precies een van de gevonden profielen telt (max 2 zoekopdrachten per persoon, daarna cache).
         li_opts = [(v, i) for (t, v), i in candidates.items() if t == 'linkedin']
-        if not have['linkedin'] and not confirmed_li:
+        if not have['linkedin'] and not confirmed_li and not zoek_stop['ja']:
             slugs = {linkedin_slug(v): i for v, i in li_opts}
             raw_orgs = ' '.join(str(person.get(k) or '') for k in ('laatst_bekende_werkgever', 'huidige_functie')) + ' ' + str(stage or '')
             for lbl, shown, phrase, wgt in [t for t in terms if t[3] == 'sterk'][:2]:
@@ -7546,7 +7880,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         # site:linkedin.com/in "naam" ("erasmus universiteit" OR "coolblue" OR "rotterdam").
         # Alleen een treffer op een van de al gevonden profielen telt, met het gewone gewicht.
         li_opts = [(v, i) for (t, v), i in candidates.items() if t == 'linkedin']
-        if li_opts and not have['linkedin'] and not any(x[2] == 'sterk' for _v, i in li_opts for x in i['hits']):
+        if li_opts and not have['linkedin'] and not zoek_stop['ja'] and not any(x[2] == 'sterk' for _v, i in li_opts for x in i['hits']):
             slugs = {linkedin_slug(v): i for v, i in li_opts}
             extra = [t for t in terms if t[3] == 'middel' and t[2] != '__stagiair__'][:3]
             extra += [t for t in terms if t[0] == 'woonplaats'][:1]
@@ -7605,10 +7939,44 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         candidates.pop(('linkedin', value), None)
                 if ai_rejected:
                     print(f'AI-CONTROLE: {full} – {len(ai_rejected)} naamgeno(o)t(en) afgewezen', flush=True)
+        # Goma controleert alleen een al gevonden profiel. Een link uit het cv slaat deze stap over.
+        def goma_op_kandidaten():
+            if have['linkedin'] is True and person.get('linkedin'):
+                return
+            try:
+                import goma_linkedin
+                goma_linkedin.beoordeel(candidates, full, goma_cv, cache, teller=goma_teller)
+            except Exception as exc:
+                print('GOMA: overgeslagen (' + type(exc).__name__ + ')', flush=True)
+
+        goma_op_kandidaten()
+        laatste = linkedin_zoek.laatste_bron(keten)
+        if (not (have['linkedin'] is True and person.get('linkedin')) and laatste
+                and laatste != linkedin_zoek.Bronnen.VOLGORDE[-1]
+                and not _linkedin_zeker_genoeg(candidates) and not zoek_stop['ja']):
+            extra_plan = xray_plan or [f'site:linkedin.com/in/ "{full}"']
+            voor_bron = dict(keten.per_bron)
+            extra, _toestand_extra = linkedin_zoek.zoek_profielen(
+                extra_plan, cache, keten, normalized_name(full),
+                na_resultaat=linkedin_besluit_nu, na_bron=laatste)
+            for naam_bron, aantal in keten.per_bron.items():
+                meer = aantal - voor_bron.get(naam_bron, 0)
+                if not meer:
+                    continue
+                if naam_bron == 'Tavily':
+                    used += meer
+                else:
+                    google_used += meer
+                    google_via[naam_bron] = google_via.get(naam_bron, 0) + meer
+            if extra:
+                for result in extra:
+                    _linkedin_rij_toevoegen(candidates, result, words, full, terms)
+                goma_op_kandidaten()
         # Per type de beste kandidaat kiezen en eerlijk labelen.
         summary = []
         zeker_link = None
         namesakes_only = 0    # alleen profielen met dezelfde naam, maar niets uit het cv klopt
+        goma_gelijk = 0       # meerdere profielen even aannemelijk: geen winnaar kiezen
         if have['linkedin'] is True and person.get('linkedin'):
             # LinkedIn staat al in het cv: dat profiel is zeker van deze persoon -> daar mail/telefoon zoeken.
             zeker_link = linkedins_in(person['linkedin'])[0] if linkedins_in(person['linkedin']) else None
@@ -7616,7 +7984,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         searched = set()      # waar ECHT online naar gezocht is (Google op het zekere profiel)
         for typ in ('linkedin', 'email', 'telefoon'):
             if typ != 'linkedin' and zeker_link and not extracted and (not have['email'] or not have['telefoon']):
-                # LinkedIn klopt zeker maar mail/telefoon ontbreken: Google X-ray op dat profiel (Serper).
+                # LinkedIn klopt zeker maar mail/telefoon ontbreken: zoeken via Serper, daarna SerpApi.
                 # Google toont in de zoektekst het stuk Info-tekst rond de zoekwoorden.
                 extracted = True
                 skey = os.environ.get('SERPER_API_KEY', '').strip()
@@ -7661,7 +8029,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                             ('mail', f'site:linkedin.com/in "{full}" ("mail" OR "@" OR "e-mail")')]
                 if bd_aan:
                     # Eerst gratis: e-mail/telefoon die de kandidaat zelf in zijn profiel (about/info) heeft gezet,
-                    # uit het Apify-profiel. Alleen wat dan nog ontbreekt: Google X-ray (Serper/SerpApi) hieronder.
+                    # uit het Apify-profiel. Alleen wat dan nog ontbreekt: zoeken via Serper of SerpApi.
                     g = profielen.gegevens_van(cache, profielen.slug(zeker_link))
                     eigen_tekst = fix_nl_mobile(ontsluier_email('\n'.join(
                         [g.get('kop', ''), g.get('over', ''), g.get('email', ''), g.get('telefoon', '')])))
@@ -7706,6 +8074,9 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
             options = [(v, info) for (t, v), info in candidates.items() if t == typ]
             if not options:
                 continue
+            if typ == 'linkedin' and all(i.get('goma_geen_winnaar') for _v, i in options):
+                goma_gelijk = len(options)
+                continue
             def weight(info):
                 # Elk kenmerk telt één keer (het sterkste): 'director' als bedrijf én in de functietitel is
                 # 1 ding, en 'woonplaats amsterdam' + 'werkplaats amsterdam' is 1 plaats, niet 2.
@@ -7723,7 +8094,8 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 st, me, sm = weight(info)
                 weak = sum(1 for x in info.get('hits', set()) if x[2] == 'zwak')
                 return (st + me + sm, st, me, weak)     # meeste overeenkomsten eerst; bij gelijk aantal: sterkste
-            options.sort(key=lambda o: (str(o[1].get('fixed', '')).startswith('waarschijnlijk'),
+            options.sort(key=lambda o: (bool(o[1].get('goma_bevestigd')),
+                                        str(o[1].get('fixed', '')).startswith('waarschijnlijk'),
                                         score_of(o[1])), reverse=True)
             if typ == 'linkedin' and not options[0][1].get('fixed') and not options[0][1].get('hits'):
                 # Alleen de naam komt overeen, verder niets: geen LinkedIn invullen en ook niet
@@ -7741,6 +8113,13 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     sure = info['fixed']
                 elif typ != 'linkedin' and zeker_link and info.get('from_linkedin') == zeker_link:
                     sure = 'waarschijnlijk (Info-tekst LinkedIn)'   # staat op het profiel dat zeker klopt
+                elif typ == 'linkedin' and info.get('goma_onvoldoende'):
+                    sure = 'controleren'
+                elif typ == 'linkedin' and info.get('goma_bevestigd') and rank == 0:
+                    sure = 'waarschijnlijk'
+                elif typ == 'linkedin' and _alleen_een_werkgever(info):
+                    # Een zoeksnippet met alleen de naam en één werkgever is geen zekere koppeling.
+                    sure = 'controleren'
                 elif typ == 'linkedin' and info.get('ai'):
                     # Met AI-controle: 'ja' + echt bewijs = zeker. Bij een groot bedrijf/school moeten er 2 dingen
                     # kloppen. 'onzeker': alleen zeker met een specifiek (sterk) bewijs volgens de regels.
@@ -7754,7 +8133,7 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         (ai_o == 'ja') or
                         (ai_o == 'onzeker' and st >= 1 and ((sum(weight(info)) >= 2) or len(options) == 1)))
                     sure = 'waarschijnlijk' if ok else 'controleren'
-                elif (typ == 'linkedin' and rank == 0 and weight(info)[0] >= 1      # altijd een specifiek bewijs
+                elif (typ == 'linkedin' and not _alleen_een_werkgever(info) and rank == 0 and weight(info)[0] >= 1
                       and ((weight(info)[0] >= 1 and sum(weight(info)) >= 2) or weight(info)[1] >= 3
                            or (weight(info)[1] >= 2 and weight(info)[2] >= 1)
                            # Maar één profiel met deze naam gevonden én daarop klopt een echt kenmerk
@@ -7812,6 +8191,9 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                     reden += f' – {len(options) - 1} ander(e) profiel(en) met deze naam gevonden'
                 elif len(options) == 1 and typ == 'linkedin' and h:
                     reden += ' – enige LinkedIn-profiel met deze naam gevonden'
+                if typ == 'linkedin' and info.get('goma_bewijs'):
+                    b = info['goma_bewijs']
+                    reden += ' | bron ' + str(b.get('bron') or 'goma') + ' ' + str(b.get('tijd') or '')
                 collected.append(dict(persoon_id=person['persoon_id'], naam=full, type=typ, gevonden_waarde=value,
                     zekerheid=sure, overeenkomst=reden, bron_url=info['url'], brontitel=info['title'],
                     gevonden_op=dt.date.today().isoformat(), status='SUGGESTIE - HANDMATIG CONTROLEREN',
@@ -7833,13 +8215,16 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                 overeenkomst=(f'{len(ai_rejected)} profiel(en) met dezelfde naam gevonden, maar volgens de AI-controle '
                               'een andere persoon: ' + '; '.join(b for _v, r in ai_rejected for b in r.get('botst', [])[:1])[:200])
                              if ai_rejected else
+                             (f'{goma_gelijk} profielen even aannemelijk; geen LinkedIn gekozen') if goma_gelijk else
                              (f'{namesakes_only} profiel(en) met dezelfde naam gevonden, maar niets uit het cv klopt '
                               '(geen werkgever, school, functie of plaats)') if namesakes_only else
-                             'geen LinkedIn-profiel met precies deze naam gevonden',
+                             'geen LinkedIn-profiel met precies deze naam gevonden.',
                 bron_url='', brontitel='', gevonden_op=dt.date.today().isoformat(), status='', zoekopdracht='',
                 keuze='niets'))
         if summary:
             print(f'ONLINE GEVONDEN: {full} – ' + '; '.join(summary), flush=True)
+        elif goma_gelijk:
+            print(f'ONLINE: {full} – {goma_gelijk} profielen even aannemelijk, geen LinkedIn gekozen', flush=True)
         elif namesakes_only:
             print(f'ONLINE: {full} – {namesakes_only} profiel(en) met dezelfde naam, maar niets klopt: niet ingevuld', flush=True)
         elif search_failed:
@@ -7852,11 +8237,45 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
     except OSError:
         pass
+    _linkedin_open_bewaren(out, people, todo, klaar)
     save_csv(out / 'online_suggesties.csv', collected, ONLINE_COLS)
     print(f'ONLINE KLAAR: {checked} personen opgezocht, {used} nieuwe zoekopdrachten (credits) gebruikt'
-          + (f', Google-zoekopdrachten: ' + ', '.join(f'{n} via {k}' for k, n in google_via.items()) if google_used else '') + '. '
+          + (', ' + ', '.join(f'{n} via {k}' for k, n in google_via.items()) if google_used else '') + '. '
           'Zie in Excel de kolommen *_bron; twijfelgevallen via ‘Online controleren’.', flush=True)
+    LINKEDIN_DEZE_RUN['gedaan'] = True
+    LINKEDIN_DEZE_RUN['per_api'] = dict(google_via)
     return True
+
+
+LINKEDIN_DEZE_RUN = {'gedaan': False, 'per_api': {}}
+
+
+def linkedin_eindoverzicht(people, out):
+    """Eindcijfers van deze scan. Geen namen, geen adressen, geen sleutels."""
+    import goma_linkedin
+    mensen = [p for p in people or []
+              if (p.get('naam') or '').strip() and not p.get('naam_is_bedrijf') and not p.get('niet_voor_loxo')]
+
+    def eigen(person):
+        return bool(linkedin_zoek.persoonlijke_url(person.get('linkedin') or ''))
+
+    cv_n = sum(1 for p in mensen if eigen(p))
+    online_n = sum(1 for p in mensen if p.get('online_linkedin') and not eigen(p))
+    zonder = [p for p in mensen if not eigen(p) and not p.get('online_linkedin')]
+    niet_af = 0
+    if LINKEDIN_DEZE_RUN.get('gedaan'):
+        open_ids = set(linkedin_zoek.lees_open(Path(out) / linkedin_zoek.OPEN_BESTAND))
+        niet_af = sum(1 for p in zonder if (p.get('persoon_id') or '') in open_ids)
+    per = LINKEDIN_DEZE_RUN.get('per_api') or {}
+    print('LINKEDIN-OVERZICHT:', flush=True)
+    print(f'- Kandidaten: {len(mensen)}', flush=True)
+    print(f'- LinkedIn uit het cv: {cv_n}', flush=True)
+    print(f'- Online betrouwbaar bevestigd: {online_n}', flush=True)
+    print(f'- Zonder bevestigde LinkedIn: {len(zonder)}', flush=True)
+    print(f'- Niet volledig onderzocht (zoekdienst niet beschikbaar): {niet_af}', flush=True)
+    for naam in ('Serper', 'SerpApi', 'Tavily', 'Linkup'):
+        print(f'- Zoekopdrachten {naam}: {int(per.get(naam) or 0)}', flush=True)
+    print(f'- Goma-aanvragen: {int(goma_linkedin.aanvragen_deze_run)}', flush=True)
 
 
 def ai_naam_bevestigd(ai_naam, doc):
@@ -8118,7 +8537,8 @@ def main(argv=None):
             except Exception:
                 pass
             if online_suggestions(people,out,db=db,max_people=args.online_limit or 10**9):
-                build_exports(db,out)   # Excel opnieuw, nu met de online-kolommen
+                people = build_exports(db,out)   # Excel opnieuw, nu met de online-kolommen
+        linkedin_eindoverzicht(people, out)
     finally:
         db.close()
     return 1 if scan_error is not None else 0

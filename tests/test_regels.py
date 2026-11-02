@@ -16,8 +16,19 @@ sys.path.insert(0, str(ROOT))
 os.environ['TAVILY_API_KEY'] = 'test'
 os.environ['SERPER_API_KEY'] = 'test'
 os.environ['CV_AI'] = '0'          # zonder echt AI-model testen; AI-gedrag wordt hieronder nagebootst
+os.environ['LINKEDIN_RETRY_WACHT'] = '0'
+os.environ.pop('LINKUP_API_KEY', None)
+os.environ.pop('GOMA_API_KEY', None)
 import cv_crawler as c  # noqa: E402
 import json  # noqa: E402
+
+
+def _lege_zoekdienst(query, key):
+    return []
+
+
+c.serper_search = _lege_zoekdienst
+c.serpapi_search = _lege_zoekdienst
 import traceback
 def _hook(t, v, tb):
     print('::error::CRASH ' + ''.join(traceback.format_exception(t, v, tb)).replace(chr(10), ' | ')[-900:])
@@ -62,12 +73,16 @@ def li(slug, title, content):
     return {'url': f'https://nl.linkedin.com/in/{slug}', 'title': title, 'content': content}
 
 
-# 1. Enige profiel + specifiek bedrijf = zeker, met uitleg. Groot bedrijf alleen (Coolblue) = controleren (0 fouten).
+# 1. Naam + één werkgever in een zoekresultaat is nog niet zeker. Groot bedrijf alleen = controleren.
 b, x = online('Bram Hoekstra', 'Teamleider bij Datafabriek Noord', 'Datafabriek Noord', '',
               [li('bramhoekstra', 'Bram Hoekstra - Teamleider at Datafabriek Noord', 'Teamleider at Datafabriek Noord')])
-check('enige profiel + specifiek bedrijf = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
+check('enige profiel + alleen één werkgever = controleren', b.get('zekerheid') == 'controleren', b)
+b, _ = online('Bram Hoekstra', 'Monteur installaties bij Datafabriek Noord', 'Datafabriek Noord', '',
+              [li('bramhoekstra', 'Bram Hoekstra - Monteur installaties at Datafabriek Noord',
+                  'Monteur installaties at Datafabriek Noord')], functie='Monteur installaties')
+check('enige profiel + werkgever en functie = zeker', b.get('zekerheid') == 'waarschijnlijk', b)
 check('uitleg "enige LinkedIn-profiel"', 'enige LinkedIn-profiel' in b.get('overeenkomst', ''), b)
-check('Excel: vinkje bij zeker', '✓ zeker' in x['gezocht_zekerheid'], x)
+check('Excel: geen vinkje bij alleen een werkgever', '✓ zeker' not in x['gezocht_zekerheid'], x)
 b, x = online('Bram Hoekstra', 'Teamleider bij Coolblue', 'Coolblue', '',
               [li('bramhoekstra', 'Bram Hoekstra - Teamleider at Coolblue', 'Teamleider at Coolblue')])
 check('enige profiel + alleen groot bedrijf (Coolblue) = controleren', b.get('zekerheid') == 'controleren', b)
@@ -109,13 +124,13 @@ def g_qtb(q):
     return [], 'Serper'
 b, _ = online('Eva Kramer', 'Medewerker bij QTB Opleidingen en Trainingen', 'QTB Opleidingen en Trainingen', '',
               [li('eva-kramer-4f1a2c9', 'Eva Kramer - Docent', 'Docent. Zwolle.')], google=g_qtb, functie='Medewerker')
-check('QTB via Google (korte naam) = zeker', b.get('zekerheid') == 'waarschijnlijk' and 'qtb' in b.get('gevonden_waarde', ''), b)
+check('QTB via Google (korte naam) = gevonden, niet zeker op één werkgever', b.get('zekerheid') == 'controleren' and 'qtb' in b.get('gevonden_waarde', ''), b)
 
 # 8. Organisatie met 'opleiding' in de naam telt ook onder Opleiding op het profiel
 b, _ = online('Eva Kramer', 'Medewerker bij QTB Opleidingen en Trainingen', 'QTB Opleidingen en Trainingen', '',
               [li('eva-kramer-yx', 'Eva Kramer - YER', 'Opleiding: QTB Opleidingen en Trainingen, Fictief Marketing Instituut'),
                li('eva-kramer-2', 'Eva Kramer - Docent', 'Docent')], functie='Medewerker')
-check('QTB onder opleiding telt', b.get('zekerheid') == 'waarschijnlijk' and 'eva-kramer-yx' in b.get('gevonden_waarde', ''), b)
+check('QTB onder opleiding telt', b.get('zekerheid') == 'controleren' and 'eva-kramer-yx' in b.get('gevonden_waarde', ''), b)
 
 # 9. Losse woorden 'stage' en cv-woorden tellen niet
 b, _ = online('Romal Testman', 'Stagiair AI-toepassing bij Bedrijfje Fictief', 'IKEA', 'haarlem',
@@ -129,6 +144,8 @@ def kapot(*a, **k):
     raise c.urllib.error.URLError('CERTIFICATE_VERIFY_FAILED')
 out = Path(tempfile.mkdtemp())
 c.tavily_search = kapot
+c.serper_search = kapot
+c.serpapi_search = kapot
 c.google_search = lambda q: ([], 'Serper')
 db = c.db_open(out)
 db.execute("insert into docs(path,name,status,snippet,employer,sha,classifier_version) values('a','Jan Fout','cv','x','Y','j',?)",
@@ -139,6 +156,8 @@ c.online_suggestions([dict(naam='Jan Fout', persoon_id='p', email='a@b.nl', tele
 p = out / 'online_suggesties.csv'
 rows = list(csv.DictReader(open(p, encoding='utf-8-sig'), delimiter=';')) if p.exists() else []
 check('zoekfout wordt geen "niet gevonden"', not any(r['zekerheid'] == 'niet gevonden' for r in rows), rows)
+c.serper_search = _lege_zoekdienst
+c.serpapi_search = _lege_zoekdienst
 
 # 11. Woonplaats: adresregel, geen schoolnaam, geen achternaam
 check('woonplaats uit adres', c.woonplaats_from('Romal Omid\nHogeschool van Amsterdam\nAdres X 6, 2037 GJ Haarlem') == 'haarlem')
@@ -284,11 +303,11 @@ b, x = online('Bram Hoekstra', 'Teamleider klantenservice bij Coolblue', 'Coolbl
 check('AI ja + alleen groot bedrijf (1 ding) = controleren', b.get('zekerheid') == 'controleren', b)
 b, x = online('Ruben Hofstede', 'Software ontwikkelaar bij Topicus Deventer', 'Topicus', 'deventer',
               [li('rubenhofstede', 'Ruben Hofstede - Software Developer at Topicus', 'Software Developer at Topicus. Deventer')])
-check('AI ja + specifieke werkgever = zeker', b.get('zekerheid') == 'waarschijnlijk' and 'AI-controle' in x['gezocht_waarom'], (b, x['gezocht_waarom']))
+check('AI ja + alleen een werkgever = controleren', b.get('zekerheid') == 'controleren' and 'AI-controle' in x['gezocht_waarom'], (b, x['gezocht_waarom']))
 _fake(lambda prof: 'onzeker')
 b, x = online('Ruben Hofstede', 'Software ontwikkelaar bij Topicus Deventer', 'Topicus', 'deventer',
               [li('rubenhofstede', 'Ruben Hofstede - Software Developer at Topicus', 'Software Developer at Topicus. Deventer')])
-check('AI onzeker + specifieke werkgever + plaats = zeker (regels)', b.get('zekerheid') == 'waarschijnlijk', b)
+check('AI onzeker + één werkgever en een plaats = controleren', b.get('zekerheid') == 'controleren', b)
 ai_rechter.available, ai_rechter.judge = _orig
 
 for ruw, goed in [('+31 06 55857419', '+31655857419'), ('+31 6 1853 358', ''), ('+27 1172624', ''), ('+44 7700 900123', '+447700900123')]:
@@ -303,6 +322,8 @@ def _online_tav_op(naam, cvt, werkgever, woonplaats, google):
     out = Path(tempfile.mkdtemp())
     c.tavily_search = _tav_op
     c.google_search = google
+    c.serper_search = lambda query, key: (google(query)[0] or [])
+    c.serpapi_search = _lege_zoekdienst
     db = c.db_open(out)
     row = dict(path=str(out / 'cv.docx'), name=naam, status='cv', snippet=c.normalized_snippet(cvt), employer=werkgever,
                woonplaats=woonplaats, sha=naam, classifier_version=c.CLASSIFIER_VERSION)
@@ -319,6 +340,8 @@ def _g(q):
 b = _online_tav_op('Ruben Hofstede', 'Developer bij Topicus Deventer', 'Topicus', 'deventer', _g)
 check('Tavily op -> Google gebruikt en profiel gevonden', any('site:linkedin.com/in' in q for q in vragen) and 'ruben-hofstede' in b.get('gevonden_waarde', ''), (vragen, b))
 c.tavily_search = _old_online_tav
+c.serper_search = _lege_zoekdienst
+c.serpapi_search = _lege_zoekdienst
 
 # --- AI bij twijfelgevallen (nagebootst) ---
 import ai_rechter as _ar, json as _js
@@ -656,11 +679,11 @@ for _ruw, _goed in (('Engels Nederlands Duits', ''), ('Mergeformattom Coenraad',
     _x = c.clean_person_name(_ruw); _x = c.tidy_name(_x) if _x else _x
     check(f'naam "{_ruw}" -> "{_goed}"', _x == _goed, _x)
 
-# LinkedIn: eerst zoeken op naam + specifiek bedrijf; groot bedrijf -> naam + functie
+# LinkedIn: werkgever blijft een zoekterm, ook bij een groot bedrijf. Vage tekst niet.
 _vragen = []
 def _tav_rec(query, *a, **k):
     _vragen.append(query); return []
-for _wg, _fn, _verwacht in (('Datafabriek B.V.', 'Backend developer', 'Datafabriek'), ('Albert Heijn', 'Backend developer', 'Backend developer')):
+for _wg, _fn, _verwacht in (('Datafabriek B.V.', 'Backend developer', 'Datafabriek'), ('Albert Heijn', 'Backend developer', 'Albert Heijn')):
     _vragen.clear()
     _out = Path(tempfile.mkdtemp()); _db = c.db_open(_out)
     c.tavily_search = _tav_rec; c.google_search = lambda q: ([], 'Serper')

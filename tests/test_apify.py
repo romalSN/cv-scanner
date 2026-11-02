@@ -3,6 +3,8 @@ import json, os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ['APIFY_TOKEN'] = 'nep'
+os.environ.pop('LINKUP_API_KEY', None)
+os.environ.pop('GOMA_API_KEY', None)
 import apify_linkedin as ap  # noqa: E402
 fout = []
 def check(n, ok, info=''):
@@ -63,6 +65,11 @@ def nep_google(q):
         return ([{'url': 'https://nl.linkedin.com/in/jan-bakker-1', 'title': 'Jan Bakker - Java developer - LinkedIn', 'content': 'Utrecht'}], 'Serper')
     return ([], 'Serper')
 c.google_search = nep_google
+def nep_serper(query, key):
+    res, _via = nep_google(query)
+    return res
+c.serper_search = nep_serper
+c.serpapi_search = lambda query, key: []
 c.tavily_search = lambda *a, **k: (_ for _ in ()).throw(AssertionError('Tavily mag niet'))
 out = Path(tempfile.mkdtemp()); db = c.db_open(out)
 tekst_cv = 'Jan Bakker\nWerkervaring\n2016 - heden Java developer bij Datafabriek Noord, Utrecht\nOpleiding\n2008 - 2012 Hogeschool Utrecht'

@@ -4,3 +4,5 @@ _oude_versies_code/
 build/
 dist/
 *.spec
+*sleutel*.txt
+cv-scanner-sleutels.txt
