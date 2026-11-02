@@ -73,4 +73,13 @@ with tempfile.TemporaryDirectory() as out:
         assert 'scan_bezig.json' in pl['ProgramArguments'][2] and '--hervat' in pl['ProgramArguments'][2]
         gui.scan_wis(geheugen, script_pad=script)
         assert gui.scan_lees(geheugen) is None and not script.exists()
+
+import ai_rechter
+gb = 1024 ** 3
+licht = ai_rechter.ai_instellingen(8 * gb, 'darwin', 'arm64', 8)
+assert licht['n_gpu_layers'] == 0 and licht['n_ctx'] == 2560 and licht['n_threads'] == 2
+vol = ai_rechter.ai_instellingen(16 * gb, 'darwin', 'arm64', 8)
+assert vol['n_gpu_layers'] == -1 and vol['n_ctx'] == 4096
+windows = ai_rechter.ai_instellingen(32 * gb, 'win32', 'AMD64', 8)
+assert windows['n_gpu_layers'] == 0 and windows['n_ctx'] == 4096
 print('BASIS OK')

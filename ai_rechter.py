@@ -6,7 +6,9 @@ of van een naamgenoot? Draait met llama.cpp (llama-cpp-python) en het model Phi-
 - Ophalen gebeurt op de achtergrond tijdens het scannen. Is het nog niet klaar, of werkt de AI niet
   op deze computer, dan werkt de scanner gewoon zoals zonder AI.
 - De AI beslist nooit alleen: 'nee' wijst een profiel af; 'ja' telt alleen samen met echt bewijs
-  uit de regels (zie cv_crawler.online_suggestions)."""
+  uit de regels (zie cv_crawler.online_suggestions).
+- Op een Mac met 8 GB laadt de AI zuiniger, zodat andere programma's open kunnen blijven.
+  De vragen en de beslissing blijven gelijk."""
 from __future__ import annotations
 
 import json
@@ -150,16 +152,78 @@ def wait_download(max_seconds: float) -> bool:
     return model_ok()
 
 
+def ai_instellingen(ram_bytes: int, platform: str, machine: str, cpu_count: int) -> dict:
+    """8 GB: zuinig laden, zodat de controle naast andere programma's past. Meer geheugen: Metal op de M-chip."""
+    klein = 0 < ram_bytes < 12 * 1024 ** 3
+    if klein:
+        return {'n_ctx': 2560, 'n_batch': 128, 'n_threads': 2, 'n_gpu_layers': 0,
+                'use_mmap': True, 'use_mlock': False}
+    gpu = -1 if platform == 'darwin' and machine == 'arm64' else 0
+    return {'n_ctx': 4096, 'n_batch': 512, 'n_threads': max(2, (cpu_count or 4) - 1),
+            'n_gpu_layers': gpu, 'use_mmap': True, 'use_mlock': False}
+
+
+def _ram_bytes() -> int:
+    try:
+        if sys.platform == 'darwin':
+            return int(os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES'))
+        if sys.platform == 'win32':
+            import ctypes
+            class _Geheugen(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                            ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
+                            ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                            ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
+                            ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+            stat = _Geheugen()
+            stat.dwLength = ctypes.sizeof(_Geheugen)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullTotalPhys)
+    except (OSError, AttributeError, ValueError):
+        pass
+    return 0
+
+
 def _load():
     global _llm, _llm_error
     with _lock:
         if _llm is not None or _llm_error:
             return _llm
         try:
+            import inspect
             from llama_cpp import Llama
-            gpu = -1 if (sys.platform == 'darwin' and os.uname().machine == 'arm64') else 0
-            _llm = Llama(model_path=str(model_path()), n_ctx=4096, n_threads=max(2, (os.cpu_count() or 4) - 1),
-                         n_gpu_layers=gpu, verbose=False)
+            ram = _ram_bytes()
+            try:
+                machine = os.uname().machine
+            except AttributeError:
+                machine = os.environ.get('PROCESSOR_ARCHITECTURE', '')
+            inst = ai_instellingen(ram, sys.platform, machine, os.cpu_count() or 4)
+            if inst['n_threads'] == 2:
+                print("AI: zuinige controle, zodat andere programma's open kunnen blijven.", flush=True)
+            kwargs = {'model_path': str(model_path()), 'verbose': False, **inst}
+            if inst['n_threads'] == 2 and 'type_k' in inspect.signature(Llama.__init__).parameters:
+                try:
+                    from llama_cpp import llama_cpp
+                    kwargs['type_k'] = llama_cpp.GGML_TYPE_Q8_0
+                    kwargs['type_v'] = llama_cpp.GGML_TYPE_Q8_0
+                except (ImportError, AttributeError):
+                    pass
+            pogingen = [kwargs]
+            if 'type_k' in kwargs:
+                kaal = dict(kwargs)
+                kaal.pop('type_k', None)
+                kaal.pop('type_v', None)
+                pogingen.append(kaal)
+            laatste = None
+            for poging in pogingen:
+                try:
+                    _llm = Llama(**poging)
+                    break
+                except Exception as exc:
+                    laatste = exc
+                    _llm = None
+            if _llm is None and laatste is not None:
+                raise laatste
         except Exception as exc:
             _llm_error = f'{type(exc).__name__}: {str(exc)[:150]}'
             print('AI: laden lukte niet (' + _llm_error + '); verder zonder AI.', flush=True)
