@@ -1,0 +1,9 @@
+Kai Westerhuis
+Curriculum Vitae
+Telefoon: 06 0000 0012
+Profiel
+Afgestudeerde starter met analytisch vermogen en praktijkgerichte interesse.
+Opleiding
+2014 - 2018 HBO Informatica, Hogeschool Fictiva 5
+Vaardigheden
+Java, Docker, Kubernetes en cloudplatforms

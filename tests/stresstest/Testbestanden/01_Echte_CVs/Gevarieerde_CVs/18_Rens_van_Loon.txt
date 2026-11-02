@@ -1,0 +1,12 @@
+Resume
+Rens van Loon
+E-mail: rens.van.loon@example.com
+Telefoon: 06 0000 0017
+Professional Profile
+Software professional with a background in digital services.
+Work Experience
+2020 - present Software engineer at Kade Projecten
+Education
+2014 - 2018 HBO Informatica, Hogeschool Fictiva 2
+Technical Skills
+Python, cloud, SQL and testing

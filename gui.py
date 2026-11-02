@@ -15,6 +15,7 @@ import queue
 import re
 import sqlite3
 import unicodedata
+import zipfile
 import shutil
 import signal
 import subprocess
@@ -91,6 +92,22 @@ def load_key():
 SERPER_FILE = RUNTIME / 'serper_sleutel.txt'
 SERPAPI_FILE = RUNTIME / 'serpapi_sleutel.txt'
 APIFY_FILE = RUNTIME / 'apify_sleutel.txt'
+GOMA_FILE = RUNTIME / 'goma_sleutel.txt'
+LINKUP_FILE = RUNTIME / 'linkup_sleutel.txt'
+
+
+def load_linkup():
+    try:
+        return LINKUP_FILE.read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
+def load_goma():
+    try:
+        return GOMA_FILE.read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
 
 
 def load_apify():
@@ -101,8 +118,8 @@ def load_apify():
 
 
 def heeft_zoeksleutel():
-    """Online zoeken kan met Apify, Serper, SerpApi of Tavily (minstens één)."""
-    return any(f() for f in (load_apify, load_serper, load_serpapi, load_key))
+    """Online zoeken kan met Apify, Serper, SerpApi, Tavily of Linkup (minstens één)."""
+    return any(f() for f in (load_apify, load_serper, load_serpapi, load_key, load_linkup))
 
 
 def load_serpapi():
@@ -138,7 +155,8 @@ def save_key(key):
 
 
 SLEUTELBESTAND = 'cv-scanner-sleutels.txt'
-SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE, 'apify': APIFY_FILE}
+SLEUTEL_SOORTEN = {'tavily': KEY_FILE, 'serper': SERPER_FILE, 'serpapi': SERPAPI_FILE,
+                   'apify': APIFY_FILE, 'goma': GOMA_FILE, 'linkup': LINKUP_FILE}
 
 
 def _sleutelbestand_plekken():
@@ -158,7 +176,7 @@ def _sleutelbestand_plekken():
 
 
 def sleutels_importeren():
-    """Staat er een 'cv-scanner-sleutels.txt' (tavily=…, serper=…, serpapi=…)? Dan de sleutels op de vaste plek
+    """Staat er een 'cv-scanner-sleutels.txt' (tavily=…, serper=…, serpapi=…, apify=…, goma=…, linkup=…)? Dan de sleutels op de vaste plek
     zetten (dezelfde map als wanneer je ze zelf invult) en het bestand weghalen. Geeft de namen van de
     geïnstalleerde sleutels terug (nooit de sleutels zelf)."""
     for map_ in _sleutelbestand_plekken():
@@ -221,6 +239,35 @@ class Tooltip:
             self.tip.destroy()
             self.tip = None
 
+def list_twijfel(output: Path) -> list[dict]:
+    """Zelfde selectie als het venster Twijfelgevallen: unieke sha, huidige herkenning, laatste scan."""
+    dbp = output / 'cv_index.sqlite'
+    if not dbp.exists():
+        return []
+    con = sqlite3.connect(str(dbp))
+    con.row_factory = sqlite3.Row
+    try:
+        ver = con.execute('SELECT MAX(classifier_version) FROM docs').fetchone()[0] or 0
+        try:
+            start = json.loads((output / 'laatste_scan.json').read_text(encoding='utf-8'))['start_ns']
+        except (OSError, ValueError, KeyError):
+            start = 0
+        cols_now = {c[1] for c in con.execute('PRAGMA table_info(docs)')}
+        seen_col = 'gezien_ns' if 'gezien_ns' in cols_now else '0 AS gezien_ns'
+        rows = con.execute(f"SELECT path, name, reason, note, sha, archive, status, {seen_col} FROM docs WHERE status='review' "
+                           "AND classifier_version=? ORDER BY path", (ver,)).fetchall()
+    finally:
+        con.close()
+    seen, items = set(), []
+    for r in rows:
+        if start and (r['gezien_ns'] or 0) < start:
+            continue
+        if r['sha'] and r['sha'] not in seen:
+            seen.add(r['sha'])
+            items.append(dict(r))
+    return items
+
+
 def parse_progress(line: str) -> dict[str, str]:
     """Bepaalt de status uit de voortgangsregels van de crawler."""
     output: dict[str, str] = {}
@@ -236,6 +283,9 @@ def parse_progress(line: str) -> dict[str, str]:
     control = re.match(r'EXPORT-CONTROLE:\s*(.*)', line)
     if control:
         output['fouten'] = str(sum(int(n) for n in re.findall(r'(\d+) [A-Za-z]', control.group(1))))
+    twijfel_end = re.search(r'TWIJFEL-OVERZICHT \((\d+) documenten', line)
+    if twijfel_end:
+        output['twijfel'] = twijfel_end.group(1)
     if line.startswith('Scan afgerond:'):
         try:
             summary = ast.literal_eval(line.split(':', 1)[1].strip())
@@ -247,6 +297,128 @@ def parse_progress(line: str) -> dict[str, str]:
         except (ValueError, SyntaxError):
             pass
     return output
+
+
+def extra_scan_args(hervat=False) -> list[str]:
+    """Nieuwe scan leest alles opnieuw. Een hervatte scan slaat al opgeslagen bestanden over."""
+    if hervat:
+        return []
+    return ['--force']
+
+
+def pid_leeft(pid) -> bool:
+    """Of dit proces nog draait. Een dode scan van gisteren telt niet."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, SystemError):
+        return False
+    return True
+
+
+def scan_staat_pad(output) -> Path:
+    return Path(output) / 'scan_bezig.json'
+
+
+def scan_lees(output):
+    try:
+        data = json.loads(scan_staat_pad(output).read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def hervat_commando() -> list[str]:
+    """Programma dat na het opstarten de scan zelf weer start."""
+    exe = Path(sys.executable).resolve()
+    if not FROZEN and exe.name.lower() == 'python.exe':
+        venster = exe.with_name('pythonw.exe')
+        if venster.exists():
+            exe = venster
+    if FROZEN:
+        return [str(exe)]
+    return [str(exe), str(Path(__file__).resolve())]
+
+
+def hervat_plist(json_pad, args) -> dict:
+    import shlex
+    script = f'test -f {shlex.quote(str(json_pad))} && exec ' + ' '.join(shlex.quote(a) for a in args)
+    return {
+        'Label': 'nl.solutionnow.cv-scanner.hervat',
+        'RunAtLoad': True,
+        'ProgramArguments': ['/bin/bash', '-c', script],
+    }
+
+
+def _vbs_startregel(args) -> str:
+    delen = ' '.join('""' + str(a).replace('"', '""') + '""' for a in args)
+    return f'CreateObject("Wscript.Shell").Run "{delen}", 7, False'
+
+
+def hervat_script_pad() -> Path:
+    if sys.platform == 'win32':
+        basis = os.environ.get('APPDATA') or str(Path.home() / 'AppData' / 'Roaming')
+        return Path(basis) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Startup' / 'CV-Scanner-hervat.vbs'
+    return Path.home() / 'Library' / 'LaunchAgents' / 'nl.solutionnow.cv-scanner.hervat.plist'
+
+
+def hervat_taak_zet(aan, output, script_pad=None) -> bool:
+    """Na het inloggen zelf verder scannen. Uit als de scan klaar is of je op Stop klikte."""
+    pad = Path(script_pad) if script_pad else hervat_script_pad()
+    try:
+        if not aan:
+            pad.unlink(missing_ok=True)
+            return True
+        pad.parent.mkdir(parents=True, exist_ok=True)
+        json_pad = scan_staat_pad(output)
+        args = hervat_commando() + ['--hervat']
+        if str(pad).endswith('.plist') or (sys.platform == 'darwin' and script_pad is None):
+            import plistlib
+            with pad.open('wb') as fh:
+                plistlib.dump(hervat_plist(json_pad, args), fh)
+            return True
+        if sys.platform != 'win32' and script_pad is None:
+            return False
+        tekst = (
+            'Set fso = CreateObject("Scripting.FileSystemObject")\r\n'
+            f'If Not fso.FileExists("{str(json_pad).replace(chr(34), "")}") Then WScript.Quit 0\r\n'
+            + _vbs_startregel(args) + '\r\n'
+        )
+        pad.write_text(tekst, encoding='utf-16')
+        return True
+    except OSError:
+        return False
+
+
+def scan_bewaar(options, output, script_pad=None) -> None:
+    data = {
+        'root': options.get('root') or '',
+        'volumes': bool(options.get('volumes')),
+        'deep': bool(options.get('deep')),
+        'cloud': bool(options.get('cloud')),
+        'ocr': bool(options.get('ocr')),
+        'online': bool(options.get('online')),
+        'contact': bool(options.get('contact')),
+        'output': str(output),
+        'pid': os.getpid(),
+    }
+    pad = scan_staat_pad(output)
+    pad.parent.mkdir(parents=True, exist_ok=True)
+    pad.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    hervat_taak_zet(True, output, script_pad=script_pad)
+
+
+def scan_wis(output, script_pad=None) -> None:
+    try:
+        scan_staat_pad(output).unlink(missing_ok=True)
+    except OSError:
+        pass
+    hervat_taak_zet(False, output, script_pad=script_pad)
 
 
 def choose_python() -> str:
@@ -262,6 +434,37 @@ def prepare_runtime(post, stopping: threading.Event) -> Path:
         raise RuntimeError('Het pakket is onvolledig uitgepakt. Pak het volledige ZIP-bestand uit en probeer opnieuw.')
     post('log', 'PDF- en RTF-lezers zitten al in de download. Geen installatie of internet nodig.')
     return Path(sys.executable)
+
+
+EXCEL_READY_MARKER = 'excel_export_geldig.json'
+
+
+def geldige_excel_export(output):
+    """Open alleen een aantoonbaar volledig gemaakte Excel uit de huidige export.
+    Geen fallback naar oude xlsx-bestanden of verouderde laatste_excel.txt.
+    """
+    try:
+        out = Path(output).resolve()
+        meta = json.loads((out / EXCEL_READY_MARKER).read_text(encoding='utf-8'))
+        if meta.get('schema') != 1:
+            return None
+        name = meta.get('filename')
+        if not isinstance(name, str) or not re.fullmatch(
+                r'CV_Crawler_Resultaten(?:_\d{4}-\d{2}-\d{2}_\d{6})?\.xlsx', name):
+            return None
+        p = out / name
+        if not p.is_file() or p.is_symlink() or p.resolve().parent != out:
+            return None
+        stat = p.stat()
+        if stat.st_size < 300 or stat.st_size != meta.get('bytes') or stat.st_mtime_ns != meta.get('mtime_ns'):
+            return None
+        # Een oud/afgebroken bestand kan een .xlsx-extensie hebben maar geen Excel zijn.
+        with zipfile.ZipFile(p) as z:
+            if 'xl/workbook.xml' not in z.namelist() or z.testzip() is not None:
+                return None
+        return p
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
+        return None
 
 
 class ScannerApp:
@@ -306,6 +509,9 @@ class ScannerApp:
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.root.after(120, self.drain_events)
         threading.Thread(target=self.check_pdf_reader, daemon=True).start()
+        if '--hervat' in sys.argv:
+            self.root.withdraw()
+            self.root.after(400, self.hervat_als_nodig)
 
     def check_pdf_reader(self):
         """Toon bovenaan of de volledige PDF-lezer (cryptography) werkt."""
@@ -342,7 +548,7 @@ class ScannerApp:
         menubar = tk.Menu(self.root)
         settings = tk.Menu(menubar, tearoff=0)
         settings.add_command(label='Tavily-sleutel instellen…', command=self.set_key)
-        settings.add_command(label='Zoeksleutels (Apify/Serper/SerpApi)…', command=self.set_serper)
+        settings.add_command(label='Zoeksleutels (Apify/Serper/SerpApi/Goma/Linkup)…', command=self.set_serper)
         settings.add_separator()
         settings.add_command(label='Nu online aanvullen', command=self.online)
         settings.add_command(label='Online gevonden controleren…', command=self.open_online_check)
@@ -475,7 +681,7 @@ class ScannerApp:
         foot = tk.Frame(outer, bg=BACKGROUND)
         foot.pack(fill='x', pady=(8, 0))
         for text, cmd in (('Toegang en privacy', self.permissions), ('Tavily-sleutel instellen', self.set_key),
-                          ('Zoeksleutels (Apify/Serper/SerpApi)', self.set_serper),
+                          ('Zoeksleutels (Apify/Serper/SerpApi/Goma/Linkup)', self.set_serper),
                           ('Nu online aanvullen', self.online)):
             link = tk.Label(foot, text=text, font=(FONT, 9, 'underline'), fg=MUTED, bg=BACKGROUND, cursor='hand2')
             link.pack(side='left', padx=(0, 16))
@@ -648,6 +854,7 @@ class ScannerApp:
         self.folder_button.configure(state='disabled' if active else 'normal')
         self.stop_button.configure(state='normal' if active else 'disabled')
         self.refresh_button.configure(state='disabled' if active else 'normal')
+        self.excel_button.configure(state='disabled' if active else 'normal')
         for b in ('clean_button', 'undo_button', 'doubt_button', 'confirm_button'):
             if hasattr(self, b):
                 getattr(self, b).configure(state='disabled' if active else 'normal')
@@ -675,12 +882,45 @@ class ScannerApp:
             self.source_label.set(str(self.custom_root))
             self.launch(mode='scan')
 
-    def launch(self, *, mode='scan', online_key=''):
+    def hervat_als_nodig(self):
+        """Na het opstarten verdergaan zonder opnieuw op Scan hele pc te klikken."""
+        data = scan_lees(self.output)
+        if not data:
+            try:
+                self.root.deiconify()
+            except tk.TclError:
+                pass
+            return
+        if pid_leeft(data.get('pid')):
+            self.write_log('De scan draait al. Deze tweede start doet niets.', 'muted')
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+            return
+        self.custom_root = Path(data['root']) if data.get('root') else None
+        self.volumes.set(bool(data.get('volumes')))
+        self.deep.set(bool(data.get('deep')))
+        self.cloud.set(bool(data.get('cloud')))
+        self.ocr.set(bool(data.get('ocr')))
+        self.online_fill.set(bool(data.get('online')))
+        self.online_contact.set(bool(data.get('contact')))
+        if self.custom_root:
+            self.source_label.set(str(self.custom_root))
+        try:
+            self.root.iconify()
+        except tk.TclError:
+            pass
+        self.write_log('De pc was uit. De scan gaat vanzelf verder op de achtergrond. '
+                       'Al gelezen bestanden worden overgeslagen.', 'info')
+        self.launch(mode='scan', hervat=True)
+
+    def launch(self, *, mode='scan', online_key='', hervat=False):
         scan = mode == 'scan'
         if self.running:
             return
         self.online_fresh = False
-        if mode == 'online' or (scan and self.online_fill.get()):
+        if not hervat and (mode == 'online' or (scan and self.online_fill.get())):
             if (self.output / 'online_cache.json').exists():
                 answer = messagebox.askyesnocancel('Online zoeken',
                     'Er zijn al eerder zoekresultaten opgeslagen.\n\n'
@@ -692,7 +932,33 @@ class ScannerApp:
                     return
                 self.online_fresh = bool(answer)
         self.stopping.clear()
+        # Vanaf het begin van een nieuwe export is een eerdere Excel NIET meer actueel.
+        # Bij een crash blijft de oude XLSX op schijf voor herstel, maar Open Excel toont hem niet.
+        if mode in ('scan', 'export', 'online', 'opschonen', 'terugzetten'):
+            try:
+                (self.output / EXCEL_READY_MARKER).unlink(missing_ok=True)
+            except OSError as exc:
+                messagebox.showerror('Excel-uitvoer', f'De vorige Excel-status kan niet worden gewist: {exc}',
+                                     parent=self.root)
+                return
         self.last_mode = mode
+        self.hervat_start = bool(hervat)
+        if scan:
+            options_nu = {'root': str(self.custom_root) if self.custom_root else '',
+                          'volumes': self.volumes.get(), 'deep': self.deep.get(), 'cloud': self.cloud.get(),
+                          'ocr': self.ocr.get(), 'online': self.online_fill.get(),
+                          'contact': self.online_contact.get()}
+            try:
+                scan_bewaar(options_nu, self.output)
+            except OSError as exc:
+                self.write_log(f'Automatisch verdergaan na een herstart kon niet worden klaargezet: {exc}', 'warn')
+            else:
+                if hervat_script_pad().exists():
+                    self.write_log('Zet je de pc uit, dan gaat deze scan morgen vanzelf verder na het opstarten. '
+                                   'Je hoeft niet opnieuw op Scan hele pc te klikken.', 'info')
+                else:
+                    self.write_log('De scan onthoudt waar hij is. Automatisch starten na het opstarten '
+                                   'kon niet worden klaargezet.', 'warn')
         if scan:
             for key, var in self.metrics.items():
                 var.set('—' if key in ('personen','fouten') else '0')
@@ -703,7 +969,7 @@ class ScannerApp:
         options = {'root': str(self.custom_root) if self.custom_root else '',
                    'volumes': self.volumes.get(), 'deep': self.deep.get(), 'cloud': self.cloud.get(),
                    'ocr': self.ocr.get(), 'online': self.online_fill.get(),
-                   'contact': self.online_contact.get()}
+                   'contact': self.online_contact.get(), 'hervat': bool(hervat)}
         if scan and self.online_fill.get() and not online_key:
             online_key = load_key() or ('-' if heeft_zoeksleutel() else '')
         worker = threading.Thread(target=self.worker, args=(mode, online_key, options), daemon=True)
@@ -717,6 +983,7 @@ class ScannerApp:
                 raise InterruptedError('Geadviseerd om te stoppen.')
             cmd = ([str(python), '--backend'] if FROZEN else [str(python), '-u', str(BACKEND)]) + ['--output', str(self.output)]
             if scan:
+                cmd += extra_scan_args(hervat=bool(options.get('hervat')))
                 if options['root']:
                     cmd += ['--root', options['root']]
                 elif options['volumes']:
@@ -749,6 +1016,10 @@ class ScannerApp:
                 env['SERPAPI_API_KEY'] = load_serpapi()
             if load_apify():
                 env['APIFY_TOKEN'] = load_apify()
+            if load_goma():
+                env['GOMA_API_KEY'] = load_goma()
+            if load_linkup():
+                env['LINKUP_API_KEY'] = load_linkup()
             if online_key and online_key != '-':
                 env['TAVILY_API_KEY'] = online_key
             if online_key:
@@ -861,6 +1132,21 @@ class ScannerApp:
                             self.metrics[key].set(value)
                 elif kind == 'finished':
                     self.set_running(False)
+                    rc_nu, gestopt, _hersteld = payload
+                    if getattr(self, 'last_mode', '') == 'scan' and (gestopt or rc_nu == 0):
+                        scan_wis(self.output)
+                        if gestopt:
+                            self.write_log('Automatisch verdergaan na een herstart is uitgezet.', 'muted')
+                    if getattr(self, 'hervat_start', False):
+                        try:
+                            self.root.deiconify()
+                            self.root.lift()
+                        except tk.TclError:
+                            pass
+                    try:
+                        self.metrics['twijfel'].set(str(len(list_twijfel(self.output))))
+                    except Exception:
+                        pass
                     rc, stopped, recovered = payload
                     if getattr(self, 'last_mode', '') == 'plan':
                         self.status.set('Klaar om op te schonen.')
@@ -872,8 +1158,10 @@ class ScannerApp:
                         self.status.set('Scan gestopt. Excel met bewaarde gegevens gemaakt.' if recovered else
                                         'Scan gestopt. Eerder opgeslagen werk blijft behouden.')
                     elif rc == 0:
-                        self.status.set('Klaar! Je Excel-overzicht staat klaar.' if excel_exists
-                                        else 'Klaar. Er is nog geen Excel-bestand gevonden.')
+                        self.status.set('Klaar! De NIEUWE Excel is gevalideerd en staat klaar.' if excel_exists
+                                        else 'Export niet geldig: geen nieuwe Excel beschikbaar.')
+                        if not excel_exists:
+                            self.write_log('FOUT: exportproces klaar zonder geldig nieuw Excel-overzicht; oude Excel niet openen.')
                     else:
                         self.status.set('Scan onderbroken, maar Excel met bewaarde gegevens gemaakt.' if recovered else
                                         'Scan onverwacht gestopt. Bekijk de laatste regels bij Activiteit.'
@@ -916,16 +1204,8 @@ class ScannerApp:
                 pass
 
     def latest_excel(self):
-        """Nieuwste export: volgt laatste_excel.txt, anders het nieuwste xlsx-bestand."""
-        try:
-            pointer = (self.output / 'laatste_excel.txt').read_text(encoding='utf-8').strip()
-            if pointer and Path(pointer).is_file():
-                return Path(pointer)
-        except OSError:
-            pass
-        files = [f for f in self.output.glob('CV_Crawler_Resultaten*.xlsx')
-                 if not f.name.startswith('~$') and '.bezig.' not in f.name]
-        return max(files, key=lambda f: f.stat().st_mtime) if files else None
+        """Alleen de laatst BEWEZEN geslaagde export, nooit een oude XLSX-fallback."""
+        return geldige_excel_export(self.output)
 
     def open_results(self):
         self.output.mkdir(parents=True, exist_ok=True)
@@ -937,21 +1217,28 @@ class ScannerApp:
             messagebox.showinfo('Resultaten', str(self.output), parent=self.root)
 
     def open_excel(self):
+        if self.running:
+            messagebox.showinfo('Excel wordt bijgewerkt',
+                                'Er wordt nog een nieuw Excel-overzicht gemaakt. Oude exports worden niet geopend.',
+                                parent=self.root)
+            return
         excel = self.latest_excel()
         if excel is None:
-            if (self.output / 'cv_index.sqlite').exists() and not self.running:
-                self.open_when_ready = True
-                self.launch(mode='export')
+            messagebox.showinfo('Geen actuele Excel',
+                'Er is geen nieuwe, geslaagde Excel-export beschikbaar.\n\n'
+                'Klik op ‘Excel bijwerken’ om een nieuw overzicht te maken. '
+                'Bij een fout blijft de oude Excel gesloten; zie ‘Activiteit’ voor de oorzaak.',
+                parent=self.root)
+            return
+        try:
+            if sys.platform == 'win32':
+                os.startfile(str(excel))
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', str(excel)])
             else:
-                messagebox.showinfo('Nog geen Excel',
-                    'Er staat nog geen export klaar. Heb je al gescand? Klik dan op Excel bijwerken. ' +
-                    'Als de scan nog bezig is, wacht dan even tot deze klaar is.', parent=self.root)
-        elif sys.platform == 'win32':
-            os.startfile(str(excel))
-        elif sys.platform == 'darwin':
-            subprocess.Popen(['open', str(excel)])
-        else:
-            messagebox.showinfo('Excel', str(excel), parent=self.root)
+                messagebox.showinfo('Excel', str(excel), parent=self.root)
+        except OSError as exc:
+            messagebox.showerror('Excel openen mislukt', str(exc), parent=self.root)
 
     def open_candidates(self):
         """Kandidaten als nette tabel in de scanner. Alleen de belangrijke kolommen zichtbaar;
@@ -1000,14 +1287,15 @@ class ScannerApp:
                 return 'in/' + t.split('/in/', 1)[1].strip('/').split('?')[0]
             return t
 
-        # Zichtbaar: (kop, breedte, waarde). De rest (ID's, bron, waarom) staat in het detailvak.
-        visible = [('Naam', 200, lambda r: flat(r.get('naam', ''))),
-                   ('E-mail', 220, lambda r: flat(r.get('email', ''))),
-                   ('Telefoon', 125, lambda r: flat(r.get('telefoon', ''))),
-                   ('LinkedIn', 210, linkedin_short),
-                   ('Online', 140, status),
-                   ('Functie', 180, lambda r: flat(r.get('huidige_functie', ''))),
-                   ('Werkgever', 170, lambda r: flat(r.get('laatst_bekende_werkgever', '')))]
+        # Zichtbaar: (kop, waarde). Breedte volgt de langste tekst, zodat niets halverwege afgekapt wordt.
+        # ID's en bron-kolommen blijven in het detailvak.
+        visible = [('Naam', lambda r: flat(r.get('naam', ''))),
+                   ('E-mail', lambda r: flat(r.get('email', ''))),
+                   ('Telefoon', lambda r: flat(r.get('telefoon', ''))),
+                   ('LinkedIn', linkedin_short),
+                   ('Online', status),
+                   ('Functie', lambda r: flat(r.get('huidige_functie', ''))),
+                   ('Werkgever', lambda r: flat(r.get('laatst_bekende_werkgever', '')))]
         if not any(r.get('huidige_functie') or r.get('laatst_bekende_werkgever') for r in rows):
             visible = visible[:5]
         names = {'kandidaat_id': 'Kandidaat-ID', 'cv_id': 'Cv-ID', 'email_bron': 'E-mail komt uit',
@@ -1019,12 +1307,17 @@ class ScannerApp:
         win = tk.Toplevel(self.root)
         win.title(f'Kandidaten ({len(rows)})')
         win.configure(bg=PANEL)
-        win.geometry('1200x720')
+        win.geometry('1400x820')
+        try:
+            win.state('zoomed')
+        except tk.TclError:
+            pass
         style = ttk.Style(win)
         rowfont = tkfont.Font(family=FONT, size=11)
+        headfont = tkfont.Font(family=FONT, size=10, weight='bold')
         style.configure('Kand.Treeview', font=rowfont, rowheight=int(rowfont.metrics('linespace') * 1.9),
                         background=CARD, fieldbackground=CARD, foreground=TEXT, borderwidth=0)
-        style.configure('Kand.Treeview.Heading', font=(FONT, 10, 'bold'), padding=(6, 6))
+        style.configure('Kand.Treeview.Heading', font=(FONT, 10, 'bold'), padding=(8, 8))
         style.map('Kand.Treeview', background=[('selected', ACCENT)], foreground=[('selected', '#ffffff')])
 
         top = tk.Frame(win, bg=PANEL)
@@ -1037,13 +1330,14 @@ class ScannerApp:
         count = tk.StringVar()
         tk.Label(top, textvariable=count, font=(FONT, 10), fg=MUTED, bg=PANEL).pack(side='left')
         tk.Label(win, text='Dubbelklik = cv openen  ·  klik op een kolomkop = sorteren  ·  '
-                 'zoeken werkt op alles, ook op ID', font=(FONT, 10), fg=MUTED, bg=PANEL
+                 'sleep een kolomrand om hem breder te maken  ·  zoeken werkt op alles, ook op ID',
+                 font=(FONT, 10), fg=MUTED, bg=PANEL
                  ).pack(anchor='w', padx=16, pady=(0, 8))
 
         pane = tk.PanedWindow(win, orient='vertical', bg=PANEL, sashwidth=6, bd=0)
         pane.pack(fill='both', expand=True, padx=16)
         body = tk.Frame(pane, bg=PANEL)
-        heads = [h for h, _w, _f in visible]
+        heads = [h for h, _f in visible]
         tree = ttk.Treeview(body, columns=heads, show='headings', style='Kand.Treeview', selectmode='browse')
         ys = ttk.Scrollbar(body, orient='vertical', command=tree.yview)
         xs = ttk.Scrollbar(body, orient='horizontal', command=tree.xview)
@@ -1051,21 +1345,36 @@ class ScannerApp:
         ys.pack(side='right', fill='y')
         xs.pack(side='bottom', fill='x')
         tree.pack(side='left', fill='both', expand=True)
-        for h, w, _f in visible:
-            tree.column(h, width=w, minwidth=70, stretch=(h == 'Naam'), anchor='w')
+
+        def kolom_breedte(header, values):
+            """Breed genoeg voor de hele tekst, zoals een Excel-kolom. Heel lange zinnen blijven sleepbaar."""
+            need = headfont.measure(header + '  ▲')
+            for value in values:
+                if value:
+                    need = max(need, rowfont.measure(value))
+            return min(max(need + 36, 140), 640)
+
+        for h, f in visible:
+            width = kolom_breedte(h, [f(r) for r in rows])
+            tree.column(h, width=width, minwidth=width, stretch=False, anchor='w')
         tree.tag_configure('odd', background='#f4f7f9')
         tree.tag_configure('even', background=CARD)
-        detail = tk.Text(pane, height=9, wrap='word', font=(FONT, 10), bg=CARD, fg=TEXT, relief='flat',
+        detail_wrap = tk.Frame(pane, bg=PANEL)
+        detail = tk.Text(detail_wrap, height=8, wrap='word', font=(FONT, 11), bg=CARD, fg=TEXT, relief='flat',
                          padx=12, pady=10, highlightthickness=1, highlightbackground=LINE)
-        detail.tag_configure('h', font=(FONT, 12, 'bold'))
+        detail_scroll = ttk.Scrollbar(detail_wrap, orient='vertical', command=detail.yview)
+        detail.configure(yscrollcommand=detail_scroll.set)
+        detail_scroll.pack(side='right', fill='y')
+        detail.pack(side='left', fill='both', expand=True)
+        detail.tag_configure('h', font=(FONT, 13, 'bold'))
         detail.tag_configure('k', foreground=MUTED)
         detail.configure(state='disabled')
         pane.add(body, stretch='always')
-        pane.add(detail, stretch='never')
+        pane.add(detail_wrap, stretch='never')
 
         order = {'col': 'Naam', 'rev': False}
         shown = {}
-        getter = {h: f for h, _w, f in visible}
+        getter = {h: f for h, f in visible}
         search_text = [' '.join(flat(r.get(c, '')) for c in cols).lower() for r in rows]
 
         def fill(*_a):
@@ -1076,7 +1385,7 @@ class ScannerApp:
             tree.delete(*tree.get_children())
             shown.clear()
             for n, i in enumerate(items):
-                iid = tree.insert('', 'end', values=[f(rows[i]) for _h, _w, f in visible],
+                iid = tree.insert('', 'end', values=[f(rows[i]) for _h, f in visible],
                                   tags=('odd' if n % 2 else 'even',))
                 shown[iid] = rows[i]
             count.set(f'{len(items)} van {len(rows)} kandidaten')
@@ -1157,6 +1466,43 @@ class ScannerApp:
         tree.bind('<<TreeviewSelect>>', show_detail)
         tree.bind('<Double-1>', double)
         tree.bind('<Return>', lambda _e: open_cv())
+        tip = {'win': None, 'key': None}
+
+        def hide_tip(_e=None):
+            if tip['win'] is not None:
+                tip['win'].destroy()
+                tip['win'] = None
+                tip['key'] = None
+
+        def show_tip(event):
+            row_id = tree.identify_row(event.y)
+            col_id = tree.identify_column(event.x)
+            if not row_id or not col_id:
+                hide_tip()
+                return
+            try:
+                header = heads[int(col_id.lstrip('#')) - 1]
+                value = str(tree.set(row_id, header) or '')
+            except (ValueError, IndexError, tk.TclError):
+                hide_tip()
+                return
+            if not value or rowfont.measure(value) + 28 <= int(tree.column(header, 'width')):
+                hide_tip()
+                return
+            if tip['key'] == (row_id, header):
+                return
+            hide_tip()
+            tw = tk.Toplevel(win)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f'+{event.x_root + 14}+{event.y_root + 18}')
+            tk.Label(tw, text=value, font=(FONT, 11), bg=CARD, fg=TEXT, justify='left',
+                     wraplength=560, padx=10, pady=8, highlightthickness=1,
+                     highlightbackground=LINE).pack()
+            tip['win'] = tw
+            tip['key'] = (row_id, header)
+
+        tree.bind('<Motion>', show_tip)
+        tree.bind('<Leave>', hide_tip)
         query.trace_add('write', fill)
         bar = tk.Frame(win, bg=PANEL)
         bar.pack(fill='x', padx=16, pady=12)
@@ -1212,18 +1558,29 @@ class ScannerApp:
     def set_serper(self):
         if self.running:
             return
-        for title, path, info in (
+        for title, path, info, extra in (
                 ('Apify (eerste keuze)', APIFY_FILE,
                  'Plak je Apify API-token (Settings > API & Integrations). Wordt als EERSTE gebruikt om openbare '
-                 'LinkedIn-profielen op te halen, met werkervaring en jaren ($4 per 1.000, $5 gratis per maand).'),
+                 'LinkedIn-profielen op te halen, met werkervaring en jaren ($4 per 1.000, $5 gratis per maand).',
+                 'Alleen gebruikt als een LinkedIn-profiel zeker klopt en mail/telefoon ontbreekt.'),
                 ('Google-sleutel 1: Serper', SERPER_FILE,
-                 'Plak je API-sleutel van serper.dev (2.500 gratis, eenmalig). Wordt EERST gebruikt.'),
+                 'Plak je API-sleutel van serper.dev (2.500 gratis, eenmalig). Wordt EERST gebruikt.',
+                 'Alleen gebruikt als een LinkedIn-profiel zeker klopt en mail/telefoon ontbreekt.'),
                 ('Google-sleutel 2: SerpApi', SERPAPI_FILE,
-                 'Plak je API-sleutel van serpapi.com (250 gratis per maand). Wordt gebruikt als Serper op is.')):
+                 'Plak je API-sleutel van serpapi.com (250 gratis per maand). Wordt gebruikt als Serper op is.',
+                 'Alleen gebruikt als een LinkedIn-profiel zeker klopt en mail/telefoon ontbreekt.'),
+                ('Goma (controle van een gevonden profiel)', GOMA_FILE,
+                 'Plak je Goma API-sleutel (trygoma.com). Goma zoekt niet: de scanner stuurt alleen een al '
+                 'gevonden LinkedIn-adres en vergelijkt zelf werkervaring en opleiding met het cv.',
+                 'Alleen gebruikt als een gevonden profiel nog bevestigd moet worden.'),
+                ('Linkup (na Serper, SerpApi en Tavily)', LINKUP_FILE,
+                 'Plak je Linkup API-sleutel. Wordt gebruikt als Serper, SerpApi en Tavily niets bruikbaars '
+                 'vinden of geen tegoed meer hebben.',
+                 'Alleen de zoekterm gaat mee. Het cv zelf wordt niet verstuurd.')):
             current = 'ingesteld' if path.exists() else 'niet ingesteld'
             key = simpledialog.askstring(title, info + f'\n\nNu: {current}.\n'
                                          'Leeg laten en OK = verwijderen · Annuleren = niets veranderen.\n'
-                                         'Alleen gebruikt als een LinkedIn-profiel zeker klopt en mail/telefoon ontbreekt.',
+                                         + extra,
                                          parent=self.root, show='*')
             if key is None:
                 continue
@@ -1264,31 +1621,10 @@ class ScannerApp:
     def open_doubts(self):
         if self.running:
             return
-        dbp = self.output / 'cv_index.sqlite'
-        if not dbp.exists():
+        items = list_twijfel(self.output)
+        if not items and not (self.output / 'cv_index.sqlite').exists():
             messagebox.showinfo('Eerst scannen', 'Start eerst een scan.', parent=self.root)
             return
-        con = sqlite3.connect(str(dbp))
-        con.row_factory = sqlite3.Row
-        try:
-            ver = con.execute('SELECT MAX(classifier_version) FROM docs').fetchone()[0] or 0
-            try:
-                start = json.loads((self.output / 'laatste_scan.json').read_text(encoding='utf-8'))['start_ns']
-            except (OSError, ValueError, KeyError):
-                start = 0
-            cols_now = {c[1] for c in con.execute('PRAGMA table_info(docs)')}
-            seen_col = 'gezien_ns' if 'gezien_ns' in cols_now else '0 AS gezien_ns'
-            rows = con.execute(f"SELECT path, name, reason, note, sha, archive, status, {seen_col} FROM docs WHERE status='review' "
-                               "AND classifier_version=? ORDER BY path", (ver,)).fetchall()
-        finally:
-            con.close()
-        seen, items = set(), []
-        for r in rows:
-            if start and (r['gezien_ns'] or 0) < start:
-                continue      # alleen wat in de LAATSTE scan is gezien; oude mislukkingen niet tonen
-            if r['sha'] and r['sha'] not in seen:
-                seen.add(r['sha'])
-                items.append(dict(r))
         if not items:
             messagebox.showinfo('Twijfelgevallen', 'Er zijn geen twijfelgevallen.', parent=self.root)
             return
@@ -1677,7 +2013,7 @@ def main():
     except Exception:
         gezet = []
     ScannerApp(root)
-    if gezet:
+    if gezet and '--hervat' not in sys.argv:
         namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi', 'apify': 'Apify'}
         root.after(800, lambda: messagebox.showinfo(
             'Sleutels geïnstalleerd', 'Zoeksleutels geïnstalleerd: ' + ', '.join(namen[g] for g in gezet) +
