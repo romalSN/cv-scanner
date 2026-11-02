@@ -57,4 +57,20 @@ with tempfile.TemporaryDirectory() as out:
     hergebruikt = gui.parse_progress("Scan afgerond: {'gevonden_ondersteund': 129, 'hergebruikt': 129, 'fouten': 2}")
     assert 'twijfel' not in hergebruikt
     assert gui.extra_scan_args() == ['--force']
+    assert gui.extra_scan_args(hervat=True) == []
+    assert gui.pid_leeft(None) is False and gui.pid_leeft(0) is False and gui.pid_leeft(os.getpid()) is False
+    with tempfile.TemporaryDirectory() as geheugen:
+        script = Path(geheugen) / 'start.vbs'
+        gui.scan_bewaar({'root': r'C:\cvs', 'volumes': True, 'deep': False, 'cloud': False,
+                         'ocr': True, 'online': False, 'contact': False}, geheugen, script_pad=script)
+        staat = gui.scan_lees(geheugen)
+        assert staat['root'] == r'C:\cvs' and staat['volumes'] is True and staat['ocr'] is True
+        assert staat['pid'] == os.getpid()
+        tekst = script.read_text(encoding='utf-16')
+        assert '--hervat' in tekst and 'scan_bezig.json' in tekst and 'Wscript.Shell' in tekst
+        pl = gui.hervat_plist(gui.scan_staat_pad(geheugen), ['/app', '--hervat'])
+        assert pl['RunAtLoad'] is True and 'KeepAlive' not in pl
+        assert 'scan_bezig.json' in pl['ProgramArguments'][2] and '--hervat' in pl['ProgramArguments'][2]
+        gui.scan_wis(geheugen, script_pad=script)
+        assert gui.scan_lees(geheugen) is None and not script.exists()
 print('BASIS OK')

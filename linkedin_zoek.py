@@ -1,10 +1,13 @@
 """LinkedIn-profielen zoeken: gerichte zoekopdrachten en doorschakelen tussen zoekdiensten.
 
 Volgorde: Serper, SerpApi, Tavily, Linkup.
+Pas als die vier geen antwoord meer kunnen geven, zoekt de scanner zelf één openbare pagina.
+Dat is geen extra API en geen Google.
 """
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -12,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 OPEN_BESTAND = 'linkedin_nog_zoeken.json'
@@ -146,6 +150,95 @@ def maak_zoekopdrachten(naam, werkgevers=(), functies=(), opleidingen=(), plaats
     return gekozen[:maximum - 1] + [gekozen[-1]]
 
 
+def _attr(attrs, naam):
+    m = re.search(r'\b' + re.escape(naam) + r'\s*=\s*"([^"]*)"', attrs or '', re.I)
+    return html.unescape(m.group(1)) if m else ''
+
+
+def _zichtbaar(stuk):
+    stuk = re.sub(r'(?is)<(script|style).*?</\1>', ' ', stuk or '')
+    stuk = re.sub(r'<[^>]+>', ' ', stuk)
+    return ' '.join(html.unescape(stuk).split())
+
+
+def _href_naar_url(href):
+    href = html.unescape(href or '').strip()
+    if not href:
+        return ''
+    try:
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+    except ValueError:
+        return href
+    if qs.get('uddg'):
+        return qs['uddg'][0]
+    return href
+
+
+def openbaar_lees(pagina):
+    """Profielen uit één openbare zoekpagina. None als de site een controle vraagt."""
+    if not pagina or 'anomaly-modal' in pagina:
+        return None
+    tekst = pagina.replace('&amp;', '&')
+    stukken = re.split(r'(?i)(?=<a\b[^>]*class="[^"]*result__a)', tekst)
+    rijen = []
+    for stuk in stukken[1:]:
+        anker = re.match(r'(?is)<a\b([^>]*)>(.*?)</a>', stuk)
+        if not anker:
+            continue
+        snip = re.search(r'(?is)class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|td|div|span)>', stuk)
+        rijen.append({
+            'url': _href_naar_url(_attr(anker.group(1), 'href')),
+            'title': _zichtbaar(anker.group(2)),
+            'content': _zichtbaar(snip.group(1)) if snip else '',
+            'bron': 'Zelf',
+        })
+    schoon = profielrijen(rijen)
+    if schoon or len(stukken) > 1:
+        return schoon
+    los = []
+    for slug in _IN.findall(html.unescape(tekst)):
+        slug = urllib.parse.unquote(slug).strip('/')
+        if not slug:
+            continue
+        los.append({
+            'url': 'https://www.linkedin.com/in/' + slug,
+            'title': ' '.join(slug.replace('-', ' ').split()),
+            'content': '',
+            'bron': 'Zelf',
+        })
+    return profielrijen(los)
+
+
+def _duck_haal(query):
+    """Eén openbare zoekpagina. None als de site geen gewone pagina teruggeeft."""
+    url = 'https://html.duckduckgo.com/html/?' + urllib.parse.urlencode({'q': query})
+    req = urllib.request.Request(url, headers={
+        'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                       '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'),
+        'Accept': 'text/html',
+        'Accept-Language': 'nl-NL,nl;q=0.9,en;q=0.8',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            if getattr(resp, 'status', 200) == 202:
+                return None
+            return resp.read(400_000).decode('utf-8', 'replace')
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+
+
+def openbaar_zoeken(query, ophalen=None):
+    """Zelf zoeken zonder API-sleutel. None betekent: nu stoppen, de scan gaat verder."""
+    haal = ophalen or _duck_haal
+    try:
+        pagina = haal(query)
+    except Exception:
+        return None
+    if not pagina:
+        return None
+    return openbaar_lees(pagina)
+
+
 def profielrijen(rows):
     """Alleen persoonlijke /in/-adressen, elk adres één keer."""
     out = []
@@ -204,12 +297,14 @@ class Bronnen:
 
     VOLGORDE = ('Serper', 'SerpApi', 'Tavily', 'Linkup')
 
-    def __init__(self, aanroep, timeout=None, wacht=None, klok=None, slaap=None):
+    def __init__(self, aanroep, timeout=None, wacht=None, klok=None, slaap=None, zelf_zoeken=None):
         self.aanroep = dict(aanroep or {})
         self.timeout = dict(timeout or {})
         self.wacht = 0.4 if wacht is None else float(wacht)
         self.klok = klok or time.time
         self.slaap = slaap or time.sleep
+        self.zelf_zoeken = zelf_zoeken
+        self.zelf_dicht = False
         self.op = set()
         self.pauze_tot = {}
         self.timeout_reeks = {}
@@ -241,6 +336,13 @@ class Bronnen:
 
     def geen_bronnen_meer(self):
         return not any(self.beschikbaar(naam) for naam in self.VOLGORDE)
+
+    def definitief_op(self):
+        """Elke ingestelde zoekdienst is op of heeft geen sleutel. Een pauze telt niet."""
+        gekend = [naam for naam in self.VOLGORDE if self.aanroep.get(naam) is not None]
+        if not gekend:
+            return False
+        return all(naam in self.op or naam in self.overgeslagen for naam in gekend)
 
     def _meld(self, tekst):
         if tekst not in self.gemeld:
@@ -372,6 +474,7 @@ def zoek_profielen(queries, cache, keten, sleutel, na_resultaat=None, na_bron=No
     samen = []
     gezien = set()
     af = True
+    zelf_n = 0
 
     def tot_nu(extra):
         uit = []
@@ -400,6 +503,37 @@ def zoek_profielen(queries, cache, keten, sleutel, na_resultaat=None, na_bron=No
         else:
             rows, _bron, toestand = keten.zoek(
                 query, na_resultaat=bewaker if na_resultaat else None, na_bron=na_bron)
+            if toestand == 'geen bron':
+                if samen:
+                    break
+                if (zelf_n >= 2 or getattr(keten, 'zelf_dicht', False)
+                        or not getattr(keten, 'zelf_zoeken', None) or not keten.definitief_op()):
+                    af = False
+                    break
+                zelf_n += 1
+                if not getattr(keten, 'zelf_gemeld', False):
+                    keten.zelf_gemeld = True
+                    keten._meld('LINKEDIN: de zoekdiensten zijn op. De scanner zoekt zelf verder, zonder extra sleutel.')
+                try:
+                    extra = keten.zelf_zoeken(query)
+                except Exception:
+                    extra = None
+                keten.per_bron['Zelf'] = keten.per_bron.get('Zelf', 0) + 1
+                if extra is None:
+                    keten.zelf_dicht = True
+                    keten._meld('LINKEDIN: zelf zoeken lukt nu niet. De site vraagt een controle. '
+                                'De scan gaat verder en deze mensen blijven open.')
+                    af = False
+                    break
+                rows = profielrijen(extra)
+                for row in rows:
+                    row['bron'] = 'Zelf'
+                if rows and na_resultaat and bewaker(rows) == 'stop':
+                    toestand = 'bevestigd'
+                elif rows:
+                    toestand = 'gevonden'
+                else:
+                    toestand = 'leeg'
             if toestand in ('gevonden', 'leeg', 'bevestigd'):
                 cache[qkey] = rows or []
                 cache['qq|' + qkey] = query

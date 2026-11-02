@@ -33,77 +33,94 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Runner is Apple Silicon
+        if: runner.os == 'macOS'
+        run: |
+          echo "uname=$(uname -m) runner=${{ runner.arch }}"
+          [ "$(uname -m)" = "arm64" ]
+          [ "${{ runner.arch }}" = "ARM64" ]
+          python -c "import platform; assert platform.machine()=='arm64', platform.machine()"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ runner.arch }}-py312-v1
+
       - name: Benodigdheden installeren
         run: python -m pip install pyinstaller cryptography pillow certifi
 
       - name: AI-onderdelen installeren (llama-cpp-python)
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "macOS" ] && [ "$(uname -m)" = "arm64" ]; then IDX=metal; else IDX=cpu; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            [ "$(uname -m)" = "arm64" ]
+            IDX=metal
+            export ARCHFLAGS="-arch arm64"
+            export CMAKE_ARGS="-DGGML_METAL=on"
+          else
+            IDX=cpu
+          fi
           # 1. kant-en-klaar pakket; 2. lukt dat niet: zelf bouwen uit de broncode (duurt langer)
-          python -m pip install llama-cpp-python --prefer-binary --no-cache-dir \
+          python -m pip install llama-cpp-python --prefer-binary \
             --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/$IDX > pip_ai.txt 2>&1 \
           || { echo "::notice::kant-en-klaar ($IDX) lukte niet, nu zelf bouwen"; \
-               python -m pip install llama-cpp-python --no-binary llama-cpp-python --no-cache-dir > pip_ai2.txt 2>&1 \
+               python -m pip install llama-cpp-python --no-binary llama-cpp-python > pip_ai2.txt 2>&1 \
                || { echo "::error::llama-cpp-python bouwen mislukt: $(tail -5 pip_ai2.txt | tr '\n' ' ')"; exit 1; }; }
           python -c "import llama_cpp; print('::notice::llama-cpp-python', llama_cpp.__version__)"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            python - <<'PY'
+import pathlib, subprocess
+import llama_cpp
+root = pathlib.Path(llama_cpp.__file__).resolve().parent
+gezien = False
+for pad in root.rglob('*'):
+    if not pad.is_file() or pad.suffix not in {'.so', '.dylib'}:
+        continue
+    archs = subprocess.check_output(['lipo', '-archs', str(pad)], text=True).split()
+    print(pad.name, ' '.join(archs))
+    if 'arm64' not in archs or archs == ['x86_64']:
+        raise SystemExit('llama is niet native ARM64: ' + pad.name)
+    gezien = True
+if not gezien:
+    raise SystemExit('geen llama-binary gevonden')
+PY
+          fi
 
       - name: Klein testmodel ophalen (alleen voor de test, zit niet in de app)
         shell: bash
         run: curl -sL --fail -o "$RUNNER_TEMP/test.gguf" https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
 
-      - name: Test - tekst, Pages en scanner
-        run: python tests/test_basis.py
-
-      - name: Test - venster Kandidaten (tabel in de scanner)
-        run: python tests/test_kandidaten.py
-
-      - name: Test - 2000 cv-links in Excel (geldig, pas openen bij klik, geen extra kopie)
-        run: python tests/test_excel_links.py
-
-      - name: Test - LinkedIn zoeken en API-doorschakeling
-        run: python tests/test_linkedin_zoek.py
-
-      - name: Test - Goma-controle van gevonden LinkedIn-profielen
-        run: python tests/test_goma.py
-
-      - name: Test - Apify (nagebootst)
-        run: python tests/test_apify.py
-
-      - name: Test - sleutelbestand wordt automatisch op de juiste plek gezet
-        run: python tests/test_sleutels.py
-
-      - name: Test - 5.000 verzonnen cv-paren (dubbelen samen, naamgenoten nooit)
-        run: python tests/test_dubbel_paren.py
-
-      - name: Test - 8 personen met 2 cv-versies (1 zonder contact, andere opmaak, bureau-cv) + naamgenoten
-        run: python tests/test_dubbel_versies.py
-
-      - name: Test - opleidingsconflict is apart (geen twijfel); bachelor/master blijft mogelijk
-        run: python tests/test_opleiding_conflict.py
-
-      - name: Test - CV-map, CV-kop, naam uit bestandsnaam en vacature-uitsluiting
-        run: python tests/test_cv_context.py
-
-      - name: Test - samenvoegen + opschonen (nieuwste cv blijft, oudere versie en kopie weg, terugzetten)
-        run: python tests/test_opschonen_dubbel.py
-
-      - name: Test - 30 cv's mee/weg (taal, woonplaats, 5 jaar NL/BE; 0 onterecht uitgesloten)
-        run: python tests/test_uitsluiting.py
-
-      - name: Test - alle afgesproken regels (matching, plaatsen, typfouten, cloud, sleutels, Pages)
-        run: python tests/test_regels.py
-
-      - name: Stresstest - verkeerde samenvoegingen, gemiste cv's en twijfel
-        run: python tests/test_stresstest.py
-
-      - name: Test - Mac leest oude Word-bestanden met verkeerde extensie
-        if: runner.os == 'macOS'
-        run: python tests/test_mac_lezen.py
-
-      - name: Test - ingebouwde Mac-OCR (gescande pdf)
-        if: runner.os == 'macOS'      # Windows-OCR is al getest op de Lenovo
-        run: python tests/test_ocr.py
+      - name: Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            tests/test_basis.py
+            tests/test_kandidaten.py
+            tests/test_excel_links.py
+            tests/test_linkedin_zoek.py
+            tests/test_goma.py
+            tests/test_apify.py
+            tests/test_sleutels.py
+            tests/test_dubbel_paren.py
+            tests/test_dubbel_versies.py
+            tests/test_opleiding_conflict.py
+            tests/test_cv_context.py
+            tests/test_opschonen_dubbel.py
+            tests/test_uitsluiting.py
+            tests/test_regels.py
+            tests/test_stresstest.py
+          )
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            tests+=(tests/test_mac_lezen.py tests/test_ocr.py)
+          fi
+          for t in "${tests[@]}"; do
+            echo "::group::$t"
+            python "$t"
+            echo "::endgroup::"
+          done
 
       - name: App bouwen
         shell: bash
@@ -119,19 +136,43 @@ jobs:
       - name: Gebouwde app testen
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then APP="dist/CV Scanner.app/Contents/MacOS/CV Scanner"; else APP="dist/CV Scanner/CV Scanner.exe"; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            APP="dist/CV Scanner.app/Contents/MacOS/CV Scanner"
+            run_app() { arch -arm64 "$APP" "$@"; }
+            hoofd=$(lipo -archs "$APP")
+            echo "LIPO hoofdprogramma: $hoofd"
+            echo "$hoofd" | grep -qw arm64 || { echo "::error::De app bevat geen ARM64 ($hoofd)"; exit 1; }
+            [ "$hoofd" != "x86_64" ] || { echo "::error::Intel-only build"; exit 1; }
+            echo "::notice::lipo -archs: $hoofd"
+            fout=0
+            while IFS= read -r f; do
+              if file "$f" | grep -q 'Mach-O'; then
+                a=$(lipo -archs "$f" 2>/dev/null || echo '?')
+                echo "$a  $f"
+                echo "$a" | grep -qw arm64 || { echo "::error::geen ARM64: $f ($a)"; fout=1; }
+                [ "$a" != "x86_64" ] || { echo "::error::Intel-only: $f"; fout=1; }
+              fi
+            done < <(find "dist/CV Scanner.app" -type f)
+            [ "$fout" = 0 ]
+          else
+            APP="dist/CV Scanner/CV Scanner.exe"
+            run_app() { "$APP" "$@"; }
+          fi
           python tests/maak_frozen_set.py "$RUNNER_TEMP/set"
-          "$APP" --backend --root "$RUNNER_TEMP/set" --output "$RUNNER_TEMP/uit" > log.txt 2>&1 || true
+          run_app --backend --root "$RUNNER_TEMP/set" --output "$RUNNER_TEMP/uit" > log.txt 2>&1 || true
           cat log.txt
           N=$(grep -c "CV GEVONDEN" log.txt || true)
           if [ "$RUNNER_OS" = "macOS" ]; then WANT=3; else WANT=2; fi
           [ "$N" -ge "$WANT" ] || { echo "::error::Gebouwde app vond $N van $WANT cv's (tekst, Pages, gescande pdf)"; exit 1; }
-          "$APP" --ssl-test > ssl.txt 2>&1 || true
+          run_app --ssl-test > ssl.txt 2>&1 || true
           cat ssl.txt
           grep -q "SSL OK" ssl.txt || { echo "::error::Internet (https) werkt niet in de gebouwde app: $(cat ssl.txt)"; exit 1; }
-          "$APP" --ai-test "$RUNNER_TEMP/test.gguf" > ai.txt 2>&1 || true
+          run_app --ai-test "$RUNNER_TEMP/test.gguf" > ai.txt 2>&1 || true
           cat ai.txt
           grep -q "AI OK" ai.txt || { echo "::error::Lokale AI werkt niet in de gebouwde app: $(tail -3 ai.txt | tr '\n' ' ')"; exit 1; }
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            grep -q "arch=arm64" ai.txt || { echo "::error::De AI draait niet native op Apple Silicon: $(grep 'AI OK' ai.txt)"; exit 1; }
+          fi
           echo "::notice::$(grep 'AI OK' ai.txt)"
           grep -q "EXPORT:" log.txt
           grep -q "CV GEVONDEN" log.txt

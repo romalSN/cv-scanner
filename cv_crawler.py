@@ -6504,25 +6504,39 @@ def linkup_search(query, key):
             if isinstance(item, dict) and item.get('type') != 'image']
 
 
+_GOOGLE_OP = set()
+
+
 def google_search(query):
-    """Eerst Serper (eenmalig tegoed) tot dat op is, daarna SerpApi (maandelijks tegoed).
-    Geeft (resultaten, dienst) of (None, reden) als geen van beide kan."""
+    """Eerst Serper, daarna SerpApi. Een dode dienst stopt de scan niet en wist de sleutel niet.
+
+    Geeft (resultaten, dienst) of (None, reden) als geen van beide een antwoord geeft.
+    """
+    laatste = 'geen sleutel'
     for name, env, fn in (('Serper', 'SERPER_API_KEY', serper_search), ('SerpApi', 'SERPAPI_API_KEY', serpapi_search)):
+        if name in _GOOGLE_OP:
+            continue
         key = os.environ.get(env, '').strip()
         if not key:
             continue
         try:
             return fn(query, key), name
         except urllib.error.HTTPError as exc:
-            reason = 'tegoed op of sleutel ongeldig' if exc.code in (400, 401, 402, 403, 429) else f'fout {exc.code}'
-            print(f'ONLINE: {name} gestopt ({reason}); ' +
-                  ('verder met SerpApi.' if name == 'Serper' and os.environ.get('SERPAPI_API_KEY') else 'geen Google meer.'),
-                  flush=True)
-            os.environ[env] = ''          # deze run niet meer proberen
+            if exc.code in (401, 402, 403):
+                _GOOGLE_OP.add(name)
+                reason = 'tegoed op of sleutel ongeldig'
+            elif exc.code == 429:
+                reason = 'even te veel verzoeken'
+            else:
+                reason = f'fout {exc.code}'
+            print(f'ONLINE: {name} deze opdracht overgeslagen ({reason}). De sleutel blijft bewaard. '
+                  'De scan gaat verder met de volgende zoekdienst.', flush=True)
+            laatste = reason
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-            print(f'ONLINE: {name} lukte niet:', str(exc)[:100], flush=True)
-            return None, 'netwerk'
-    return None, 'geen sleutel'
+            print(f'ONLINE: {name} lukte niet:', str(exc)[:100],
+                  'De scan gaat verder met de volgende zoekdienst.', flush=True)
+            laatste = 'netwerk'
+    return None, laatste
 
 
 _HAAK_AT = r'\s*(?:\[\s*(?:at|@|apenstaartje)\s*\]|\(\s*(?:at|@|apenstaartje)\s*\)|\{\s*(?:at|@)\s*\}|<\s*at\s*>|\uff20|@)\s*'
@@ -7163,7 +7177,7 @@ def linkedin_keten_nieuw():
         wacht = float(ruw) if ruw else 0.4
     except ValueError:
         wacht = 0.4
-    return linkedin_zoek.Bronnen(linkedin_aanroepers(), wacht=wacht)
+    return linkedin_zoek.Bronnen(linkedin_aanroepers(), wacht=wacht, zelf_zoeken=linkedin_zoek.openbaar_zoeken)
 
 
 def _linkedin_open_bewaren(out, people, todo, klaar):
@@ -7209,9 +7223,10 @@ def profielen_voorbereiden(people, todo, cache, cache_path, profielen, max_peopl
                 cache['q|' + ck] = queries[0] if queries else ''
                 gezocht += 1
                 klaar.add(p.get('persoon_id') or '')
-            elif keten.geen_bronnen_meer() and not bron:
-                print('PROFIELEN: geen zoekdienst meer over. Deze scan gaat verder zonder nieuw LinkedIn-onderzoek.', flush=True)
-                break
+            elif keten.geen_bronnen_meer() and not bron and not getattr(keten, 'leeg_gemeld', False):
+                keten.leeg_gemeld = True
+                print('PROFIELEN: geen zoekdienst vrij. Deze scan gaat verder; de volgende kandidaat probeert '
+                      'elke dienst die nog antwoordt.', flush=True)
         else:
             klaar.add(p.get('persoon_id') or '')
         words = _name_words(full)
@@ -7608,7 +7623,6 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
         if (not have['email'] or not have['telefoon']) and os.environ.get('CV_ONLINE_CONTACT') == '1':
             queries.append(('contact', f'"{full}" {role} contact website zzp freelance github'.strip(),
                             None, PRIVATE_SOCIAL))
-        stop = False
         for kind, query, domains, excluded in queries:
             # Onthouden per persoon (naam), niet per zoektekst: wie al eens is opgezocht,
             # kost nooit meer een credit, ook niet als bv. de werkgever later verandert.
@@ -7649,11 +7663,11 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                             google_via[naam_bron] = google_via.get(naam_bron, 0) + extra
                     if toestand != 'af' and not rows:
                         search_failed = True
-                        if keten.geen_bronnen_meer():
-                            print('ONLINE: geen zoekdienst meer over (Serper, SerpApi, Tavily, Linkup). '
-                                  'Deze scan gaat verder.', flush=True)
-                            stop = True
-                            break
+                        if keten.geen_bronnen_meer() and not getattr(keten, 'leeg_gemeld', False):
+                            keten.leeg_gemeld = True
+                            print('ONLINE: geen zoekdienst vrij (Serper, SerpApi, Tavily, Linkup). '
+                                  'Deze scan stopt niet. Elke dienst die later weer antwoordt, wordt gebruikt.',
+                                  flush=True)
                         continue
                     results = rows
                     if toestand == 'af':
@@ -7669,11 +7683,13 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                         used += 1
                     except urllib.error.HTTPError as exc:
                         if exc.code in (401, 403):
-                            print('ONLINE FOUT: Tavily-sleutel ongeldig of geweigerd. Controleer je sleutel.', flush=True)
-                            _linkedin_open_bewaren(out, people, todo, klaar)
-                            return False
+                            print('ONLINE: Tavily-sleutel ongeldig of geweigerd. De sleutel blijft bewaard. '
+                                  'Deze scan gaat verder met de andere zoekdiensten.', flush=True)
+                            tavily_out = True
+                            search_failed = True
+                            continue
                         if exc.code in (429, 432, 433):
-                            print('ONLINE: Tavily-tegoed op; verder via Google (Serper/SerpApi).', flush=True)
+                            print('ONLINE: Tavily deze opdracht overgeslagen. De scan gaat verder met de andere zoekdiensten.', flush=True)
                             tavily_out = True
                         else:
                             print('ONLINE zoekfout:', exc.code, flush=True)
@@ -7696,10 +7712,9 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
                             print('ONLINE: ook Tavily lukte niet (' + str(exc)[:80] + ').', flush=True)
                             res = None
                     if res is None:
-                        print('ONLINE: geen zoektegoed meer (Serper, SerpApi, Tavily en Linkup). '
-                              'Deze scan gaat verder.', flush=True)
-                        stop = True
-                        break
+                        print('ONLINE: mail of telefoon nu niet gevonden. De scan gaat verder met de volgende kandidaat.', flush=True)
+                        search_failed = True
+                        continue
                     if via != 'Tavily':
                         google_used += 1
                         google_via[via] = google_via.get(via, 0) + 1
@@ -8231,8 +8246,6 @@ def online_suggestions(people, out, db=None, max_people=500, delay=0.4):
             print(f'ONLINE: {full} – zoeken MISLUKT (geen verbinding met de zoekdienst); probeer later opnieuw', flush=True)
         else:
             print(f'ONLINE: {full} – niets gevonden', flush=True)
-        if stop:
-            break
     try:
         cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
     except OSError:
@@ -8275,6 +8288,9 @@ def linkedin_eindoverzicht(people, out):
     print(f'- Niet volledig onderzocht (zoekdienst niet beschikbaar): {niet_af}', flush=True)
     for naam in ('Serper', 'SerpApi', 'Tavily', 'Linkup'):
         print(f'- Zoekopdrachten {naam}: {int(per.get(naam) or 0)}', flush=True)
+    zelf = int(per.get('Zelf') or 0)
+    if zelf:
+        print(f'- Zelf gezocht: {zelf}', flush=True)
     print(f'- Goma-aanvragen: {int(goma_linkedin.aanvragen_deze_run)}', flush=True)
 
 

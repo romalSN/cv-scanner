@@ -348,5 +348,9 @@ def self_test(model: str) -> int:
     print('AI-TEST', r1, r2)
     if not r1 or not r2 or r1.get('fout') or r2.get('fout'):
         print('AI-TEST FOUT: geen bruikbaar antwoord'); return 1
-    print(f"AI OK ({r1['sec']}s + {r2['sec']}s)")
+    try:
+        arch = os.uname().machine
+    except AttributeError:
+        arch = os.environ.get('PROCESSOR_ARCHITECTURE', '')
+    print(f"AI OK ({r1['sec']}s + {r2['sec']}s) arch={arch}")
     return 0

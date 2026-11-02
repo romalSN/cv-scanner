@@ -299,9 +299,126 @@ def parse_progress(line: str) -> dict[str, str]:
     return output
 
 
-def extra_scan_args() -> list[str]:
-    """Nieuwe scan: vorige Excel en index tellen niet als 'al bekeken'."""
+def extra_scan_args(hervat=False) -> list[str]:
+    """Nieuwe scan leest alles opnieuw. Een hervatte scan slaat al opgeslagen bestanden over."""
+    if hervat:
+        return []
     return ['--force']
+
+
+def pid_leeft(pid) -> bool:
+    """Of dit proces nog draait. Een dode scan van gisteren telt niet."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, SystemError):
+        return False
+    return True
+
+
+def scan_staat_pad(output) -> Path:
+    return Path(output) / 'scan_bezig.json'
+
+
+def scan_lees(output):
+    try:
+        data = json.loads(scan_staat_pad(output).read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def hervat_commando() -> list[str]:
+    """Programma dat na het opstarten de scan zelf weer start."""
+    exe = Path(sys.executable).resolve()
+    if not FROZEN and exe.name.lower() == 'python.exe':
+        venster = exe.with_name('pythonw.exe')
+        if venster.exists():
+            exe = venster
+    if FROZEN:
+        return [str(exe)]
+    return [str(exe), str(Path(__file__).resolve())]
+
+
+def hervat_plist(json_pad, args) -> dict:
+    import shlex
+    script = f'test -f {shlex.quote(str(json_pad))} && exec ' + ' '.join(shlex.quote(a) for a in args)
+    return {
+        'Label': 'nl.solutionnow.cv-scanner.hervat',
+        'RunAtLoad': True,
+        'ProgramArguments': ['/bin/bash', '-c', script],
+    }
+
+
+def _vbs_startregel(args) -> str:
+    delen = ' '.join('""' + str(a).replace('"', '""') + '""' for a in args)
+    return f'CreateObject("Wscript.Shell").Run "{delen}", 7, False'
+
+
+def hervat_script_pad() -> Path:
+    if sys.platform == 'win32':
+        basis = os.environ.get('APPDATA') or str(Path.home() / 'AppData' / 'Roaming')
+        return Path(basis) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Startup' / 'CV-Scanner-hervat.vbs'
+    return Path.home() / 'Library' / 'LaunchAgents' / 'nl.solutionnow.cv-scanner.hervat.plist'
+
+
+def hervat_taak_zet(aan, output, script_pad=None) -> bool:
+    """Na het inloggen zelf verder scannen. Uit als de scan klaar is of je op Stop klikte."""
+    pad = Path(script_pad) if script_pad else hervat_script_pad()
+    try:
+        if not aan:
+            pad.unlink(missing_ok=True)
+            return True
+        pad.parent.mkdir(parents=True, exist_ok=True)
+        json_pad = scan_staat_pad(output)
+        args = hervat_commando() + ['--hervat']
+        if str(pad).endswith('.plist') or (sys.platform == 'darwin' and script_pad is None):
+            import plistlib
+            with pad.open('wb') as fh:
+                plistlib.dump(hervat_plist(json_pad, args), fh)
+            return True
+        if sys.platform != 'win32' and script_pad is None:
+            return False
+        tekst = (
+            'Set fso = CreateObject("Scripting.FileSystemObject")\r\n'
+            f'If Not fso.FileExists("{str(json_pad).replace(chr(34), "")}") Then WScript.Quit 0\r\n'
+            + _vbs_startregel(args) + '\r\n'
+        )
+        pad.write_text(tekst, encoding='utf-16')
+        return True
+    except OSError:
+        return False
+
+
+def scan_bewaar(options, output, script_pad=None) -> None:
+    data = {
+        'root': options.get('root') or '',
+        'volumes': bool(options.get('volumes')),
+        'deep': bool(options.get('deep')),
+        'cloud': bool(options.get('cloud')),
+        'ocr': bool(options.get('ocr')),
+        'online': bool(options.get('online')),
+        'contact': bool(options.get('contact')),
+        'output': str(output),
+        'pid': os.getpid(),
+    }
+    pad = scan_staat_pad(output)
+    pad.parent.mkdir(parents=True, exist_ok=True)
+    pad.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    hervat_taak_zet(True, output, script_pad=script_pad)
+
+
+def scan_wis(output, script_pad=None) -> None:
+    try:
+        scan_staat_pad(output).unlink(missing_ok=True)
+    except OSError:
+        pass
+    hervat_taak_zet(False, output, script_pad=script_pad)
 
 
 def choose_python() -> str:
@@ -392,6 +509,9 @@ class ScannerApp:
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.root.after(120, self.drain_events)
         threading.Thread(target=self.check_pdf_reader, daemon=True).start()
+        if '--hervat' in sys.argv:
+            self.root.withdraw()
+            self.root.after(400, self.hervat_als_nodig)
 
     def check_pdf_reader(self):
         """Toon bovenaan of de volledige PDF-lezer (cryptography) werkt."""
@@ -762,12 +882,45 @@ class ScannerApp:
             self.source_label.set(str(self.custom_root))
             self.launch(mode='scan')
 
-    def launch(self, *, mode='scan', online_key=''):
+    def hervat_als_nodig(self):
+        """Na het opstarten verdergaan zonder opnieuw op Scan hele pc te klikken."""
+        data = scan_lees(self.output)
+        if not data:
+            try:
+                self.root.deiconify()
+            except tk.TclError:
+                pass
+            return
+        if pid_leeft(data.get('pid')):
+            self.write_log('De scan draait al. Deze tweede start doet niets.', 'muted')
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+            return
+        self.custom_root = Path(data['root']) if data.get('root') else None
+        self.volumes.set(bool(data.get('volumes')))
+        self.deep.set(bool(data.get('deep')))
+        self.cloud.set(bool(data.get('cloud')))
+        self.ocr.set(bool(data.get('ocr')))
+        self.online_fill.set(bool(data.get('online')))
+        self.online_contact.set(bool(data.get('contact')))
+        if self.custom_root:
+            self.source_label.set(str(self.custom_root))
+        try:
+            self.root.iconify()
+        except tk.TclError:
+            pass
+        self.write_log('De pc was uit. De scan gaat vanzelf verder op de achtergrond. '
+                       'Al gelezen bestanden worden overgeslagen.', 'info')
+        self.launch(mode='scan', hervat=True)
+
+    def launch(self, *, mode='scan', online_key='', hervat=False):
         scan = mode == 'scan'
         if self.running:
             return
         self.online_fresh = False
-        if mode == 'online' or (scan and self.online_fill.get()):
+        if not hervat and (mode == 'online' or (scan and self.online_fill.get())):
             if (self.output / 'online_cache.json').exists():
                 answer = messagebox.askyesnocancel('Online zoeken',
                     'Er zijn al eerder zoekresultaten opgeslagen.\n\n'
@@ -789,6 +942,23 @@ class ScannerApp:
                                      parent=self.root)
                 return
         self.last_mode = mode
+        self.hervat_start = bool(hervat)
+        if scan:
+            options_nu = {'root': str(self.custom_root) if self.custom_root else '',
+                          'volumes': self.volumes.get(), 'deep': self.deep.get(), 'cloud': self.cloud.get(),
+                          'ocr': self.ocr.get(), 'online': self.online_fill.get(),
+                          'contact': self.online_contact.get()}
+            try:
+                scan_bewaar(options_nu, self.output)
+            except OSError as exc:
+                self.write_log(f'Automatisch verdergaan na een herstart kon niet worden klaargezet: {exc}', 'warn')
+            else:
+                if hervat_script_pad().exists():
+                    self.write_log('Zet je de pc uit, dan gaat deze scan morgen vanzelf verder na het opstarten. '
+                                   'Je hoeft niet opnieuw op Scan hele pc te klikken.', 'info')
+                else:
+                    self.write_log('De scan onthoudt waar hij is. Automatisch starten na het opstarten '
+                                   'kon niet worden klaargezet.', 'warn')
         if scan:
             for key, var in self.metrics.items():
                 var.set('—' if key in ('personen','fouten') else '0')
@@ -799,7 +969,7 @@ class ScannerApp:
         options = {'root': str(self.custom_root) if self.custom_root else '',
                    'volumes': self.volumes.get(), 'deep': self.deep.get(), 'cloud': self.cloud.get(),
                    'ocr': self.ocr.get(), 'online': self.online_fill.get(),
-                   'contact': self.online_contact.get()}
+                   'contact': self.online_contact.get(), 'hervat': bool(hervat)}
         if scan and self.online_fill.get() and not online_key:
             online_key = load_key() or ('-' if heeft_zoeksleutel() else '')
         worker = threading.Thread(target=self.worker, args=(mode, online_key, options), daemon=True)
@@ -813,7 +983,7 @@ class ScannerApp:
                 raise InterruptedError('Geadviseerd om te stoppen.')
             cmd = ([str(python), '--backend'] if FROZEN else [str(python), '-u', str(BACKEND)]) + ['--output', str(self.output)]
             if scan:
-                cmd += extra_scan_args()
+                cmd += extra_scan_args(hervat=bool(options.get('hervat')))
                 if options['root']:
                     cmd += ['--root', options['root']]
                 elif options['volumes']:
@@ -962,6 +1132,17 @@ class ScannerApp:
                             self.metrics[key].set(value)
                 elif kind == 'finished':
                     self.set_running(False)
+                    rc_nu, gestopt, _hersteld = payload
+                    if getattr(self, 'last_mode', '') == 'scan' and (gestopt or rc_nu == 0):
+                        scan_wis(self.output)
+                        if gestopt:
+                            self.write_log('Automatisch verdergaan na een herstart is uitgezet.', 'muted')
+                    if getattr(self, 'hervat_start', False):
+                        try:
+                            self.root.deiconify()
+                            self.root.lift()
+                        except tk.TclError:
+                            pass
                     try:
                         self.metrics['twijfel'].set(str(len(list_twijfel(self.output))))
                     except Exception:
@@ -1832,7 +2013,7 @@ def main():
     except Exception:
         gezet = []
     ScannerApp(root)
-    if gezet:
+    if gezet and '--hervat' not in sys.argv:
         namen = {'tavily': 'Tavily', 'serper': 'Serper', 'serpapi': 'SerpApi', 'apify': 'Apify'}
         root.after(800, lambda: messagebox.showinfo(
             'Sleutels geïnstalleerd', 'Zoeksleutels geïnstalleerd: ' + ', '.join(namen[g] for g in gezet) +

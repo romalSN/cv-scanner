@@ -421,6 +421,120 @@ check('zoekbudget is instelbaar', z.zoekbudget() == 2 and len(z.maak_zoekopdrach
     'Jan de Vries', ['ASML', 'Philips'], ['Software Engineer'], ['TU Eindhoven'], ['Eindhoven'], z.zoekbudget())) <= 2)
 os.environ.pop('LINKEDIN_MAX_ZOEKOPDRACHTEN', None)
 
+# Een dode dienst stopt de scan niet. De volgende dienst zoekt de volgende kandidaat. De sleutel blijft staan.
+c._GOOGLE_OP.clear()
+os.environ['SERPER_API_KEY'] = 'test-serper-blijft'
+os.environ['SERPAPI_API_KEY'] = 'test-serpapi'
+os.environ['TAVILY_API_KEY'] = 'test-tavily'
+telling = {'serper': 0, 'serp': 0, 'tavily': 0}
+
+
+def serper_op(query, key):
+    telling['serper'] += 1
+    raise http(402)
+
+
+def serp_vindt(query, key):
+    telling['serp'] += 1
+    if 'Piet Jansen' in query:
+        return [profiel('piet-jansen', 'Piet Jansen - Monteur installaties at Datafabriek',
+                        'Monteur installaties at Datafabriek')]
+    return []
+
+
+def tavily_weigert(query, key, *a, **k):
+    telling['tavily'] += 1
+    raise http(401)
+
+
+c.serper_search = serper_op
+c.serpapi_search = serp_vindt
+c.tavily_search = tavily_weigert
+c.linkup_search = lambda *a, **k: []
+_out = Path(tempfile.mkdtemp())
+_db = c.db_open(_out)
+try:
+    klaar = c.online_suggestions([
+        dict(naam='Jan de Vries', persoon_id='p-jan', email='jan@voorbeeld.nl', telefoon='+31612345678',
+             linkedin='', huidige_functie='Software Engineer', laatst_bekende_werkgever='ASML', woonplaats='Eindhoven'),
+        dict(naam='Piet Jansen', persoon_id='p-piet', email='piet@voorbeeld.nl', telefoon='+31612345679',
+             linkedin='', huidige_functie='Monteur installaties', laatst_bekende_werkgever='Datafabriek', woonplaats=''),
+    ], _out, db=_db, delay=0)
+    check('dode zoekdienst stopt de scan niet', klaar is True)
+    check('de volgende dienst zoekt nog', telling['serp'] >= 1, telling)
+    check('Serper-sleutel blijft staan als het tegoed op is', os.environ.get('SERPER_API_KEY') == 'test-serper-blijft')
+finally:
+    c.serper_search, c.serpapi_search, c.tavily_search, c.google_search = _serper, _serpapi, _tavily, _google
+    shutil.rmtree(_out, ignore_errors=True)
+    os.environ.pop('SERPAPI_API_KEY', None)
+
+# Zelf zoeken pas als de vier diensten echt op zijn. Een lege 200 roept het niet aan.
+vers()
+zelf_calls = []
+
+
+def niet_zelf(q):
+    zelf_calls.append(q)
+    return [profiel('jan-de-vries')]
+
+
+keten = bronnen({'Serper': lambda q: [], 'SerpApi': lambda q: [], 'Tavily': lambda q: [], 'Linkup': lambda q: []})
+keten.zelf_zoeken = niet_zelf
+rijen, stand = z.zoek_profielen(['site:linkedin.com/in "Jan de Vries"'], {}, keten, 'jan de vries')
+check('lege zoekdiensten zoeken niet zelf', stand == 'af' and rijen == [] and zelf_calls == [], (stand, rijen, zelf_calls))
+
+vers()
+html_ok = (
+    '<a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.linkedin.com%2Fin%2Fjan-de-vries&amp;rut=1">'
+    'Jan de Vries - ASML | LinkedIn</a>'
+    '<a class="result__snippet" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.linkedin.com%2Fin%2Fjan-de-vries">'
+    'Software Engineer bij ASML</a>'
+    '<a class="result__a" href="https://www.linkedin.com/company/asml">ASML</a>'
+)
+gelezen = z.openbaar_lees(html_ok)
+check('openbare pagina leest het profiel en laat het bedrijf weg',
+      len(gelezen) == 1 and gelezen[0]['url'].endswith('/jan-de-vries')
+      and 'ASML' in gelezen[0]['content'] and gelezen[0]['bron'] == 'Zelf', gelezen)
+check('controlepagina stopt het zelf zoeken', z.openbaar_lees('<div class="anomaly-modal__title"></div>') is None)
+
+vers()
+
+
+def op(q):
+    raise http(402)
+
+
+vondst = []
+
+
+def zelf_vindt(q):
+    vondst.append(q)
+    return z.openbaar_lees(html_ok)
+
+
+keten = bronnen({'Serper': op, 'SerpApi': op, 'Tavily': op, 'Linkup': op})
+keten.zelf_zoeken = zelf_vindt
+rijen, stand = z.zoek_profielen(['q1', 'q2'], {}, keten, 'jan de vries')
+check('als de zoekdiensten op zijn zoekt de scanner zelf',
+      stand == 'af' and len(vondst) == 1 and rijen and rijen[0]['url'].endswith('/jan-de-vries'), (stand, vondst, rijen))
+check('zelf zoeken telt niet als Google', 'Google' not in keten.per_bron and keten.per_bron.get('Zelf') == 1, keten.per_bron)
+
+vers()
+blok = {'n': 0}
+
+
+def zelf_blok(q):
+    blok['n'] += 1
+    return None
+
+
+keten = bronnen({'Serper': op, 'SerpApi': op, 'Tavily': op, 'Linkup': op})
+keten.zelf_zoeken = zelf_blok
+rijen, stand = z.zoek_profielen(['q1'], {}, keten, 'jan')
+rijen2, stand2 = z.zoek_profielen(['q2'], {}, keten, 'piet')
+check('een controle stopt het zelf zoeken en de scan blijft heel',
+      stand == 'open' and stand2 == 'open' and rijen == [] and blok['n'] == 1 and keten.zelf_dicht, (stand, stand2, blok))
+
 print()
 print('LINKEDIN ZOEKEN OK' if not FOUT else f'{len(FOUT)} FOUT(EN): ' + ', '.join(FOUT))
 sys.exit(1 if FOUT else 0)
