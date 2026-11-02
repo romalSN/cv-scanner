@@ -652,6 +652,9 @@ k = g.reset()
 k.timeout = 2
 k.slaap = lambda _s: None
 k.http = goma_niet
+import linkedin_zoek
+_echt_openbaar = linkedin_zoek.openbaar_zoeken
+linkedin_zoek.openbaar_zoeken = lambda *_a, **_k: None
 _out = Path(tempfile.mkdtemp())
 _db = c.db_open(_out)
 persoon = dict(naam='Jan de Vries', persoon_id='p-op', email='jan@voorbeeld.nl', telefoon='+31612345678',
@@ -673,6 +676,7 @@ try:
           'p-op' in open_ids and 'Google X-ray' not in zekerheid, open_ids)
 finally:
     shutil.rmtree(_out, ignore_errors=True)
+    linkedin_zoek.openbaar_zoeken = _echt_openbaar
     os.environ.pop('LINKUP_API_KEY', None)
     c.serper_search, c.serpapi_search, c.tavily_search, c.google_search, c.linkup_search = (
         _serper2, _serpapi2, _tavily2, _google2, _linkup2)
