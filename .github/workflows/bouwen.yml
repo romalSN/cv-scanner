@@ -23,8 +23,8 @@ jobs:
         include:
           - os: windows-latest
             naam: Windows
-          - os: macos-15          # Mac met M-chip (M1/M2/M3/M4)
-            naam: Mac-15
+          - os: macos-14          # gratis M1-bouwer, native ARM64, geen betaalde runner
+            naam: Mac-14
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
